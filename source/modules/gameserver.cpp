@@ -321,7 +321,7 @@ LUA_FUNCTION_STATIC(CBaseClient_SendNetMsg)
 
 	SVC_CustomMessage msg;
 	msg.m_iType = iType;
-	strncpy(msg.m_strName, strName, sizeof(msg.m_strName));
+	strcpy(msg.m_strName, strName);
 	msg.m_DataOut.StartWriting(bf->GetData(), 0, 0, bf->GetMaxNumBits());
 	msg.m_iLength = bf->GetNumBitsWritten();
 
@@ -2063,7 +2063,7 @@ LUA_FUNCTION_STATIC(gameserver_BroadcastMessage)
 
 	SVC_CustomMessage msg;
 	msg.m_iType = iType;
-	strncpy(msg.m_strName, strName, sizeof(msg.m_strName));
+	strcpy(msg.m_strName, strName);
 	msg.m_DataOut.StartWriting(bf->GetData(), 0, 0, bf->GetMaxNumBits());
 	msg.m_iLength = bf->GetNumBitsWritten();
 
@@ -2447,9 +2447,9 @@ static void hook_CBaseServer_CheckTimeouts(CBaseServer* srv)
 	int i;
 
 #if !defined( _DEBUG )
-	for (i=0 ; i< srv->GetClientCount() ; i++ )
+	for (i=0 ; i< srv->m_Clients.Count() ; i++ )
 	{
-		IClient	*cl = srv->GetClient(i);
+		IClient	*cl = srv->m_Clients[ i ];
 		
 		if ( cl->IsFakeClient() || !cl->IsConnected() )
 			continue;
@@ -2480,9 +2480,9 @@ static void hook_CBaseServer_CheckTimeouts(CBaseServer* srv)
 	}
 #endif
 
-	for (i=0 ; i< srv->GetClientCount() ; i++ )
+	for (i=0 ; i< srv->m_Clients.Count() ; i++ )
 	{
-		IClient	*cl = srv->GetClient(i);
+		IClient	*cl = srv->m_Clients[ i ];
 		
 		if ( cl->IsFakeClient() || !cl->IsConnected() )
 			continue;

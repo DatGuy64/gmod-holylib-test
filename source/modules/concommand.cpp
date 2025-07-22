@@ -20,20 +20,20 @@ static CConCommandModule g_pConCommandModule;
 IModule* pConCommandModule = &g_pConCommandModule;
 
 static Detouring::Hook detour_ConCommand_IsBlocked;
-static const char* hook_ConCommand_IsBlocked(const char* cmd)
+static bool hook_ConCommand_IsBlocked(const char* cmd)
 {
 	if (holylib_concommand_disableblacklist.GetBool())
-		return NULL;
+		return false;
 
 	// https://github.com/Facepunch/garrysmod-requests/issues/1534
 	if (V_stricmp(cmd, "quit") == 0)
-		return NULL;
+		return false;
 
 	if (V_stricmp(cmd, "exit") == 0)
-		return NULL;
+		return false;
 
 	if (V_stricmp(cmd, "holylib_concommand_disableblacklist") == 0)
-		return cmd;
+		return true;
 
 	return detour_ConCommand_IsBlocked.GetTrampoline<Symbols::ConCommand_IsBlocked>()(cmd);
 }
