@@ -16,6 +16,83 @@ enum GModChannelFFT_t {
 	FFT_32768 = 7,
 };
 
+enum GModEncoderStatus {
+	NONE = 0,
+	RUNNING = 1,
+	FINISHED = 2,
+	DIED = 3,
+};
+
+// HolyLib specific
+// NOTE: Always call GetLastError after any function call that throws one to check for errors!
+class IGModAudioChannel;
+class IGModEncoderCallback;
+class IGModAudioChannelEncoder
+{
+public:
+	virtual ~IGModAudioChannelEncoder() {};
+
+	// ProcessNow uses BASS_ChannelGetData to pull data, so this function only works on decode channels!
+	// Will throw an error to check with GetLastError
+	virtual void ProcessNow(bool bUseAnotherThread) = 0;
+
+	virtual void Stop(bool bProcessQueue) = 0;
+
+	// Returns true if there was an error, pErrorOut will either be filled or NULL
+	// If it returns true, it will also invalidate/free itself so the pointer becomes invalid!
+	// NOTE: This is only for fatal errors like on init, most other functions have a pErrorOut argument for light errors that can be ignored
+	virtual bool GetLastError(const char** pErrorOut) = 0;
+
+	// Wasn't exposed since CreateEncoder already calls it so it has no real use
+	// virtual void InitEncoder(unsigned long nEncoderFlags) = 0;
+
+	virtual bool MakeServer( const char* port, unsigned long buffer, unsigned long burst, unsigned long flags, const char** pErrorOut ) = 0;
+	virtual bool ServerKick( const char* client ) = 0;
+
+	virtual void SetPaused( bool bPaused ) = 0;
+	virtual int GetState() = 0;
+
+	// virtual IGModAudioChannel* GetChannel() = 0;
+	virtual void SetChannel( IGModAudioChannel* pChannel, const char** pErrorOut ) = 0;
+
+	virtual void WriteData(const void* pData, unsigned long nLength) = 0;
+	virtual const char* GetFileName() = 0;
+	virtual IGModEncoderCallback* GetCallback() = 0;
+};
+
+class IGModAudioChannelEncoder;
+class IGModEncoderCallback // Callback struct
+{
+public:
+	virtual ~IGModEncoderCallback() {};
+	virtual bool ShouldForceFinish(IGModAudioChannelEncoder* pEncoder, void* nSignalData) = 0;
+	virtual void OnFinish(IGModAudioChannelEncoder* pEncoder, GModEncoderStatus nStatus) = 0;
+	virtual bool OnServerClient(IGModAudioChannelEncoder* pEncoder, bool connect, const char* client, char headers[1024]) = 0;
+};
+
+// We left out COMPRESSOR, GARGLE, and I3DL2REVERB as those are not supported on other platforms than windows
+enum BassFX // IDs match BASS_FX enums
+{
+	FX_CHORUS = 0,
+	FX_DISTORTION = 2,
+	FX_ECHO = 3,
+	FX_FLANGER = 4,
+	FX_PARAMEQ = 7,
+	FX_REVERB = 8,
+};
+
+class IGModAudioFX
+{
+public:
+	virtual void Free(IGModAudioChannel* pChannel) = 0;
+	virtual void GetParameters( void* params ) = 0;
+	virtual void Reset() = 0;
+	// virtual void SetBypass( bool bypass ) = 0;
+	virtual bool SetParameters( void* params ) = 0;
+	// virtual void SetPriority( int priority ) = 0;
+	virtual bool IsFX() = 0;
+};
+
 class IGModAudioChannel
 {
 public:
@@ -57,7 +134,33 @@ public:
 	virtual bool Get3DEnabled() = 0;
 	virtual void Restart() = 0;
 	// HolyLib specific
-	virtual const char* EncodeToDisk( const char* pFileName, const char* pCommand, unsigned long nFlags ) = 0; // Uses the "DATA" path for writes! Returns NULL on success, else the error message
+	// Uses the "DATA" path for writes! Returns NULL on success, else the error message
+	// Does NOT require the channel to be a decoder channel!
+	// Call IGModAudioChannelEncoder->GetLastError and check if its even valid! (Else it will be invalidated/freed on the next tick)
+	virtual IGModAudioChannelEncoder* CreateEncoder( const char* pFileName, unsigned long nFlags, IGModEncoderCallback* pCallback, const char** pErrorOut ) = 0;
+	virtual void Update( unsigned long length ) = 0; // Updates the playback buffer
+	virtual bool CreateLink( IGModAudioChannel* pChannel, const char** pErrorOut ) = 0;
+	virtual bool DestroyLink( IGModAudioChannel* pChannel, const char** pErrorOut ) = 0;
+
+	// FX Stuff, formerly I wanted to expose the IGModAudioFX
+	// though I did not like the idea of having to manage yet another independent but linked object
+	virtual bool SetFX( const char* pFXName, unsigned long nType, int nPriority, void* pParams, const char** pErrorOut ) = 0;
+	virtual void SetFXParameter( const char* pFXName, void* params, const char** pErrorOut ) = 0;
+	// virtual void GetFXParameter( const char* pFXName, void* params ) = 0;
+	// virtual void SetFXPriority( const char* pFXName, int priority ) = 0;
+	// virtual void SetFXBypass( const char* pFXName, bool bypass ) = 0;
+	virtual bool FXReset( const char* pFXName ) = 0;
+	virtual bool FXFree( const char* pFXName ) = 0;
+
+	// Mixer functions
+	virtual bool IsMixer() = 0;
+	virtual void AddMixerChannel( IGModAudioChannel* pChannel, unsigned long nFlags, const char** pErrorOut ) = 0;
+	virtual void RemoveMixerChannel() = 0;
+	virtual int GetMixerState() = 0;
+
+	// Splitter functions
+	virtual bool IsSplitter() = 0;
+	virtual void ResetSplitStream() = 0;
 };
 
 class IAudioStreamEvent;
@@ -98,7 +201,11 @@ public:
 	virtual const char* GetErrorString( int ) = 0;
 	// HolyLib specific ones
 	virtual unsigned long GetVersion() = 0; // Returns bass version
-	virtual bool LoadPlugin(const char* pluginName) = 0;
+	virtual bool LoadPlugin(const char* pluginName, const char** pErrorOut) = 0;
+	virtual void FinishAllAsync(void* nSignalData) = 0; // Called on Lua shutdown to finish all callbacks/async tasks for that interface
+	virtual IGModAudioChannel* CreateDummyChannel(int nSampleRate, int nChannels, unsigned long nFlags, const char** pErrorOut) = 0;
+	virtual IGModAudioChannel* CreateMixerChannel(int nSampleRate, int nChannels, unsigned long nFlags, const char** pErrorOut) = 0;
+	virtual IGModAudioChannel* CreateSplitChannel(IGModAudioChannel* pChannel, unsigned long nFlags, const char** pErrorOut) = 0;
 };
 
 #undef CALLBACK // Solves another error with minwindef.h

@@ -6,9 +6,12 @@
 #include "vaudio/ivaudio.h"
 #include "IGmod_Audio.h"
 #include "bass.h"
+#include "bassenc.h"
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
-class CBassAudioStream : IBassAudioStream
+class CBassAudioStream : public IBassAudioStream
 {
 public:
 	virtual ~CBassAudioStream();
@@ -32,7 +35,80 @@ private:
 	HSTREAM m_hStream;
 };
 
-class CGModAudioChannel : IGModAudioChannel
+constexpr unsigned int EncoderForceShutdownPointer = 0x1; // Pointer passed to HandleFinish when a forced shutdown for all is done
+class CGModAudioChannel;
+class CGModAudioChannelEncoder : public IGModAudioChannelEncoder
+{
+public:
+	virtual ~CGModAudioChannelEncoder();
+
+	virtual void ProcessNow(bool bUseAnotherThread);
+	virtual void Stop(bool bProcessQueue);
+	// Returns true if there was an error, pErrorOut will either be filled or NULL
+	// If it returns true, it will also invalidate/free itself so the pointer becomes invalid!
+	virtual bool GetLastError(const char** pErrorOut);
+	virtual bool MakeServer( const char* port, unsigned long buffer, unsigned long burst, unsigned long flags, const char** pErrorOut );
+	virtual bool ServerKick( const char* client );
+
+	virtual void SetPaused( bool bPaused );
+	virtual int GetState();
+
+	// virtual IGModAudioChannel* GetChannel();
+	virtual void SetChannel( IGModAudioChannel* pChannel, const char** pErrorOut );
+
+	virtual void WriteData(const void* pData, unsigned long nLength);
+	virtual const char* GetFileName() { return m_strFileName.c_str(); };
+	virtual IGModEncoderCallback* GetCallback() { return m_pCallback; };
+
+public: // Non virtual
+	CGModAudioChannelEncoder(DWORD pChannel, const char* pFileName, IGModEncoderCallback* pCallback );
+	void InitEncoder(unsigned long nEncoderFlags);
+	void HandleFinish(void* nSignalData); // Called each Update on the main thread, nSignalData is for the callback we store so that it can decide wether to force finish or not
+
+private:
+	static void ProcessChannel(CGModAudioChannelEncoder* pEncoder);
+	void WriteToFile(const void* buffer, unsigned long length);
+	void OnEncoderFreed();
+	void OnEncoderDied();
+	bool ServerCallback(bool connect, const char* client, char headers[1024]);
+
+	// Callbacks
+public:
+	static void CALLBACK EncoderProcessCallback(HENCODE handle, DWORD channel, const void *buffer, DWORD length, void *user);
+	static void CALLBACK EncoderProcessCallback(HENCODE handle, DWORD channel, const void *buffer, DWORD length, QWORD offset, void *user); // MP3 & FLAC need this one
+	static void CALLBACK EncoderFreedCallback(HENCODE handle, DWORD status, void *user); // Also calls OnDecoderDied 
+	static bool CALLBACK EncoderServerClientCallback(HENCODE handle, BOOL connect, const char* client, char headers[1024], void* user);
+
+	HENCODE m_pEncoder;
+	FileHandle_t m_pFileHandle;
+	std::string m_strFileName;
+	std::string m_strLastError;
+	DWORD m_pChannel;
+	GModEncoderStatus m_nStatus;
+	IGModEncoderCallback* m_pCallback;
+};
+
+class CGModAudioFX : public IGModAudioFX
+{
+public:
+	virtual void Free(IGModAudioChannel* pChannel);
+	virtual void GetParameters( void* params );
+	virtual void Reset();
+	// virtual void SetBypass( bool bypass );
+	virtual bool SetParameters( void* params );
+	// virtual void SetPriority( int priority );
+	virtual bool IsFX() { return m_bIsFX; };
+
+	CGModAudioFX( DWORD pFXHandle, bool bIsFX );
+private:
+	DWORD m_pHandle;
+
+	// If false, its a DSP handle.
+	bool m_bIsFX;
+};
+
+class CGMod_Audio;
+class CGModAudioChannel : public IGModAudioChannel
 {
 public:
 	virtual void Destroy();
@@ -72,16 +148,49 @@ public:
 	virtual void Set3DEnabled( bool );
 	virtual bool Get3DEnabled();
 	virtual void Restart();
+
 	// HolyLib specific
-	virtual const char* EncodeToDisk( const char* pFileName, const char* pCommand, unsigned long nFlags );
+	virtual IGModAudioChannelEncoder* CreateEncoder( const char* pFileName, unsigned long nFlags, IGModEncoderCallback* pCallback, const char** pErrorOut );
+	virtual void Update( unsigned long length );
+	virtual bool CreateLink( IGModAudioChannel* pChannel, const char** pErrorOut );
+	virtual bool DestroyLink( IGModAudioChannel* pChannel, const char** pErrorOut );
+	
+	// FX
+	virtual bool SetFX( const char* pFXName, unsigned long nType, int nPriority, void* pParams, const char** pErrorOut );
+	virtual void SetFXParameter( const char* pFXName, void* params, const char** pErrorOut );
+	// virtual void GetFXParameter( const char* pFXName, void* params );
+	// virtual void SetFXPriority( const char* pFXName, int priority );
+	// virtual void SetFXBypass( const char* pFXName, bool bypass );
+	virtual bool FXReset( const char* pFXName );
+	virtual bool FXFree( const char* pFXName );
+
+	// Mixer functions
+	virtual bool IsMixer();
+	virtual void AddMixerChannel( IGModAudioChannel* pChannel, unsigned long nFlags, const char** pErrorOut );
+	virtual void RemoveMixerChannel();
+	virtual int GetMixerState();
+
+	// Splitter functions
+	virtual bool IsSplitter();
+	virtual void ResetSplitStream();
+
 public:
-	CGModAudioChannel( DWORD handle, bool isfile, const char* pFileName = NULL );
+	CGModAudioChannel( DWORD handle, bool isfile, const char* pFileName = NULL, bool isMixer = false, bool isSplit = false );
 	virtual ~CGModAudioChannel();
 
 private:
+	friend class CGModAudioChannelEncoder;
+	friend class CGMod_Audio;
+	friend class CGModAudioFX;
+
 	DWORD m_pHandle;
 	bool m_bIsFile;
-	std::string m_strFileName = "NULL"; // GMOD doesn't have this - HolyLib specific
+
+	// HolyLib specific
+	bool m_bIsMixer = false;
+	bool m_bIsSplit = false;
+	std::string m_strFileName = "NULL";
+	std::unordered_map<std::string, CGModAudioFX*> m_pFX;
 };
 
 extern IGMod_Audio* g_pGModAudio;
@@ -101,9 +210,30 @@ public:
 	virtual const char* GetErrorString( int );
 	// HolyLib
 	virtual unsigned long GetVersion();
-	virtual bool LoadPlugin(const char* pluginName);
+	virtual bool LoadPlugin(const char* pluginName, const char** pErrorOut);
+
+	virtual void FinishAllAsync(void* nSignalData);
+	virtual IGModAudioChannel* CreateDummyChannel(int nSampleRate, int nChannels, unsigned long nFlags, const char** pErrorOut);
+	virtual IGModAudioChannel* CreateMixerChannel(int nSampleRate, int nChannels, unsigned long nFlags, const char** pErrorOut);
+	virtual IGModAudioChannel* CreateSplitChannel(IGModAudioChannel* pChannel, unsigned long nFlags, const char** pErrorOut);
+
+public: // Non virtual holylib functions
+	void AddEncoder(CGModAudioChannelEncoder* pEncoder) {
+		m_pEncoders.insert(pEncoder);
+	}
+
+	void RemoveEncoder(CGModAudioChannelEncoder* pEncoder) {
+		auto it = m_pEncoders.find(pEncoder);
+		if (it != m_pEncoders.end())
+			m_pEncoders.erase(it);
+	}
+
 private:
+	bool LoadDLL(const char* pDLLName, void** pDLLHandle);
+
 	std::unordered_map<std::string, HPLUGIN> m_pLoadedPlugins;
+	std::vector<void*> m_pLoadedDLLs;
+	std::unordered_set<CGModAudioChannelEncoder*> m_pEncoders;
 };
 
-extern const char* g_BASSErrorStrings[];
+// extern const char* g_BASSErrorStrings[];
