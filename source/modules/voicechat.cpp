@@ -1534,7 +1534,7 @@ static void UpdatePlayerTalkingState(CBasePlayer* pPlayer, bool bIsTalking = fal
 	{
 		bool bCanHearHimself = voicechat_canhearhimself.GetBool();
 		// Build a mask of who they can hear based on the game rules.
-		for(int iOtherClient=0; iOtherClient < g_pManager->m_nMaxClients; iOtherClient++)
+		for(int iOtherClient=0; iOtherClient < g_pManager->GetMaxClients(); iOtherClient++)
 		{
 			CBaseEntity *pEnt = Util::GetCBaseEntityFromEdict(Util::engineserver->PEntityOfEntIndex(iOtherClient + 1));
 			
@@ -1587,7 +1587,7 @@ if (allow)
 	}
 
 	// Tell the engine.
-	for(int iOtherClient=0; iOtherClient < g_pManager->m_nMaxClients; iOtherClient++)
+	for(int iOtherClient=0; iOtherClient < g_pManager->GetMaxClients(); iOtherClient++)
 	{
 		bool bCanHear = gameRulesMask[iOtherClient] && !g_BanMasks[iOtherClient][iClient];
 		g_pVoiceServer->SetClientListening( iOtherClient+1, iClient+1, bCanHear );
@@ -1623,8 +1623,8 @@ double now = gpGlobals ? gpGlobals->curtime : 0.0;
 if (holylib_voicechat_debug.GetInt() >= 1 && (now - s_lastMgrPrint) > 1.0)
 {
     s_lastMgrPrint = now;
-    VCDBG(1, "CVoiceGameMgr::Update alive. pManager=%p m_nMaxClients=%d updateInterval=%f\n",
-        pManager, pManager ? pManager->m_nMaxClients : -1, pManager ? pManager->m_UpdateInterval : -1.0);
+    VCDBG(1, "CVoiceGameMgr::Update alive. pManager=%p GetMaxClients()=%d updateInterval=%f\n",
+        pManager, pManager ? pManager->GetMaxClients() : -1, pManager ? pManager->m_UpdateInterval : -1.0);
 }
 
 	g_pManager = pManager;
@@ -1641,7 +1641,7 @@ if (holylib_voicechat_debug.GetInt() >= 1 && (now - s_lastMgrPrint) > 1.0)
 	}
 
 	g_pManager->m_UpdateInterval = 0;
-	for(int iClient=0; iClient < g_pManager->m_nMaxClients; iClient++)
+	for(int iClient=0; iClient < g_pManager->GetMaxClients(); iClient++)
 	{
 		CBaseEntity *pEnt = Util::GetCBaseEntityFromEdict(Util::engineserver->PEntityOfEntIndex(iClient + 1));
 		if(!pEnt || !pEnt->IsPlayer())
