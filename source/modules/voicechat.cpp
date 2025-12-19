@@ -1636,14 +1636,15 @@ if (holylib_voicechat_debug.GetInt() >= 1 && (now - s_lastMgrPrint) > 1.0)
 {
     s_lastMgrPrint = now;
     VCDBG(1, "CVoiceGameMgr::Update alive. pManager=%p maxPlayers=%d updateInterval=%f\n",
-        pManager, Voice_MaxClients(), pManager ? pManager->m_UpdateInterval : -1.0);
+        pManager, Voice_MaxClients(), 0.0 /*no longer reading manager interval*/);
 }
 
 	g_pManager = pManager;
-	g_pManager->m_UpdateInterval += frametime;
-	if(g_pManager->m_UpdateInterval < voicechat_managerupdateinterval.GetFloat())
+	static double s_UpdateInterval = 0.0;
+	s_UpdateInterval += frametime;
+	if(s_UpdateInterval < voicechat_managerupdateinterval.GetFloat())
 	{
-		VCDBG(3, "MgrUpdate skipped: m_UpdateInterval=%f < %f\n", g_pManager->m_UpdateInterval, voicechat_managerupdateinterval.GetFloat());
+		VCDBG(3, "MgrUpdate skipped: m_UpdateInterval=%f < %f\n", s_UpdateInterval, voicechat_managerupdateinterval.GetFloat());
 		return;
 	}
 
@@ -1652,7 +1653,7 @@ if (holylib_voicechat_debug.GetInt() >= 1 && (now - s_lastMgrPrint) > 1.0)
 		Msg("Doing voice manager update!\n");
 	}
 
-	g_pManager->m_UpdateInterval = 0;
+	s_UpdateInterval = 0.0;
 	const int maxClients = Voice_MaxClients();
 	for(int iClient=0; iClient < maxClients; iClient++)
 	{
