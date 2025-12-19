@@ -1,3 +1,5 @@
+#include <cstdarg>
+#include <cstdio>
 #include "opus/opus_framedecoder.h"
 #include "opus/steam_voice.h"
 #include "LuaInterface.h"
@@ -41,6 +43,30 @@ public:
 };
 
 static ConVar voicechat_hooks("holylib_voicechat_hooks", "1", 0);
+
+static ConVar holylib_voicechat_debug("holylib_voicechat_debug", "1", FCVAR_ARCHIVE, "Voicechat module debug level (0-3)");
+
+static inline void VCDBG(int lvl, const char* fmt, ...)
+{
+    if (holylib_voicechat_debug.GetInt() < lvl)
+        return;
+
+    va_list args;
+    va_start(args, fmt);
+    Msg("[holylib:voicechat] ");
+    MsgV(fmt, args);
+    va_end(args);
+}
+
+static inline void VCWARN(const char* fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    Warning("[holylib:voicechat] ");
+    WarningV(fmt, args);
+    va_end(args);
+}
+
 
 static constexpr int g_pDataBufferSize = 16384; // Used to decompress the data. 
 static constexpr int g_nCompressedSize = g_pDataBufferSize / 4; // Used as char[] to stackallocate compressed buffers when compressing which later on are moved to the heap
@@ -1417,13 +1443,28 @@ static ConVar voicechat_updateinterval("holylib_voicechat_updateinterval", "0.1"
 static ConVar voicechat_managerupdateinterval("holylib_voicechat_managerupdateinterval", "0.1", FCVAR_ARCHIVE, "How often we loop through all players to check their voice states. We still check the player's interval to reduce calls if they already have been updated in the last x(your defined interval) seconds.");
 static ConVar voicechat_stopdelay("holylib_voicechat_stopdelay", "1", FCVAR_ARCHIVE, "How many seconds before a player is marked as stopped talking");
 static ConVar voicechat_canhearhimself("holylib_voicechat_canhearhimself", "1", FCVAR_ARCHIVE, "If enabled, we assume the player can always hear himself and thus we save one call for PlayerCanHearPlayersVoice");
+
 static void UpdatePlayerTalkingState(CBasePlayer* pPlayer, bool bIsTalking = false)
 {
+	static double s_lastUpPrint[MAX_PLAYERS] = {0};
+
 	if (!g_pManager) // Skip if we have no manager.
+	{
+		VCDBG(1, "UpdatePlayerTalkingState: g_pManager=NULL => return. player=%p talking=%d
+", pPlayer, (int)bIsTalking);
 		return;
+	}
 
 	int iClient = pPlayer->edict()->m_EdictIndex-1;
 	double fTime = Util::engineserver->Time();
+
+	if (holylib_voicechat_debug.GetInt() >= 2 && iClient >= 0 && iClient < MAX_PLAYERS && (fTime - s_lastUpPrint[iClient]) > 0.5)
+	{
+		s_lastUpPrint[iClient] = fTime;
+		VCDBG(2, "UpdatePlayerTalkingState: slot=%d bIsTalking=%d isTalkingState=%d lastTalked=%f lastUpd=%f
+",
+			iClient, (int)bIsTalking, (int)g_bIsPlayerTalking[iClient], g_fLastPlayerTalked[iClient], g_fLastPlayerUpdated[iClient]);
+	}
 	if (bIsTalking)
 	{
 		g_fLastPlayerTalked[iClient] = fTime;
@@ -1469,6 +1510,25 @@ static void UpdatePlayerTalkingState(CBasePlayer* pPlayer, bool bIsTalking = fal
 	ConVarRef sv_alltalk("sv_alltalk");
 	bool bAllTalk = sv_alltalk.GetBool();
 
+	int modEnable = -1;
+	if (g_PlayerModEnable)
+		modEnable = (*g_PlayerModEnable)[iClient] ? 1 : 0;
+	else
+		VCWARN("g_PlayerModEnable NULL (symbols broken?)
+");
+
+	if (!g_bWantModEnable) VCWARN("g_bWantModEnable NULL (symbols broken?)
+");
+	if (!g_BanMasks) VCWARN("g_BanMasks NULL (symbols broken?)
+");
+	if (!g_SentGameRulesMasks) VCWARN("g_SentGameRulesMasks NULL (symbols broken?)
+");
+	if (!g_SentBanMasks) VCWARN("g_SentBanMasks NULL (symbols broken?)
+");
+
+	VCDBG(2, "Gate check: bIsTalking=%d modEnable=%d sv_alltalk=%d
+", (int)bIsTalking, modEnable, (int)bAllTalk);
+
 	CPlayerBitVec gameRulesMask;
 	CPlayerBitVec ProximityMask;
 	bool bProximity = false;
@@ -1479,12 +1539,35 @@ static void UpdatePlayerTalkingState(CBasePlayer* pPlayer, bool bIsTalking = fal
 		for(int iOtherClient=0; iOtherClient < g_pManager->m_nMaxPlayers; iOtherClient++)
 		{
 			CBaseEntity *pEnt = Util::GetCBaseEntityFromEdict(Util::engineserver->PEntityOfEntIndex(iOtherClient + 1));
-			if(pEnt && pEnt->IsPlayer() && 
-				((bCanHearHimself && (iOtherClient == iClient)) || (bAllTalk || g_pManager->m_pHelper->CanPlayerHearPlayer((CBasePlayer*)pEnt, pPlayer, bProximity ))) )
-			{
-				gameRulesMask[iOtherClient] = true;
-				ProximityMask[iOtherClient] = bProximity;
-			}
+			
+if(!pEnt || !pEnt->IsPlayer())
+	continue;
+
+bool allow = false;
+bProximity = false;
+
+if (bCanHearHimself && (iOtherClient == iClient))
+{
+	allow = true;
+}
+else if (bAllTalk)
+{
+	allow = true;
+}
+else
+{
+	allow = g_pManager->m_pHelper->CanPlayerHearPlayer((CBasePlayer*)pEnt, pPlayer, bProximity);
+}
+
+if (holylib_voicechat_debug.GetInt() >= 3)
+	VCDBG(3, "HearCheck: listener=%d talker=%d allow=%d prox=%d
+", iOtherClient, iClient, (int)allow, (int)bProximity);
+
+if (allow)
+{
+	gameRulesMask[iOtherClient] = true;
+	ProximityMask[iOtherClient] = bProximity;
+}
 		}
 	}
 
@@ -1535,10 +1618,26 @@ static void UpdatePlayerTalkingState(CBasePlayer* pPlayer, bool bIsTalking = fal
 static Detouring::Hook detour_CVoiceGameMgr_Update;
 static void hook_CVoiceGameMgr_Update(CVoiceGameMgr* pManager, double frametime)
 {
+
+static double s_lastMgrPrint = 0.0;
+VCDBG(3, "CVoiceGameMgr::Update hook fired. pManager=%p frametime=%f\n", pManager, frametime);
+
+double now = gpGlobals ? gpGlobals->curtime : 0.0;
+if (holylib_voicechat_debug.GetInt() >= 1 && (now - s_lastMgrPrint) > 1.0)
+{
+    s_lastMgrPrint = now;
+    VCDBG(1, "CVoiceGameMgr::Update alive. pManager=%p maxPlayers=%d updateInterval=%f\n",
+        pManager, pManager ? pManager->m_nMaxPlayers : -1, pManager ? pManager->m_UpdateInterval : -1.0);
+}
+
 	g_pManager = pManager;
 	g_pManager->m_UpdateInterval += frametime;
 	if(g_pManager->m_UpdateInterval < voicechat_managerupdateinterval.GetFloat())
+	{
+		VCDBG(3, "MgrUpdate skipped: m_UpdateInterval=%f < %f
+", g_pManager->m_UpdateInterval, voicechat_managerupdateinterval.GetFloat());
 		return;
+	}
 
 	if (g_pVoiceChatModule.InDebug() == 3)
 	{
@@ -1631,6 +1730,18 @@ void CVoiceChatModule::LevelShutdown()
 static Detouring::Hook detour_SV_BroadcastVoiceData;
 static void hook_SV_BroadcastVoiceData(IClient* pClient, int nBytes, char* data, int64 xuid)
 {
+
+static double s_lastVoicePrint = 0.0;
+double now = gpGlobals ? gpGlobals->curtime : 0.0;
+if (holylib_voicechat_debug.GetInt() >= 1 && (now - s_lastVoicePrint) > 1.0)
+{
+    s_lastVoicePrint = now;
+    VCDBG(1, "SV_BroadcastVoiceData hook alive. pClient=%p nBytes=%d data=%p xuid=%lld manager=%p\n",
+        pClient, nBytes, data, (long long)xuid, g_pManager);
+}
+VCDBG(3, "SV_BroadcastVoiceData: slot=%d bytes=%d hooks=%d\n",
+    pClient ? pClient->GetPlayerSlot() : -1, nBytes, (int)voicechat_hooks.GetBool());
+
 	VPROF_BUDGET("HolyLib - SV_BroadcastVoiceData", VPROF_BUDGETGROUP_HOLYLIB);
 
 	if (g_pVoiceChatModule.InDebug() == 1)
@@ -1644,12 +1755,16 @@ static void hook_SV_BroadcastVoiceData(IClient* pClient, int nBytes, char* data,
 
 	if (!voicechat_hooks.GetBool())
 	{
+		VCDBG(2, "voicechat_hooks=0 => calling trampoline without lua preprocessing
+");
 		detour_SV_BroadcastVoiceData.GetTrampoline<Symbols::SV_BroadcastVoiceData>()(pClient, nBytes, data, xuid);
 		return;
 	}
 
 	if (Lua::PushHook("HolyLib:PreProcessVoiceChat"))
 	{
+		VCDBG(2, "Calling Lua hook HolyLib:PreProcessVoiceChat slot=%d bytes=%d
+", pClient ? pClient->GetPlayerSlot() : -1, nBytes);
 		VoiceData* pVoiceData = new VoiceData;
 		pVoiceData->SetData(data, nBytes);
 		pVoiceData->iPlayerSlot = pClient->GetPlayerSlot();
@@ -1664,6 +1779,8 @@ static void hook_SV_BroadcastVoiceData(IClient* pClient, int nBytes, char* data,
 			bHandled = g_Lua->GetBool(-1);
 			g_Lua->Pop(1);
 		}
+
+		VCDBG(2, "Lua PreProcessVoiceChat returned handled=%d\n", (int)bHandled);
 
 		if (pLuaData)
 		{
@@ -2384,6 +2501,8 @@ void CVoiceChatModule::Shutdown()
 IVoiceServer* g_pVoiceServer = nullptr;
 void CVoiceChatModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn)
 {
+    VCDBG(1, "Init() called. appfn=%p gamefn=%p\n", appfn, gamefn);
+
 	if (appfn[0])
 	{
 		g_pVoiceServer = (IVoiceServer*)appfn[0](INTERFACEVERSION_VOICESERVER, nullptr);
@@ -2393,6 +2512,7 @@ void CVoiceChatModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn)
 	}
 
 	Detour::CheckValue("get interface", "g_pVoiceServer", g_pVoiceServer != nullptr);
+	VCDBG(1, "Init() g_pVoiceServer=%p\n", g_pVoiceServer);
 }
 
 #if SYSTEM_WINDOWS
@@ -2406,12 +2526,16 @@ void CVoiceChatModule::InitDetour(bool bPreServer)
 	if (bPreServer)
 		return;
 
+	VCDBG(1, "InitDetour(pre=%d)
+", (int)bPreServer);
+
 	SourceSDK::ModuleLoader engine_loader("engine");
 	Detour::Create(
 		&detour_SV_BroadcastVoiceData, "SV_BroadcastVoiceData",
 		engine_loader.GetModule(), Symbols::SV_BroadcastVoiceDataSym,
 		(void*)hook_SV_BroadcastVoiceData, m_pID
 	);
+	VCDBG(1, "Detour SV_BroadcastVoiceData valid=%d\n", DETOUR_ISVALID(detour_SV_BroadcastVoiceData));
 
 #if SYSTEM_LINUX
 	SourceSDK::FactoryLoader server_loader("server");
@@ -2420,6 +2544,7 @@ void CVoiceChatModule::InitDetour(bool bPreServer)
 		server_loader.GetModule(), Symbols::CVoiceGameMgr_UpdateSym,
 		(void*)DETOUR_THISCALL(hook_CVoiceGameMgr_Update, CVoiceGameMgr_Update), m_pID
 	);
+	VCDBG(1, "Detour CVoiceGameMgr::Update valid=%d\n", DETOUR_ISVALID(detour_CVoiceGameMgr_Update));
 
 	g_PlayerModEnable = Detour::ResolveSymbol<CPlayerBitVec>(server_loader, Symbols::g_PlayerModEnableSym);
 	Detour::CheckValue("get class", "g_PlayerModEnable", g_PlayerModEnable != nullptr);
@@ -2435,6 +2560,9 @@ void CVoiceChatModule::InitDetour(bool bPreServer)
 
 	g_bWantModEnable = Detour::ResolveSymbol<CPlayerBitVec>(server_loader, Symbols::g_bWantModEnableSym);
 	Detour::CheckValue("get class", "g_bWantModEnable", g_bWantModEnable != nullptr);
+
+	VCDBG(1, "Resolved symbols: g_PlayerModEnable=%p g_BanMasks=%p g_SentGameRulesMasks=%p g_SentBanMasks=%p g_bWantModEnable=%p\n",
+		g_PlayerModEnable, g_BanMasks, g_SentGameRulesMasks, g_SentBanMasks, g_bWantModEnable);
 #endif
 }
 
@@ -2443,9 +2571,12 @@ void CVoiceChatModule::PreLuaModuleLoaded(lua_State* L, const char* pFileName)
 	std::string_view strFileName = pFileName;
 	if (strFileName.find("voicebox") !=std::string::npos)
 	{
-		Msg(PROJECT_NAME " - voicechat: Removing SV_BroadcastVoiceData hook before voicebox is loaded\n");
+		VCWARN("PreLuaModuleLoaded: detected '%s' (voicebox). Disabling SV_BroadcastVoiceData detour NOW. valid=%d
+", pFileName, DETOUR_ISVALID(detour_SV_BroadcastVoiceData));
 		detour_SV_BroadcastVoiceData.Disable();
 		detour_SV_BroadcastVoiceData.Destroy();
+		VCDBG(1, "After disable/destroy: valid=%d
+", DETOUR_ISVALID(detour_SV_BroadcastVoiceData));
 	}
 }
 
@@ -2454,12 +2585,14 @@ void CVoiceChatModule::PostLuaModuleLoaded(lua_State* L, const char* pFileName)
 	std::string_view strFileName = pFileName;
 	if (strFileName.find("voicebox") !=std::string::npos)
 	{
-		Msg(PROJECT_NAME " - voicechat: Recreating SV_BroadcastVoiceData hook after voicebox was loaded\n");
+		VCWARN("PostLuaModuleLoaded: detected '%s' (voicebox). Recreating SV_BroadcastVoiceData detour.
+", pFileName);
 		SourceSDK::ModuleLoader engine_loader("engine");
 		Detour::Create(
 			&detour_SV_BroadcastVoiceData, "SV_BroadcastVoiceData",
 			engine_loader.GetModule(), Symbols::SV_BroadcastVoiceDataSym,
 			(void*)hook_SV_BroadcastVoiceData, m_pID
 		);
+		VCDBG(1, "After recreate: valid=%d\n", DETOUR_ISVALID(detour_SV_BroadcastVoiceData));
 	}
 }
