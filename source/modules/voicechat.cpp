@@ -44,30 +44,36 @@ public:
 
 static ConVar voicechat_hooks("holylib_voicechat_hooks", "1", 0);
 
+// Debug level:
+// 0 = off
+// 1 = important (hook calls, pointers, state changes)
+// 2 = verbose (per-player update reasons)
+// 3 = very verbose (loop details)
 static ConVar holylib_voicechat_debug("holylib_voicechat_debug", "1", FCVAR_ARCHIVE, "Voicechat module debug level (0-3)");
 
 static inline void VCDBG(int lvl, const char* fmt, ...)
 {
-    if (holylib_voicechat_debug.GetInt() < lvl)
-        return;
+    if (holylib_voicechat_debug.GetInt() < lvl) return;
 
+    char buf[2048];
     va_list args;
     va_start(args, fmt);
-    Msg("[holylib:voicechat] ");
-    MsgV(fmt, args);
+    V_vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
+
+    Msg("[holylib:voicechat] %s", buf);
 }
 
 static inline void VCWARN(const char* fmt, ...)
 {
+    char buf[2048];
     va_list args;
     va_start(args, fmt);
-    Warning("[holylib:voicechat] ");
-    WarningV(fmt, args);
+    V_vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
+
+    Warning("[holylib:voicechat] %s", buf);
 }
-
-
 static constexpr int g_pDataBufferSize = 16384; // Used to decompress the data. 
 static constexpr int g_nCompressedSize = g_pDataBufferSize / 4; // Used as char[] to stackallocate compressed buffers when compressing which later on are moved to the heap
 // A buffer so that we reduce allocations. You should only use it directly in one function and NOT pass it around as other functions might override its contents!
@@ -1450,8 +1456,7 @@ static void UpdatePlayerTalkingState(CBasePlayer* pPlayer, bool bIsTalking = fal
 
 	if (!g_pManager) // Skip if we have no manager.
 	{
-		VCDBG(1, "UpdatePlayerTalkingState: g_pManager=NULL => return. player=%p talking=%d
-", pPlayer, (int)bIsTalking);
+		VCDBG(1, "UpdatePlayerTalkingState: g_pManager=NULL => return. player=%p talking=%d\n", pPlayer, (int)bIsTalking);
 		return;
 	}
 
@@ -1461,8 +1466,7 @@ static void UpdatePlayerTalkingState(CBasePlayer* pPlayer, bool bIsTalking = fal
 	if (holylib_voicechat_debug.GetInt() >= 2 && iClient >= 0 && iClient < MAX_PLAYERS && (fTime - s_lastUpPrint[iClient]) > 0.5)
 	{
 		s_lastUpPrint[iClient] = fTime;
-		VCDBG(2, "UpdatePlayerTalkingState: slot=%d bIsTalking=%d isTalkingState=%d lastTalked=%f lastUpd=%f
-",
+		VCDBG(2, "UpdatePlayerTalkingState: slot=%d bIsTalking=%d isTalkingState=%d lastTalked=%f lastUpd=%f\n",
 			iClient, (int)bIsTalking, (int)g_bIsPlayerTalking[iClient], g_fLastPlayerTalked[iClient], g_fLastPlayerUpdated[iClient]);
 	}
 	if (bIsTalking)
@@ -1514,20 +1518,14 @@ static void UpdatePlayerTalkingState(CBasePlayer* pPlayer, bool bIsTalking = fal
 	if (g_PlayerModEnable)
 		modEnable = (*g_PlayerModEnable)[iClient] ? 1 : 0;
 	else
-		VCWARN("g_PlayerModEnable NULL (symbols broken?)
-");
+		VCWARN("g_PlayerModEnable NULL (symbols broken?)\n");
 
-	if (!g_bWantModEnable) VCWARN("g_bWantModEnable NULL (symbols broken?)
-");
-	if (!g_BanMasks) VCWARN("g_BanMasks NULL (symbols broken?)
-");
-	if (!g_SentGameRulesMasks) VCWARN("g_SentGameRulesMasks NULL (symbols broken?)
-");
-	if (!g_SentBanMasks) VCWARN("g_SentBanMasks NULL (symbols broken?)
-");
+	if (!g_bWantModEnable) VCWARN("g_bWantModEnable NULL (symbols broken?)\n");
+	if (!g_BanMasks) VCWARN("g_BanMasks NULL (symbols broken?)\n");
+	if (!g_SentGameRulesMasks) VCWARN("g_SentGameRulesMasks NULL (symbols broken?)\n");
+	if (!g_SentBanMasks) VCWARN("g_SentBanMasks NULL (symbols broken?)\n");
 
-	VCDBG(2, "Gate check: bIsTalking=%d modEnable=%d sv_alltalk=%d
-", (int)bIsTalking, modEnable, (int)bAllTalk);
+	VCDBG(2, "Gate check: bIsTalking=%d modEnable=%d sv_alltalk=%d\n", (int)bIsTalking, modEnable, (int)bAllTalk);
 
 	CPlayerBitVec gameRulesMask;
 	CPlayerBitVec ProximityMask;
@@ -1560,8 +1558,7 @@ else
 }
 
 if (holylib_voicechat_debug.GetInt() >= 3)
-	VCDBG(3, "HearCheck: listener=%d talker=%d allow=%d prox=%d
-", iOtherClient, iClient, (int)allow, (int)bProximity);
+	VCDBG(3, "HearCheck: listener=%d talker=%d allow=%d prox=%d\n", iOtherClient, iClient, (int)allow, (int)bProximity);
 
 if (allow)
 {
@@ -1634,8 +1631,7 @@ if (holylib_voicechat_debug.GetInt() >= 1 && (now - s_lastMgrPrint) > 1.0)
 	g_pManager->m_UpdateInterval += frametime;
 	if(g_pManager->m_UpdateInterval < voicechat_managerupdateinterval.GetFloat())
 	{
-		VCDBG(3, "MgrUpdate skipped: m_UpdateInterval=%f < %f
-", g_pManager->m_UpdateInterval, voicechat_managerupdateinterval.GetFloat());
+		VCDBG(3, "MgrUpdate skipped: m_UpdateInterval=%f < %f\n", g_pManager->m_UpdateInterval, voicechat_managerupdateinterval.GetFloat());
 		return;
 	}
 
@@ -1755,16 +1751,14 @@ VCDBG(3, "SV_BroadcastVoiceData: slot=%d bytes=%d hooks=%d\n",
 
 	if (!voicechat_hooks.GetBool())
 	{
-		VCDBG(2, "voicechat_hooks=0 => calling trampoline without lua preprocessing
-");
+		VCDBG(2, "voicechat_hooks=0 => calling trampoline without lua preprocessing\n");
 		detour_SV_BroadcastVoiceData.GetTrampoline<Symbols::SV_BroadcastVoiceData>()(pClient, nBytes, data, xuid);
 		return;
 	}
 
 	if (Lua::PushHook("HolyLib:PreProcessVoiceChat"))
 	{
-		VCDBG(2, "Calling Lua hook HolyLib:PreProcessVoiceChat slot=%d bytes=%d
-", pClient ? pClient->GetPlayerSlot() : -1, nBytes);
+		VCDBG(2, "Calling Lua hook HolyLib:PreProcessVoiceChat slot=%d bytes=%d\n", pClient ? pClient->GetPlayerSlot() : -1, nBytes);
 		VoiceData* pVoiceData = new VoiceData;
 		pVoiceData->SetData(data, nBytes);
 		pVoiceData->iPlayerSlot = pClient->GetPlayerSlot();
@@ -2526,8 +2520,7 @@ void CVoiceChatModule::InitDetour(bool bPreServer)
 	if (bPreServer)
 		return;
 
-	VCDBG(1, "InitDetour(pre=%d)
-", (int)bPreServer);
+	VCDBG(1, "InitDetour(pre=%d)\n", (int)bPreServer);
 
 	SourceSDK::ModuleLoader engine_loader("engine");
 	Detour::Create(
@@ -2571,12 +2564,10 @@ void CVoiceChatModule::PreLuaModuleLoaded(lua_State* L, const char* pFileName)
 	std::string_view strFileName = pFileName;
 	if (strFileName.find("voicebox") !=std::string::npos)
 	{
-		VCWARN("PreLuaModuleLoaded: detected '%s' (voicebox). Disabling SV_BroadcastVoiceData detour NOW. valid=%d
-", pFileName, DETOUR_ISVALID(detour_SV_BroadcastVoiceData));
+		VCWARN("PreLuaModuleLoaded: detected '%s' (voicebox). Disabling SV_BroadcastVoiceData detour NOW. valid=%d\n", pFileName, DETOUR_ISVALID(detour_SV_BroadcastVoiceData));
 		detour_SV_BroadcastVoiceData.Disable();
 		detour_SV_BroadcastVoiceData.Destroy();
-		VCDBG(1, "After disable/destroy: valid=%d
-", DETOUR_ISVALID(detour_SV_BroadcastVoiceData));
+		VCDBG(1, "After disable/destroy: valid=%d\n", DETOUR_ISVALID(detour_SV_BroadcastVoiceData));
 	}
 }
 
@@ -2585,8 +2576,8 @@ void CVoiceChatModule::PostLuaModuleLoaded(lua_State* L, const char* pFileName)
 	std::string_view strFileName = pFileName;
 	if (strFileName.find("voicebox") !=std::string::npos)
 	{
-		VCWARN("PostLuaModuleLoaded: detected '%s' (voicebox). Recreating SV_BroadcastVoiceData detour.
-", pFileName);
+		VCWARN("PostLuaModuleLoaded: detected '%s' (voicebox). Recreating SV_BroadcastVoiceData detour.\n", pFileName);
+
 		SourceSDK::ModuleLoader engine_loader("engine");
 		Detour::Create(
 			&detour_SV_BroadcastVoiceData, "SV_BroadcastVoiceData",
