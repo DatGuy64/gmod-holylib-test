@@ -1521,6 +1521,34 @@ static void UpdatePlayerTalkingState(CBasePlayer* pPlayer, bool bIsTalking = fal
 		(*g_bWantModEnable)[iClient] = false;
 	}
 
+	
+	// --- HolyLib voicechat guard: CVoiceGameMgr layout may change after updates.
+	// If m_pHelper is invalid, avoid crash and fall back to sv_alltalk-only behavior.
+	if (!g_pManager || !g_pManager->m_pHelper)
+	{
+		if (g_pVoiceChatModule.InDebug() >= 1)
+		{
+			Msg("[holylib:voicechat] UpdatePlayerTalkingState: manager/helper invalid. g_pManager=%p helper=%p iClient=%d bIsTalking=%d\n",
+				g_pManager, g_pManager ? g_pManager->m_pHelper : nullptr, iClient, (int)bIsTalking);
+		}
+
+		ConVarRef sv_alltalk("sv_alltalk");
+		const bool bAllTalkFallback = sv_alltalk.GetBool();
+
+		const int maxClientsFallback = Voice_MaxClients();
+		for (int iOtherClient = 0; iOtherClient < maxClientsFallback; ++iOtherClient)
+		{
+			const bool bCanHear = bAllTalkFallback;
+			g_pVoiceServer->SetClientListening(iOtherClient + 1, iClient + 1, bCanHear);
+			if (bCanHear)
+				g_pVoiceServer->SetClientProximity(iOtherClient + 1, iClient + 1, false);
+		}
+
+		g_fLastPlayerUpdated[iClient] = fTime;
+		g_bIsPlayerTalking[iClient] = bIsTalking;
+		return;
+	}
+
 	ConVarRef sv_alltalk("sv_alltalk");
 	bool bAllTalk = sv_alltalk.GetBool();
 
@@ -1758,10 +1786,14 @@ VCDBG(3, "SV_BroadcastVoiceData: slot=%d bytes=%d hooks=%d\n",
 		Msg("cl: %p\nbytes: %i\ndata: %p\n", pClient, nBytes, data);
 
 #if SYSTEM_LINUX
+	if (g_pVoiceChatModule.InDebug() >= 1) Msg("[holylib:voicechat] SV_BroadcastVoiceData: before UpdatePlayerTalkingState\n");
 	UpdatePlayerTalkingState(Util::GetPlayerByClient((CBaseClient*)pClient), true);
+	if (g_pVoiceChatModule.InDebug() >= 1) Msg("[holylib:voicechat] SV_BroadcastVoiceData: after UpdatePlayerTalkingState\n");
 #endif
 
+	if (g_pVoiceChatModule.InDebug() >= 1) Msg("[holylib:voicechat] SV_BroadcastVoiceData: before CheckTalkingState\n");
 	CheckTalkingState(pClient->GetPlayerSlot(), true);
+	if (g_pVoiceChatModule.InDebug() >= 1) Msg("[holylib:voicechat] SV_BroadcastVoiceData: after CheckTalkingState\n");
 
 	if (!voicechat_hooks.GetBool())
 	{
@@ -1770,6 +1802,7 @@ VCDBG(3, "SV_BroadcastVoiceData: slot=%d bytes=%d hooks=%d\n",
 		return;
 	}
 
+	if (g_pVoiceChatModule.InDebug() >= 1) Msg("[holylib:voicechat] SV_BroadcastVoiceData: before HolyLib:PreProcessVoiceChat\n");
 	if (Lua::PushHook("HolyLib:PreProcessVoiceChat"))
 	{
 		VCDBG(2, "Calling Lua hook HolyLib:PreProcessVoiceChat slot=%d bytes=%d\n", pClient ? pClient->GetPlayerSlot() : -1, nBytes);
@@ -1797,10 +1830,14 @@ VCDBG(3, "SV_BroadcastVoiceData: slot=%d bytes=%d hooks=%d\n",
 
 		delete pVoiceData;
 
+		if (g_pVoiceChatModule.InDebug() >= 1) Msg("[holylib:voicechat] SV_BroadcastVoiceData: before GMOD_OnReceivedVoicePacket pPlayer=%p\n", pPlayer);
 		Util::servergameclients->GMOD_OnReceivedVoicePacket( pPlayer->edict() );
+		if (g_pVoiceChatModule.InDebug() >= 1) Msg("[holylib:voicechat] SV_BroadcastVoiceData: after GMOD_OnReceivedVoicePacket\n");
 
-		if (bHandled)
+		if (bHandled) {
+			if (g_pVoiceChatModule.InDebug() >= 1) Msg("[holylib:voicechat] SV_BroadcastVoiceData: Lua handled voice packet => returning early\n");
 			return;
+		}
 	}
 
 	detour_SV_BroadcastVoiceData.GetTrampoline<Symbols::SV_BroadcastVoiceData>()(pClient, nBytes, data, xuid);
