@@ -17,6 +17,7 @@
 #define private public // Try me.
 #include "shareddefs.h"
 #include "voice_gamemgr.h"
+#include "baseserver.h"
 #undef private
 
 // memdbgon must be the last include file in a .cpp file!!!
