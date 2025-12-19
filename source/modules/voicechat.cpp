@@ -1444,7 +1444,7 @@ static CPlayerBitVec* g_bWantModEnable;
 static double g_fLastPlayerTalked[MAX_PLAYERS] = {0};
 static double g_fLastPlayerUpdated[MAX_PLAYERS] = {0};
 static bool g_bIsPlayerTalking[MAX_PLAYERS] = {0};
-static CVoiceGameMgr\* g_pManager = nullptr;
+static CVoiceGameMgr* g_pManager = nullptr;
 static inline int Voice_MaxClients()
 {
 	int mc = (gpGlobals ? gpGlobals->maxClients : 0);
