@@ -19,13 +19,12 @@ class CUserCmd; // Fixes an error in igamesystem.h
 class CGameeventLibModule : public IModule
 {
 public:
-	virtual void Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn) OVERRIDE;
-	virtual void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) OVERRIDE;
-	virtual void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) OVERRIDE;
-	virtual void InitDetour(bool bPreServer) OVERRIDE;
-	virtual const char* Name() { return "gameevent"; };
-	virtual int Compatibility() { return LINUX32 | LINUX64; };
-	virtual bool SupportsMultipleLuaStates() { return true; };
+	void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) override;
+	void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) override;
+	void InitDetour(bool bPreServer) override;
+	const char* Name() override { return "gameevent"; };
+	int Compatibility() override { return LINUX32 | LINUX64; };
+	bool SupportsMultipleLuaStates() override { return true; };
 };
 
 static ConVar gameevent_callhook("holylib_gameevent_callhook", "1", FCVAR_ARCHIVE, "If enabled, the HolyLib:Pre/PostListenGameEvent hooks get called");
@@ -178,7 +177,7 @@ LUA_FUNCTION_STATIC(gameevent_RemoveClientListener)
 		LUA->ThrowError("Tried to use a NULL Player!\n");
 
 	CBaseClient* pClient = Util::GetClientByPlayer(pEntity);
-	const char* strEvent = LUA->CheckStringOpt(2, NULL);
+	const char* strEvent = LUA->CheckStringOpt(2, nullptr);
 
 	bool bSuccess = false;
 	if (strEvent)
@@ -531,16 +530,12 @@ LUA_FUNCTION_STATIC(gameevent_BlockCreation)
 	return 0;
 }
 
-void CGameeventLibModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn)
-{
-	pGameEventManager = (CGameEventManager*)appfn[0](INTERFACEVERSION_GAMEEVENTSMANAGER2, NULL);
-	Detour::CheckValue("get interface", "CGameEventManager", pGameEventManager != NULL);
-}
-
 void CGameeventLibModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 {
 	if (bServerInit)
 		return;
+
+	pGameEventManager = (CGameEventManager*)Util::gameeventmanager;
 
 	Lua::GetLuaData(pLua)->RegisterMetaTable(Lua::IGameEvent, pLua->CreateMetaTable("IGameEvent"));
 		Util::AddFunc(pLua, IGameEvent__tostring, "__tostring");
@@ -598,12 +593,16 @@ void CGameeventLibModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bSer
 			pLua->PushString("vote_cast"); // Yes this is a valid gameevent.
 			pLua->CallFunctionProtected(1, 0, true);
 			CGameEventDescriptor* descriptor = pGameEventManager->GetEventDescriptor("vote_cast");
-			FOR_EACH_VEC(descriptor->listeners, i)
+			if (descriptor)
 			{
-				pLuaGameEventListener = (IGameEventListener2*)descriptor->listeners[i]->m_pCallback;
-				descriptor->listeners.Remove(i); // We also remove the listener again
-				break;
+				FOR_EACH_VEC(descriptor->listeners, i)
+				{
+					pLuaGameEventListener = (IGameEventListener2*)descriptor->listeners[i]->m_pCallback;
+					descriptor->listeners.Remove(i); // We also remove the listener again
+					break;
+				}
 			}
+
 			if (!pLuaGameEventListener)
 				Warning(PROJECT_NAME ": Failed to find pLuaGameEventListener!\n");
 		} else {
@@ -629,16 +628,23 @@ void CGameeventLibModule::LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua)
 	Util::PopTable(pLua);
 }
 
+#if SYSTEM_WINDOWS
+DETOUR_THISCALL_START()
+	DETOUR_THISCALL_ADDRETFUNC1( hook_CBaseClient_ProcessListenEvents, bool, ProcessListenEvents, CBaseClient*, CLC_ListenEvents* );
+DETOUR_THISCALL_FINISH();
+#endif
+
 void CGameeventLibModule::InitDetour(bool bPreServer)
 {
 	if (bPreServer)
 		return;
 
+	DETOUR_PREPARE_THISCALL();
 	SourceSDK::ModuleLoader engine_loader("engine");
 	Detour::Create(
 		&detour_CBaseClient_ProcessListenEvents, "CBaseClient::ProcessListenEvents",
 		engine_loader.GetModule(), Symbols::CBaseClient_ProcessListenEventsSym,
-		(void*)hook_CBaseClient_ProcessListenEvents, m_pID
+		(void*)DETOUR_THISCALL(hook_CBaseClient_ProcessListenEvents, ProcessListenEvents), m_pID
 	);
 
 #if ARCHITECTURE_IS_X86

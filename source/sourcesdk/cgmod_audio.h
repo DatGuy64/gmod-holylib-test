@@ -7,6 +7,7 @@
 #include "IGmod_Audio.h"
 #include "bass.h"
 #include "bassenc.h"
+#include "bassmix.h"
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -35,6 +36,16 @@ private:
 	HSTREAM m_hStream;
 };
 
+enum ChannelType
+{
+	CHANNEL_URL = 0,
+	CHANNEL_FILE = 1, // 1 so that CGModAudioChannel::m_nType is true/1 for files matching gmods previous var value
+	CHANNEL_DUMMY = 2,
+	CHANNEL_PUSH = 3,
+	CHANNEL_MIXER = 3,
+	CHANNEL_SPLIT = 4,
+};
+
 constexpr unsigned int EncoderForceShutdownPointer = 0x1; // Pointer passed to HandleFinish when a forced shutdown for all is done
 class CGModAudioChannel;
 class CGModAudioChannelEncoder : public IGModAudioChannelEncoder
@@ -47,7 +58,7 @@ public:
 	// Returns true if there was an error, pErrorOut will either be filled or NULL
 	// If it returns true, it will also invalidate/free itself so the pointer becomes invalid!
 	virtual bool GetLastError(const char** pErrorOut);
-	virtual bool MakeServer( const char* port, unsigned long buffer, unsigned long burst, unsigned long flags, const char** pErrorOut );
+	virtual bool ServerInit( const char* port, unsigned long buffer, unsigned long burst, unsigned long flags, const char** pErrorOut );
 	virtual bool ServerKick( const char* client );
 
 	virtual void SetPaused( bool bPaused );
@@ -60,8 +71,15 @@ public:
 	virtual const char* GetFileName() { return m_strFileName.c_str(); };
 	virtual IGModEncoderCallback* GetCallback() { return m_pCallback; };
 
+	virtual bool CastInit(
+		const char* server, const char* password, const char* content,
+		const char* name, const char* url, const char* genre, const char* desc,
+		char headers[4096], unsigned long bitrate, unsigned long flags, const char** pErrorOut
+	);
+	virtual void CastSetTitle( const char* title, const char* url );
+
 public: // Non virtual
-	CGModAudioChannelEncoder(DWORD pChannel, const char* pFileName, IGModEncoderCallback* pCallback );
+	CGModAudioChannelEncoder(DWORD pChannel, ChannelType nChannelType, const char* pFileName, IGModEncoderCallback* pCallback );
 	void InitEncoder(unsigned long nEncoderFlags);
 	void HandleFinish(void* nSignalData); // Called each Update on the main thread, nSignalData is for the callback we store so that it can decide wether to force finish or not
 
@@ -84,6 +102,7 @@ public:
 	std::string m_strFileName;
 	std::string m_strLastError;
 	DWORD m_pChannel;
+	ChannelType m_nChannelType;
 	GModEncoderStatus m_nStatus;
 	IGModEncoderCallback* m_pCallback;
 };
@@ -91,6 +110,8 @@ public:
 class CGModAudioFX : public IGModAudioFX
 {
 public:
+	virtual ~CGModAudioFX() {};
+
 	virtual void Free(IGModAudioChannel* pChannel);
 	virtual void GetParameters( void* params );
 	virtual void Reset();
@@ -119,7 +140,7 @@ public:
 	virtual float GetVolume();
 	virtual void SetPlaybackRate(float);
 	virtual float GetPlaybackRate();
-	virtual void SetPos( Vector*, Vector* = NULL, Vector* = NULL );
+	virtual void SetPos( Vector*, Vector* = nullptr, Vector* = nullptr );
 	virtual void GetPos( Vector*, Vector*, Vector* );
 	virtual void SetTime( double, bool );
 	virtual double GetTime();
@@ -154,6 +175,12 @@ public:
 	virtual void Update( unsigned long length );
 	virtual bool CreateLink( IGModAudioChannel* pChannel, const char** pErrorOut );
 	virtual bool DestroyLink( IGModAudioChannel* pChannel, const char** pErrorOut );
+	virtual void SetAttribute( unsigned long nAttribute, float nValue, const char** pErrorOut );
+	virtual void SetSlideAttribute( unsigned long nAttribute, float nValue, unsigned long nTime, const char** pErrorOut );
+	virtual float GetAttribute( unsigned long nAttribute, const char** pErrorOut );
+	virtual bool IsAttributeSliding( unsigned long nAttribute );
+	virtual unsigned long GetChannelData( void* pBuffer, unsigned long nLength );
+	virtual int GetChannelCount(const char** pErrorOut);
 	
 	// FX
 	virtual bool SetFX( const char* pFXName, unsigned long nType, int nPriority, void* pParams, const char** pErrorOut );
@@ -164,18 +191,24 @@ public:
 	virtual bool FXReset( const char* pFXName );
 	virtual bool FXFree( const char* pFXName );
 
+	// Push functions
+	virtual bool IsPush();
+	virtual void WriteData(const void* pData, unsigned long nLength, const char** pErrorOut);
+
 	// Mixer functions
 	virtual bool IsMixer();
 	virtual void AddMixerChannel( IGModAudioChannel* pChannel, unsigned long nFlags, const char** pErrorOut );
 	virtual void RemoveMixerChannel();
 	virtual int GetMixerState();
+	virtual const char* SetMatrix(float* pValues, float fTime);
+	virtual int GetMixerChannelCount(const char** pErrorOut);
 
 	// Splitter functions
 	virtual bool IsSplitter();
 	virtual void ResetSplitStream();
 
 public:
-	CGModAudioChannel( DWORD handle, bool isfile, const char* pFileName = NULL, bool isMixer = false, bool isSplit = false );
+	CGModAudioChannel( DWORD handle, ChannelType nType, const char* pFileName = nullptr );
 	virtual ~CGModAudioChannel();
 
 private:
@@ -184,11 +217,9 @@ private:
 	friend class CGModAudioFX;
 
 	DWORD m_pHandle;
-	bool m_bIsFile;
+	ChannelType m_nType; //bool m_bIsFile;
 
 	// HolyLib specific
-	bool m_bIsMixer = false;
-	bool m_bIsSplit = false;
 	std::string m_strFileName = "NULL";
 	std::unordered_map<std::string, CGModAudioFX*> m_pFX;
 };
@@ -200,7 +231,7 @@ public:
 	virtual ~CGMod_Audio();
 	virtual bool Init( CreateInterfaceFn );
 	virtual void Shutdown();
-	virtual void Update( unsigned int );
+	virtual bool Update( unsigned int );
 	virtual IBassAudioStream* CreateAudioStream( IAudioStreamEvent* );
 	virtual void SetEar( Vector*, Vector*, Vector*, Vector* );
 	virtual IGModAudioChannel* PlayURL( const char* url, const char* flags, int* );
@@ -214,6 +245,7 @@ public:
 
 	virtual void FinishAllAsync(void* nSignalData);
 	virtual IGModAudioChannel* CreateDummyChannel(int nSampleRate, int nChannels, unsigned long nFlags, const char** pErrorOut);
+	virtual IGModAudioChannel* CreatePushChannel(int nSampleRate, int nChannels, unsigned long nFlags, const char** pErrorOut);
 	virtual IGModAudioChannel* CreateMixerChannel(int nSampleRate, int nChannels, unsigned long nFlags, const char** pErrorOut);
 	virtual IGModAudioChannel* CreateSplitChannel(IGModAudioChannel* pChannel, unsigned long nFlags, const char** pErrorOut);
 

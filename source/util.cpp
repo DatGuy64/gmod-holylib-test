@@ -17,6 +17,8 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
+#undef isalnum // 64x loves to shit on this one
+
 // Try not to use it. We want to move away from it.
 // Additionaly, we will add checks in many functions.
 GarrysMod::Lua::ILuaInterface* g_Lua = nullptr;
@@ -25,19 +27,21 @@ IVEngineServer* engine = nullptr;
 CGlobalEntityList* Util::entitylist = nullptr;
 CUserMessages* Util::pUserMessages = nullptr;
 
-std::unordered_set<LuaUserData*> g_pLuaUserData;
+#if HOLYLIB_UTIL_DEBUG_LUAUSERDATA
+std::unordered_set<LuaUserData*> g_pLuaUserData; // Debug only use
+#endif
 
 std::unordered_set<int> Util::g_pReference;
 ConVar Util::holylib_debug_mainutil("holylib_debug_mainutil", "1");
 
 // We require this here since we depend on the Lua namespace
-void LuaUserData::ForceGlobalRelease(void* pData)
+void ReferencedLuaUserData::ForceGlobalRelease(void* pData)
 {
 	bool bFound = false;
 	const std::unordered_set<Lua::StateData*> pStateData = Lua::GetAllLuaData();
 	for (Lua::StateData* pState : pStateData)
 	{
-		std::unordered_map<void*, LuaUserData*> owningData = pState->GetPushedUserData(); // Copy it over in case it->second gets deleted while iterating
+		std::unordered_map<void*, ReferencedLuaUserData*> owningData = pState->GetPushedUserData(); // Copy it over in case it->second gets deleted while iterating
 		auto it2 = owningData.find(pData);
 		if (it2 == owningData.end())
 			continue;
@@ -61,7 +65,7 @@ void LuaUserData::ForceGlobalRelease(void* pData)
 	*/
 	for (Lua::StateData* pState : pStateData)
 	{
-		std::unordered_map<void*, LuaUserData*> owningData = pState->GetPushedUserData(); // Copy it over in case it->second gets deleted while iterating
+		std::unordered_map<void*, ReferencedLuaUserData*> owningData = pState->GetPushedUserData(); // Copy it over in case it->second gets deleted while iterating
 		auto it2 = owningData.find(pData);
 		if (it2 == owningData.end())
 			continue;
@@ -190,7 +194,7 @@ void Util::Push_Entity(GarrysMod::Lua::ILuaInterface* LUA, CBaseEntity* pEnt)
 		Util::ReferencePush(LUA, pObject->GetReference()); // Assuming the reference is always right.
 	} else {
 		Warning("holylib: tried to push a entity, but this wasn't implemented for other lua states yet!\n");
- 		LUA->PushNil();
+		LUA->PushNil();
 	}
 }
 
@@ -240,7 +244,8 @@ IServerGameEnts* Util::servergameents = nullptr;
 IServerGameClients* Util::servergameclients = nullptr;
 CBaseClient* Util::GetClientByPlayer(const CBasePlayer* ply)
 {
-	return Util::GetClientByUserID(Util::engineserver->GetPlayerUserId(((CBaseEntity*)ply)->edict()));
+	// Follows source engines assumption that CGameClient/player index == entindex - 1
+	return Util::GetClientByIndex(ply->edict()->m_EdictIndex - 1);
 }
 
 CBaseClient* Util::GetClientByIndex(int index)
@@ -421,7 +426,7 @@ void ShutdownSteamUser()
 		}
 	}
 
-	g_pSteamUser = NULL;
+	g_pSteamUser = nullptr;
 	hSteamPipe = NULL;
 	hSteamUser = NULL;
 	// Warning("Nuked g_pSteamUser\n");
@@ -438,7 +443,7 @@ void CreateSteamUserIfMissing()
 			return;
 		}
 
-		//if (Util::get != NULL)
+		//if (Util::get != nullptr)
 		//	g_pSteamUser = Util::get->SteamUser();
 
 		ISteamClient* pSteamClient = SteamGameServerClient();
@@ -477,7 +482,7 @@ static IGameEvent* hook_CGameEventManager_CreateEvent(void* manager, const char*
 {
 	auto it = Util::pBlockedEvents.find(name);
 	if (it != Util::pBlockedEvents.end())
-		return NULL;
+		return nullptr;
 
 	return detour_CGameEventManager_CreateEvent.GetTrampoline<Symbols::CGameEventManager_CreateEvent>()(manager, name, bForce);
 }
@@ -564,6 +569,15 @@ int Util::FindOffsetForNetworkVar(const char* pDTName, const char* pVarName)
 	return -1;
 }
 
+#if SYSTEM_WINDOWS
+#undef CreateEvent // Where tf is that windows include >:(
+DETOUR_THISCALL_START()
+	DETOUR_THISCALL_ADDFUNC1( hook_CSteam3Server_NotifyClientDisconnect, NotifyClientDisconnect, void*, CBaseClient* );
+	DETOUR_THISCALL_ADDRETFUNC2( hook_CGameEventManager_CreateEvent, IGameEvent*, CreateEvent, void*, const char*, bool );
+DETOUR_THISCALL_FINISH();
+#endif
+
+
 IGet* Util::get = nullptr;
 CBaseEntityList* g_pEntityList = nullptr;
 Symbols::lua_rawseti Util::func_lua_rawseti = nullptr;
@@ -617,16 +631,17 @@ void Util::AddDetour()
 		servergamedll = server_loader.GetInterface<IServerGameDLL>(INTERFACEVERSION_SERVERGAMEDLL);
 	Detour::CheckValue("get interface", "IServerGameDLL", servergamedll != nullptr);
 
+	DETOUR_PREPARE_THISCALL();
 	Detour::Create(
 		&detour_CSteam3Server_NotifyClientDisconnect, "CSteam3Server::NotifyClientDisconnect",
 		engine_loader.GetModule(), Symbols::CSteam3Server_NotifyClientDisconnectSym,
-		(void*)hook_CSteam3Server_NotifyClientDisconnect, 0
+		(void*)DETOUR_THISCALL(hook_CSteam3Server_NotifyClientDisconnect, NotifyClientDisconnect), 0
 	);
 
 	Detour::Create(
 		&detour_CGameEventManager_CreateEvent, "CGameEventManager::CreateEvent",
 		engine_loader.GetModule(), Symbols::CGameEventManager_CreateEventSym,
-		(void*)hook_CGameEventManager_CreateEvent, 0
+		(void*)DETOUR_THISCALL(hook_CGameEventManager_CreateEvent, CreateEvent), 0
 	);
 
 	SourceSDK::ModuleLoader steam_api_loader("steam_api");
@@ -636,7 +651,11 @@ void Util::AddDetour()
 		(void*)hook_SteamGameServer_Shutdown, 0
 	);
 
+#if SYSTEM_WINDOWS && ARCHITECTURE_X86_64
+	server = Detour::ResolveSymbolNoDereference<IServer>( engine_loader, Symbol::FromName( "?sv@@3VCGameServer@@A" ) );
+#else
 	server = InterfacePointers::Server();
+#endif
 	Detour::CheckValue("get class", "IServer", server != nullptr);
 
 	IServerTools* serverTools = nullptr;
@@ -652,10 +671,10 @@ void Util::AddDetour()
 
 	if (!entitylist)
 	{
-		#ifdef ARCHITECTURE_X86
+		#if defined(ARCHITECTURE_X86) && defined(SYSTEM_LINUX)
 			entitylist = Detour::ResolveSymbol<CGlobalEntityList>(server_loader, Symbols::gEntListSym);
 		#else
-			entitylist = Detour::ResolveSymbolFromLea<CGlobalEntityList>(server_loader.GetModule(), Symbols::gEntListSym);
+			entitylist = Detour::ResolveSymbolWithOffset<CGlobalEntityList>(server_loader.GetModule(), Symbols::gEntListSym);
 		#endif
 	}
 
@@ -752,6 +771,12 @@ void Util::RemoveDetour()
 static bool g_pShouldLoad = false;
 bool Util::ShouldLoad()
 {
+	if (CommandLine()->FindParm("-holylib_disable"))
+	{
+		Msg(PROJECT_NAME " - core: Refusing to load due to -holylib_disable!\n");
+		return false;
+	}
+
 	if (CommandLine()->FindParm("-holylibexists") && !g_pShouldLoad) // Don't set this manually!
 		return false;
 
@@ -764,7 +789,19 @@ bool Util::ShouldLoad()
 	return true;
 }
 
-void Util::CheckVersion() // This is called only when holylib is initially loaded!
+// Checks if the given string contains illegal characters
+static inline bool ValidateURLVariable(Bootil::BString value)
+{
+	for (char c : value)
+	{
+		if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_' && c != '.')
+			return false;
+	}
+
+	return true;
+}
+
+void Util::CheckVersion(bool bAutoUpdate) // This is called only when holylib is initially loaded!
 {
 	// ToDo: Implement this someday / finish this implementation
 	httplib::Client pClient("http://holylib.raphaelit7.com");
@@ -772,22 +809,110 @@ void Util::CheckVersion() // This is called only when holylib is initially loade
 	httplib::Headers headers = {
 		{ "HolyLib_Branch", HolyLib_GetBranch() },
 		{ "HolyLib_RunNumber", HolyLib_GetRunNumber() },
-		{ "HolyLib_Version", HolyLib_GetVersion() }
+		{ "HolyLib_Version", HolyLib_GetVersion() },
 	};
 
 	auto res = pClient.Get("/api/check_version");
-	if (res->status == 200)
+	if (res->status != 200)
+		return;
+
+	Bootil::Data::Tree pTree;
+	if (!Bootil::Data::Json::Import(pTree, res->body.c_str())) {
+		DevMsg(PROJECT_NAME " - versioncheck: Received invalid json!\n");
+		return;
+	}
+
+	if (pTree.GetChild("status").Value() == "ok")
 	{
-		Bootil::Data::Tree pTree;
-		if (Bootil::Data::Json::Import(pTree, res->body.c_str()))
+		Msg(PROJECT_NAME " - versioncheck: We are up to date\n");
+	} else if (pTree.GetChild("status").Value() == "custom") {
+		Msg(PROJECT_NAME " - versioncheck: We are running a custom version\n");
+	} else if (pTree.GetChild("status").Value() == "outdated") {
+		Msg(PROJECT_NAME " - versioncheck: We are running an outdated version\n");
+
+		if (!bAutoUpdate)
+			return;
+
+		// NOTE: We use GH releases as I do not at all want to use any other service that could be vulnerable.
+		// AutoUpdate should be absolutely safe with no external services
+		// the wiki may tell you if your outdated or not but it does not specify the download URL!
+		Bootil::BString releaseVersion = pTree.GetChild("releaseVersion").Value();
+		Bootil::BString releaseFile = pTree.GetChild("releaseFile").Value();
+		if (releaseFile.empty() || releaseVersion.empty())
 		{
-			if (pTree.GetChild("status").Value() == "ok")
-			{
-				Msg(PROJECT_NAME " - versioncheck: We are up to date\n");
-			}
-		} else {
-			DevMsg(PROJECT_NAME " - versioncheck: Received invalid json!\n");
+				Msg(PROJECT_NAME " - versioncheck: Auto update failed since we got no valid release response\n");
+				return;
 		}
+
+		if (!ValidateURLVariable(releaseVersion) || !ValidateURLVariable(releaseFile))
+		{
+			Msg(PROJECT_NAME " - versioncheck: Auto update was blocked due to malicious response!\n");
+			return;
+		}
+				
+		Bootil::BString downloadURL = Bootil::String::Format::Print(
+			"https://github.com/RaphaelIT7/gmod-holylib/releases/download/%s/%s",
+			releaseVersion.c_str(),
+			releaseFile.c_str()
+		);
+		pClient.set_follow_location(true); // GitHub does redirect one
+		auto pReleaseDownload = pClient.Get(downloadURL);
+
+		if (!pReleaseDownload || pReleaseDownload->status != 200)
+		{
+			Msg(PROJECT_NAME " - versioncheck: Autoupdate failed to download new version! (%i)\n", pReleaseDownload->status);
+			return;
+		}
+
+		std::string updaterPath = "holylib/autoupdater/";
+		std::string filePath = updaterPath;
+		filePath.append(releaseVersion);
+		filePath.append("-");
+		filePath.append(releaseFile);
+
+		g_pFullFileSystem->CreateDirHierarchy(updaterPath.c_str(), "MOD");
+		FileHandle_t pHandle = g_pFullFileSystem->Open(filePath.c_str(), "wb", "MOD");
+		if (!pHandle)
+		{
+			Msg(PROJECT_NAME " - versioncheck: Autoupdate failed to open file to write! (%s)\n", filePath.c_str());
+			return;
+		}
+
+		g_pFullFileSystem->Write(pReleaseDownload->body.c_str(), pReleaseDownload->body.length(), pHandle);
+		g_pFullFileSystem->Close(pHandle);
+
+		Bootil::BString outputFileName = "gmsv_holylib_" MODULE_EXTENSION "_updated." LIBRARY_EXTENSION;
+			
+		Bootil::BString outputRelativeFilePath = updaterPath; // For the filesystem
+		outputRelativeFilePath.append(outputFileName);
+
+		char fullFolderPath[MAX_PATH];
+		g_pFullFileSystem->RelativePathToFullPath(filePath.c_str(), "MOD", fullFolderPath, sizeof(fullFolderPath));
+		Bootil::BString outputFullFilePath = fullFolderPath; // For Bootil
+		outputFullFilePath.append(outputFileName);
+
+		Bootil::Compression::Zip::File pDownloadBuild(filePath.c_str());
+		for (int i=0; i<pDownloadBuild.GetNumItems(); ++i)
+		{
+			Bootil::BString pFileName = pDownloadBuild.GetFileName( i );
+			if (pFileName.find("gmsv_holylib_" MODULE_EXTENSION) == std::string::npos)
+				continue; // not our file
+
+			// Found our version file (this is in case future builds contain multiple platforms)
+			pDownloadBuild.ExtractFile(i, outputFullFilePath);
+		}
+
+		if (!g_pFullFileSystem->FileExists(outputRelativeFilePath.c_str(), "MOD"))
+		{
+			Msg(PROJECT_NAME " - versioncheck: Autoupdate failed to write output file! (%s)\n", outputRelativeFilePath.c_str());
+			return;
+		}
+
+		// Our location will be in the BASE_PATH so it'll end up besides the ghostinj
+		Bootil::File::Copy(outputFullFilePath.c_str(), outputFileName.c_str());
+		Msg(PROJECT_NAME " - versioncheck: Autoupdate succeeded, newer version will be installed on next boot\n");
+	} else if (pTree.GetChild("status").Value() == "toonew") {
+		Msg(PROJECT_NAME " - versioncheck: We are running a too new version? Damn...\n");
 	}
 }
 
@@ -802,7 +927,7 @@ void Util::Load()
 
 	LoadDLLs();
 
-	IConfig* pConVarConfig = g_pConfigSystem->LoadConfig("garrysmod/holylib/cfg/convars.json");
+	IConfig* pConVarConfig = g_pConfigSystem->LoadConfig(HOLYLIB_CONFIG_PATH "convars.json");
 	if (pConVarConfig)
 	{
 		if (pConVarConfig->GetState() == ConfigState::INVALID_JSON)
@@ -867,7 +992,7 @@ void Util::Load()
 		pConVarConfig->Destroy();
 	}
 
-	IConfig* pCoreConfig = g_pConfigSystem->LoadConfig("garrysmod/holylib/cfg/core.json");
+	IConfig* pCoreConfig = g_pConfigSystem->LoadConfig(HOLYLIB_CONFIG_PATH "core.json");
 	if (pCoreConfig)
 	{
 		if (pCoreConfig->GetState() == ConfigState::INVALID_JSON)
@@ -882,10 +1007,11 @@ void Util::Load()
 
 		// checkVersion block
 		Bootil::Data::Tree& pEntry = pData.GetChild("checkVersion");
-		pEntry.SetChildVar<Bootil::BString>("description", "(Unfinished implementation) If enabled, HolyLib will attempt to request the newest version from the wiki and compare them.");
+		pEntry.GetChild("description").Var<Bootil::BString>("(Unfinished implementation) If enabled, HolyLib will attempt to request the newest version from the wiki and compare them.");
+		bool bAllowAutoUpdate = pEntry.EnsureChildVar<bool>("autoUpdate", false);
 		if (pEntry.EnsureChildVar<bool>("enabled", false))
 		{
-			Util::CheckVersion();
+			Util::CheckVersion(bAllowAutoUpdate);
 		}
 
 		pCoreConfig->Save();
@@ -924,13 +1050,13 @@ static void CreateDebugDump(const CCommand &args)
 		pInformation.EnsureChildVar<int>("tick", Util::server->GetTick());
 		pInformation.EnsureChildVar<int>("tickinterval", Util::server->GetTickInterval());
 
-		if (Util::get)
+		/*if (Util::get)
 		{
 			Bootil::Data::Tree& pGmodInformation = pData.GetChild("gmod");
 			pGmodInformation.EnsureChildVar<Bootil::BString>("version", Util::get->VersionStr());
 			pGmodInformation.EnsureChildVar<Bootil::BString>("versionTime", Util::get->VersionTimeStr());
 			pGmodInformation.EnsureChildVar<Bootil::BString>("branch", Util::get->SteamBranch());
-		}
+		}*/
 
 		// Dump all holylib convars.
 		{

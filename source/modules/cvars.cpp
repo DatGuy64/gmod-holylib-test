@@ -10,15 +10,15 @@
 class CCVarsModule : public IModule
 {
 public:
-	virtual void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) OVERRIDE;
-	virtual void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) OVERRIDE;
+	void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) override;
+	void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) override;
 #if ARCHITECTURE_IS_X86
-	virtual void InitDetour(bool bServerInit) OVERRIDE;
-	virtual void Shutdown() OVERRIDE;
+	void InitDetour(bool bServerInit) override;
+	void Shutdown() override;
 #endif
-	virtual const char* Name() { return "cvars"; };
-	virtual int Compatibility() { return LINUX32 | LINUX64 | WINDOWS32 | WINDOWS64; };
-	virtual bool SupportsMultipleLuaStates() { return true; };
+	const char* Name() override { return "cvars"; };
+	int Compatibility() override { return LINUX32 | LINUX64 | WINDOWS32 | WINDOWS64; };
+	bool SupportsMultipleLuaStates() override { return true; };
 };
 
 static CCVarsModule g_pCVarsModule;
@@ -65,10 +65,8 @@ inline void AddCommandBaseName(ConCommandBase* variable)
 	 * The Engine is forgetting to register them properly and seemingly relies on the logic that children convars are automatically added, which doesn't seem to be intentional?
 	 */
 	variable = variable->GetNext();
-	if (variable && FindCommandBaseName(variable->GetName()) == NULL)
-	{
+	if (variable && FindCommandBaseName(variable->GetName()) == nullptr)
 		AddCommandBaseName(variable);
-	}
 }
 
 inline void RemoveCommandBaseName(const ConCommandBase* variable)
@@ -84,7 +82,7 @@ inline ConCommandBase* FindCommandBaseName(const char* name)
 	if (it != g_pCommandBaseNames.end())
 		return it->second;
 
-	return NULL;
+	return nullptr;
 }
 
 Detouring::Hook detour_CCvar_RegisterConCommand;
@@ -206,6 +204,8 @@ LUA_FUNCTION_STATIC(cvars_GetAll)
 
 LUA_FUNCTION_STATIC(cvars_SetValue)
 {
+	Util::DoUnsafeCodeCheck(LUA);
+
 	const char* pName = LUA->CheckString(1);
 	ConVar* pConVar = g_pCVar->FindVar(pName);
 	if (!pConVar)
@@ -221,6 +221,8 @@ LUA_FUNCTION_STATIC(cvars_SetValue)
 
 LUA_FUNCTION_STATIC(cvars_Unregister)
 {
+	Util::DoUnsafeCodeCheck(LUA);
+
 	ConCommandBase* pConVar;
 	if (LUA->IsType(1, GarrysMod::Lua::Type::String))
 		pConVar = g_pCVar->FindCommandBase(LUA->GetString(1));

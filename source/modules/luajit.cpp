@@ -1,5 +1,6 @@
 #include "module.h"
 #define LUAJIT
+#define DISABLE_GMODJIT
 #include "detours.h"
 #include <detouring/classproxy.hpp>
 #include "LuaInterface.h"
@@ -23,14 +24,14 @@ extern "C"
 class CLuaJITModule : public IModule
 {
 public:
-	virtual void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) OVERRIDE;
-	virtual void PostLuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) OVERRIDE;
-	virtual void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) OVERRIDE;
-	virtual void InitDetour(bool bPreServer) OVERRIDE;
-	virtual const char* Name() { return "luajit"; };
-	virtual int Compatibility() { return LINUX32 | LINUX64; };
-	virtual bool IsEnabledByDefault() { return false; };
-	virtual void OnConfigLoad(Bootil::Data::Tree& pConfig) OVERRIDE
+	void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) override;
+	void PostLuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) override;
+	void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) override;
+	void InitDetour(bool bPreServer) override;
+	const char* Name() override { return "luajit"; };
+	int Compatibility() override { return LINUX32 | LINUX64; };
+	bool IsEnabledByDefault() override { return false; };
+	void OnConfigLoad(Bootil::Data::Tree& pConfig) override
 	{
 		m_bAllowFFI = pConfig.EnsureChildVar<bool>("enableFFI", m_bAllowFFI);
 		m_bKeepRemovedDebugFunctions = pConfig.EnsureChildVar<bool>("keepRemovedDebugFunctions", m_bKeepRemovedDebugFunctions);
@@ -88,7 +89,7 @@ LUA_FUNCTION_STATIC(markFFITypeAsValidUserData)
 	if (!pData)
 		return 0;
 
-	unsigned char nMetaID = LUA->CheckNumber(1);
+	unsigned char nMetaID = (unsigned char)LUA->CheckNumber(1);
 	uint16_t cTypeID = RawLua::GetCDataType(LUA->GetState(), 2);
 
 	Lua::GetLuaData(LUA)->GetCDataBridge().RegisterType(nMetaID, cTypeID);
@@ -117,7 +118,7 @@ LUA_FUNCTION_STATIC(getMetaTableByID)
 	if (!g_pLuaJITModule.m_bAllowFFI && overrideFFIReference == -1)
 		return 0;
 
-	return LUA->PushMetaTable(LUA->CheckNumber(1)) ? 1 : 0;
+	return LUA->PushMetaTable((int)LUA->CheckNumber(1)) ? 1 : 0;
 }
 
 static bool bOpenLibs = false;
@@ -208,7 +209,7 @@ public:
 		UnHook(&GarrysMod::Lua::ILuaInterface::GetUserdata);
 	}
 
-	virtual GarrysMod::Lua::ILuaBase::UserData* GetUserdata(int iStackPos)
+	GarrysMod::Lua::ILuaBase::UserData* GetUserdata(int iStackPos)
 	{
 		bool bFutureVar;
 		return (GarrysMod::Lua::ILuaBase::UserData*)RawLua::GetUserDataOrFFIVar(This()->GetState(), iStackPos, GetLuaJITLuaData(This())->pBridge, &bFutureVar);

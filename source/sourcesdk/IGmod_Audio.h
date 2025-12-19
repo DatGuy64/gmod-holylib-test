@@ -5,7 +5,7 @@
 
 #define INTERFACEVERSION_GMODAUDIO			"IGModAudio001"
 
-enum GModChannelFFT_t {
+enum class GModChannelFFT_t {
 	FFT_256 = 0,
 	FFT_512 = 1,
 	FFT_1024 = 2,
@@ -16,7 +16,7 @@ enum GModChannelFFT_t {
 	FFT_32768 = 7,
 };
 
-enum GModEncoderStatus {
+enum class GModEncoderStatus {
 	NONE = 0,
 	RUNNING = 1,
 	FINISHED = 2,
@@ -38,7 +38,7 @@ public:
 
 	virtual void Stop(bool bProcessQueue) = 0;
 
-	// Returns true if there was an error, pErrorOut will either be filled or NULL
+	// Returns true if there was an error, pErrorOut will either be filled or nullptr
 	// If it returns true, it will also invalidate/free itself so the pointer becomes invalid!
 	// NOTE: This is only for fatal errors like on init, most other functions have a pErrorOut argument for light errors that can be ignored
 	virtual bool GetLastError(const char** pErrorOut) = 0;
@@ -46,7 +46,7 @@ public:
 	// Wasn't exposed since CreateEncoder already calls it so it has no real use
 	// virtual void InitEncoder(unsigned long nEncoderFlags) = 0;
 
-	virtual bool MakeServer( const char* port, unsigned long buffer, unsigned long burst, unsigned long flags, const char** pErrorOut ) = 0;
+	virtual bool ServerInit( const char* port, unsigned long buffer, unsigned long burst, unsigned long flags, const char** pErrorOut ) = 0;
 	virtual bool ServerKick( const char* client ) = 0;
 
 	virtual void SetPaused( bool bPaused ) = 0;
@@ -58,6 +58,13 @@ public:
 	virtual void WriteData(const void* pData, unsigned long nLength) = 0;
 	virtual const char* GetFileName() = 0;
 	virtual IGModEncoderCallback* GetCallback() = 0;
+
+	virtual bool CastInit(
+		const char* server, const char* password, const char* content,
+		const char* name, const char* url, const char* genre, const char* desc,
+		char headers[4096], unsigned long bitrate, unsigned long flags, const char** pErrorOut
+	) = 0;
+	virtual void CastSetTitle( const char* title, const char* url ) = 0;
 };
 
 class IGModAudioChannelEncoder;
@@ -71,7 +78,7 @@ public:
 };
 
 // We left out COMPRESSOR, GARGLE, and I3DL2REVERB as those are not supported on other platforms than windows
-enum BassFX // IDs match BASS_FX enums
+enum class BassFX // IDs match BASS_FX enums
 {
 	FX_CHORUS = 0,
 	FX_DISTORTION = 2,
@@ -79,11 +86,14 @@ enum BassFX // IDs match BASS_FX enums
 	FX_FLANGER = 4,
 	FX_PARAMEQ = 7,
 	FX_REVERB = 8,
+	FX_MAX = 9,
 };
 
 class IGModAudioFX
 {
 public:
+	virtual ~IGModAudioFX() {};
+
 	virtual void Free(IGModAudioChannel* pChannel) = 0;
 	virtual void GetParameters( void* params ) = 0;
 	virtual void Reset() = 0;
@@ -134,13 +144,19 @@ public:
 	virtual bool Get3DEnabled() = 0;
 	virtual void Restart() = 0;
 	// HolyLib specific
-	// Uses the "DATA" path for writes! Returns NULL on success, else the error message
+	// Uses the "DATA" path for writes! Returns nullptr on success, else the error message
 	// Does NOT require the channel to be a decoder channel!
 	// Call IGModAudioChannelEncoder->GetLastError and check if its even valid! (Else it will be invalidated/freed on the next tick)
 	virtual IGModAudioChannelEncoder* CreateEncoder( const char* pFileName, unsigned long nFlags, IGModEncoderCallback* pCallback, const char** pErrorOut ) = 0;
 	virtual void Update( unsigned long length ) = 0; // Updates the playback buffer
 	virtual bool CreateLink( IGModAudioChannel* pChannel, const char** pErrorOut ) = 0;
 	virtual bool DestroyLink( IGModAudioChannel* pChannel, const char** pErrorOut ) = 0;
+	virtual void SetAttribute( unsigned long nAttribute, float nValue, const char** pErrorOut ) = 0;
+	virtual void SetSlideAttribute( unsigned long nAttribute, float nValue, unsigned long nTime, const char** pErrorOut ) = 0;
+	virtual float GetAttribute( unsigned long nAttribute, const char** pErrorOut ) = 0;
+	virtual bool IsAttributeSliding( unsigned long nAttribute ) = 0;
+	virtual unsigned long GetChannelData( void* pBuffer, unsigned long nLength ) = 0;
+	virtual int GetChannelCount(const char** pErrorOut) = 0;
 
 	// FX Stuff, formerly I wanted to expose the IGModAudioFX
 	// though I did not like the idea of having to manage yet another independent but linked object
@@ -152,11 +168,17 @@ public:
 	virtual bool FXReset( const char* pFXName ) = 0;
 	virtual bool FXFree( const char* pFXName ) = 0;
 
+	// Push functions
+	virtual bool IsPush() = 0;
+	virtual void WriteData(const void* pData, unsigned long nLength, const char** pErrorOut) = 0;
+
 	// Mixer functions
 	virtual bool IsMixer() = 0;
 	virtual void AddMixerChannel( IGModAudioChannel* pChannel, unsigned long nFlags, const char** pErrorOut ) = 0;
 	virtual void RemoveMixerChannel() = 0;
 	virtual int GetMixerState() = 0;
+	virtual const char* SetMatrix(float* pValues, float fTime) = 0;
+	virtual int GetMixerChannelCount(const char** pErrorOut) = 0;
 
 	// Splitter functions
 	virtual bool IsSplitter() = 0;
@@ -191,7 +213,7 @@ public:
 	virtual ~IGMod_Audio() {};
 	virtual bool Init( CreateInterfaceFn ) = 0;
 	virtual void Shutdown() = 0;
-	virtual void Update( unsigned int ) = 0;
+	virtual bool Update( unsigned int ) = 0;
 	virtual IBassAudioStream* CreateAudioStream( IAudioStreamEvent* ) = 0;
 	virtual void SetEar( Vector*, Vector*, Vector*, Vector* ) = 0;
 	virtual IGModAudioChannel* PlayURL( const char* url, const char* flags, int* ) = 0;
@@ -204,6 +226,7 @@ public:
 	virtual bool LoadPlugin(const char* pluginName, const char** pErrorOut) = 0;
 	virtual void FinishAllAsync(void* nSignalData) = 0; // Called on Lua shutdown to finish all callbacks/async tasks for that interface
 	virtual IGModAudioChannel* CreateDummyChannel(int nSampleRate, int nChannels, unsigned long nFlags, const char** pErrorOut) = 0;
+	virtual IGModAudioChannel* CreatePushChannel(int nSampleRate, int nChannels, unsigned long nFlags, const char** pErrorOut) = 0;
 	virtual IGModAudioChannel* CreateMixerChannel(int nSampleRate, int nChannels, unsigned long nFlags, const char** pErrorOut) = 0;
 	virtual IGModAudioChannel* CreateSplitChannel(IGModAudioChannel* pChannel, unsigned long nFlags, const char** pErrorOut) = 0;
 };

@@ -16,12 +16,13 @@ namespace Bootil
 }
 
 #define LUA_MAX_TEMP_OBJECTS 32
+#define LUA_MAX_RETURN_OBJECTS 4
 
 class CLuaInterface;
 struct lua_State;
 namespace GarrysMod::Lua
 {
-	typedef int ( *CFunc )( lua_State* L );
+	using CFunc = int (*)( lua_State* L );
 
 	// For use with ILuaBase::PushSpecial
 	enum

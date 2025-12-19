@@ -4,6 +4,9 @@
 #include "Bootil/Bootil.h"
 #include <lz4/lz4_compression.h>
 
+#undef isdigit // Fix for 64x
+#include <charconv>
+
 #include "bootil/src/3rdParty/rapidjson/rapidjson.h"
 #include "bootil/src/3rdParty/rapidjson/document.h"
 #include "bootil/src/3rdParty/rapidjson/stringbuffer.h"
@@ -16,21 +19,21 @@
 class CUtilModule : public IModule
 {
 public:
-	virtual void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) OVERRIDE;
-	virtual void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) OVERRIDE;
-	virtual void LuaThink(GarrysMod::Lua::ILuaInterface* pLua) OVERRIDE;
-	virtual void Shutdown() OVERRIDE;
-	virtual const char* Name() { return "util"; };
-	virtual int Compatibility() { return LINUX32 | LINUX64 | WINDOWS32 | WINDOWS64; };
-	virtual bool SupportsMultipleLuaStates() { return true; };
+	void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) override;
+	void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) override;
+	void LuaThink(GarrysMod::Lua::ILuaInterface* pLua) override;
+	void Shutdown() override;
+	const char* Name() override { return "util"; };
+	int Compatibility() override { return LINUX32 | LINUX64 | WINDOWS32 | WINDOWS64; };
+	bool SupportsMultipleLuaStates() override { return true; };
 };
 
 static CUtilModule g_pUtilModule;
 IModule* pUtilModule = &g_pUtilModule;
 
-static IThreadPool* pJsonPool = NULL;
-static IThreadPool* pCompressPool = NULL;
-static IThreadPool* pDecompressPool = NULL;
+static IThreadPool* pJsonPool = nullptr;
+static IThreadPool* pCompressPool = nullptr;
+static IThreadPool* pDecompressPool = nullptr;
 static void OnCompressThreadsChange(IConVar* convar, const char* pOldValue, float flOldValue)
 {
 	if (!pCompressPool)
@@ -68,17 +71,17 @@ static ConVar jsonthreads("holylib_util_jsonthreads", "1", FCVAR_ARCHIVE, "The n
 class IJobEntry
 {
 public:
-	virtual ~IJobEntry() = default;
+	~IJobEntry() = default;
 	virtual bool OnThink(GarrysMod::Lua::ILuaInterface* pLua) = 0;
 
 	bool m_bCancel = false;
-	GarrysMod::Lua::ILuaInterface* m_pLua = NULL;
+	GarrysMod::Lua::ILuaInterface* m_pLua = nullptr;
 };
 
 class CompressEntry : public IJobEntry
 {
 public:
-	virtual ~CompressEntry()
+	~CompressEntry()
 	{
 		//if (GetCurrentThreadId() != owningThread)
 		//{
@@ -93,7 +96,7 @@ public:
 			Util::ReferenceFree(m_pLua, iCallback, "CompressEntry::~CompressEntry - Callback");
 	}
 
-	virtual bool OnThink(GarrysMod::Lua::ILuaInterface* pLua)
+	bool OnThink(GarrysMod::Lua::ILuaInterface* pLua) override
 	{
 		if (iStatus == 0)
 			return false;
@@ -119,7 +122,7 @@ public:
 	bool bCompress = true;
 	char iStatus = 0; // -1 = Failed | 0 = Running | 1 = Done
 
-	const char* pData = NULL;
+	const char* pData = nullptr;
 	int iDataReference = -1; // Keeping a reference to stop GC from potentially nuking it.
 
 	int iLength = 0;
@@ -244,9 +247,10 @@ inline bool IsInt(double pNumber)
 	return static_cast<int>(pNumber) == pNumber && INT32_MAX >= pNumber && pNumber >= INT32_MIN;
 }
 
-inline bool IsInt(float pNumber)
+inline bool StrToIntFast(const char* pStr, size_t iLen, long long& lOut)
 {
-	return static_cast<int>(pNumber) == pNumber && INT32_MAX >= pNumber && pNumber >= INT32_MIN;
+	auto [pEnd, ec] = std::from_chars(pStr, pStr + iLen, lOut);
+	return ec == std::errc() && pEnd == pStr + iLen;
 }
 
 extern void TableToJSONRecursive(GarrysMod::Lua::ILuaInterface* pLua, LuaUtilModuleData* pData, rapidjson::Value& outValue, rapidjson::Document::AllocatorType& allocator);
@@ -302,7 +306,7 @@ void TableToJSONRecursive(GarrysMod::Lua::ILuaInterface* pLua, LuaUtilModuleData
 			++idx;
 		}
 
-		const char* key = NULL; // In JSON a key is ALWAYS a string
+		const char* key = nullptr; // In JSON a key is ALWAYS a string
 		if (!isSequential)
 		{
 			switch (iKeyType)
@@ -342,7 +346,7 @@ void TableToJSONRecursive(GarrysMod::Lua::ILuaInterface* pLua, LuaUtilModuleData
 					double pNumber = pLua->GetNumber(-1);
 					if (isfinite(pNumber)) { // Needed for math.huge
 						if (IsInt(pNumber))
-							value.SetInt(pNumber);
+							value.SetInt((int)pNumber);
 						else
 							value.SetDouble(pNumber);
 					} else {
@@ -448,32 +452,34 @@ LUA_FUNCTION_STATIC(util_TableToJSON)
 }
 
 // When called, we expect the top of the stack to be the main table that we will be writing into
-// noSet = If true, we expect only the value to get pushed or nil, and the key will be ignored.
-extern void JSONToTableRecursive(GarrysMod::Lua::ILuaInterface* pLua, const rapidjson::Value& jsonValue, bool noSet = false);
-void PushJSONValue(GarrysMod::Lua::ILuaInterface* pLua, const rapidjson::Value& jsonValue)
+// nOutsideSet = If true, only one value is expected to be pushed which will be set/inserted into the caller
+// nIgnoreConversions = If true, don't convert numeric string keys to numbers
+extern void JSONToTableRecursive(GarrysMod::Lua::ILuaInterface* pLua, const rapidjson::Value& jsonValue, bool nOutsideSet = false, bool nIgnoreConversions = false);
+void PushJSONValue(GarrysMod::Lua::ILuaInterface* pLua, const rapidjson::Value& jsonValue, bool nIgnoreConversions = false)
 {
-	if (jsonValue.IsObject()) {
-		pLua->CreateTable();
-		JSONToTableRecursive(pLua, jsonValue, false);
-	} else if (jsonValue.IsArray()) {
-		pLua->PreCreateTable(jsonValue.Size(), 0);
-		int idx = 1;
-		for (rapidjson::SizeType i = 0; i < jsonValue.Size(); ++i) {
-			JSONToTableRecursive(pLua, jsonValue[i], true);
-			Util::RawSetI(pLua, -2, idx++);
-		}
+	if (jsonValue.IsObject() || jsonValue.IsArray()) {
+		JSONToTableRecursive(pLua, jsonValue, false, nIgnoreConversions);
 	} else if (jsonValue.IsString()) {
 		const char* valueStr = jsonValue.GetString();
-		if (jsonValue.GetStringLength() > 2 && valueStr[0] == '[' && valueStr[jsonValue.GetStringLength() - 1] == ']') {
+		size_t iStrLength = jsonValue.GetStringLength();
+		if (iStrLength > 2 && valueStr[0] == '[' && valueStr[iStrLength - 1] == ']') {
 			Vector vec;
-			sscanf(valueStr + 1, "%f %f %f", &vec.x, &vec.y, &vec.z);
-			pLua->PushVector(vec);
-		} else if (jsonValue.GetStringLength() > 2 && valueStr[0] == '{' && valueStr[jsonValue.GetStringLength() - 1] == '}') {
+			int nParsed = sscanf(valueStr + 1, "%f %f %f", &vec.x, &vec.y, &vec.z);
+			if (nParsed == 3) {
+				pLua->PushVector(vec);
+			} else {
+				pLua->PushString(valueStr, iStrLength);
+			}
+		} else if (iStrLength > 2 && valueStr[0] == '{' && valueStr[iStrLength - 1] == '}') {
 			QAngle ang;
-			sscanf(valueStr + 1, "%f %f %f", &ang.x, &ang.y, &ang.z);
-			pLua->PushAngle(ang);
+			int nParsed = sscanf(valueStr + 1, "%f %f %f", &ang.x, &ang.y, &ang.z);
+			if (nParsed == 3) {
+				pLua->PushAngle(ang);
+			} else {
+				pLua->PushString(valueStr, iStrLength);
+			}
 		} else {
-			pLua->PushString(valueStr);
+			pLua->PushString(valueStr, iStrLength);
 		}
 	} else if (jsonValue.IsNumber()) {
 		pLua->PushNumber(jsonValue.GetDouble());
@@ -484,47 +490,46 @@ void PushJSONValue(GarrysMod::Lua::ILuaInterface* pLua, const rapidjson::Value& 
 	}
 }
 
-void JSONToTableRecursive(GarrysMod::Lua::ILuaInterface* pLua, const rapidjson::Value& jsonValue, bool noSet)
+void JSONToTableRecursive(GarrysMod::Lua::ILuaInterface* pLua, const rapidjson::Value& jsonValue, bool nOutsideSet, bool nIgnoreConversions)
 {
 	if (jsonValue.IsObject()) {
-		if (!noSet)
-			pLua->PreCreateTable(0, jsonValue.MemberCount());
-
+		pLua->PreCreateTable(0, jsonValue.MemberCount());
 		for (rapidjson::Value::ConstMemberIterator itr = jsonValue.MemberBegin(); itr != jsonValue.MemberEnd(); ++itr) {
-			const rapidjson::Value& value = itr->value;
-
-			if (!noSet)
-			{
-				if (itr->name.IsString()) {
-					pLua->PushString(itr->name.GetString());
-				} else if (itr->name.IsNumber()) {
-					pLua->PushNumber(itr->name.GetDouble());
-				} else if (itr->name.IsBool()) {
-					pLua->PushBool(itr->name.GetBool());
+			const char* pKeyStr = itr->name.GetString();
+			size_t iKeyLen = itr->name.GetStringLength();
+			
+			if (nIgnoreConversions) {
+				pLua->PushString(pKeyStr, iKeyLen);
+			} else {
+				long long lNum;
+				if (StrToIntFast(pKeyStr, iKeyLen, lNum)) {
+					pLua->PushNumber((double)lNum);
+				} else {
+					pLua->PushString(pKeyStr, iKeyLen);
 				}
 			}
 
-			PushJSONValue(pLua, itr->value);
+			PushJSONValue(pLua, itr->value, nIgnoreConversions);
 
-			if (!noSet)
-				pLua->SetTable(-3);
+			pLua->SetTable(-3);
 		}
 	} else if (jsonValue.IsArray()) {
 		int idx = 0;
 		pLua->PreCreateTable(jsonValue.Size(), 0);
 		for (rapidjson::SizeType i = 0; i < jsonValue.Size(); ++i)
 		{
-			JSONToTableRecursive(pLua, jsonValue[i], true);
+			JSONToTableRecursive(pLua, jsonValue[i], true, nIgnoreConversions);
 			Util::RawSetI(pLua, -2, ++idx);
 		}
-	} else if (noSet) {
-		PushJSONValue(pLua, jsonValue);
+	} else if (nOutsideSet) { // We got called by above jsonValue.IsArray(), so we expect ONLY ONE value to be pushed.
+		PushJSONValue(pLua, jsonValue, nIgnoreConversions);
 	}
 }
 
 LUA_FUNCTION_STATIC(util_JSONToTable)
 {
 	const char* jsonString = LUA->CheckString(1);
+	bool nIgnoreConversions = LUA->GetBool(2);
 
 	rapidjson::Document doc;
 	doc.Parse(jsonString);
@@ -532,9 +537,9 @@ LUA_FUNCTION_STATIC(util_JSONToTable)
 	if (doc.HasParseError()) {
 		LUA->ThrowError("Invalid JSON string");
 		return 0;
-    }
+	}
 
-	JSONToTableRecursive(LUA, doc);
+	JSONToTableRecursive(LUA, doc, false, nIgnoreConversions);
 	return 1;
 }
 
@@ -544,7 +549,7 @@ LUA_FUNCTION_STATIC(util_CompressLZ4)
 	const char* pData = Util::CheckLString(LUA, 1, &iLength);
 	int accelerationLevel = (int)LUA->CheckNumberOpt(2, 1);
 
-	void* pDest = NULL;
+	void* pDest = nullptr;
 	unsigned int pDestLen = 0;
 	bool bSuccess = COM_Compress_LZ4(pData, iLength, &pDest, &pDestLen, accelerationLevel);
 	if (!bSuccess)
@@ -564,7 +569,7 @@ LUA_FUNCTION_STATIC(util_DecompressLZ4)
 	size_t iLength;
 	const char* pData = Util::CheckLString(LUA, 1, &iLength);
 
-	void* pDest = NULL;
+	void* pDest = nullptr;
 	unsigned int pDestLen = 0;
 	bool bSuccess = COM_Decompress_LZ4(pData, iLength, &pDest, &pDestLen);
 	if (!bSuccess)
@@ -582,7 +587,7 @@ LUA_FUNCTION_STATIC(util_DecompressLZ4)
 class JsonEntry : public IJobEntry
 {
 public:
-	virtual ~JsonEntry()
+	~JsonEntry()
 	{
 		if (m_pLua && m_iReference != -1)
 		{
@@ -603,7 +608,7 @@ public:
 		}
 	}
 
-	virtual bool OnThink(GarrysMod::Lua::ILuaInterface* pLua)
+	bool OnThink(GarrysMod::Lua::ILuaInterface* pLua) override
 	{
 		if (!m_bIsDone)
 			return false;
@@ -621,7 +626,7 @@ public:
 	}
 
 	int m_iReference = -1;
-	TValue* m_pObject = NULL;
+	TValue* m_pObject = nullptr;
 	bool m_bPretty = false;
 
 	bool m_bIsDone = false;
@@ -829,11 +834,19 @@ void CUtilModule::Shutdown()
 {
 	if (pCompressPool)
 	{
-		V_DestroyThreadPool(pCompressPool);
-		V_DestroyThreadPool(pDecompressPool);
-		V_DestroyThreadPool(pJsonPool);
-		pCompressPool = NULL;
-		pDecompressPool = NULL;
-		pJsonPool = NULL;
+		Util::DestroyThreadPool(pCompressPool);
+		pCompressPool = nullptr;
+	}
+
+	if (pDecompressPool)
+	{
+		Util::DestroyThreadPool(pDecompressPool);
+		pDecompressPool = nullptr;
+	}
+
+	if (pJsonPool)
+	{
+		Util::DestroyThreadPool(pJsonPool);
+		pJsonPool = nullptr;
 	}
 }

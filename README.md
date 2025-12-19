@@ -4,10 +4,13 @@ A library that contains some functions and optimizations for gmod.<br>
 If you need any function, make an issue for it, and I'll look into it.<br>
 When HolyLib was installed correctly, the variable `_HOLYLIB` should be set to `true` in Lua. (NOTE: This was **added** in the upcoming `0.8` release)<br>
 
-## Windows
-So currently to get it working on Windows, I would have to redo most of the hooks, and It would also take a good while.<br>
-Because of this, I'm not going to make it currently. I'm gonna slowly start adding all symbols and then someday I'm going to redo most hooks.<br>
-There will be a release but it will only contain some parts since many things don't work yet.<br>
+## Windows & Linux
+Linux 32 is the main targeted platform, with Linux 64x being the second target.<br>
+On Linux the focus lies on the dedicatd servers, not Linux clients.<br>
+
+On Windows things are differet, there the Windows **client** is targeted, not dedicated server builds.<br>
+Windows does not have the main attention though still is supported.<br>
+Does anyone even use windows srcds for actual servers?<br>
 
 > [!NOTE]
 > I'm not actively testing windows, so if I accidentally broke it, open a issue since I most likely didn't know about it.<br>
@@ -68,9 +71,16 @@ This is done by first deleting the current `gmsv_holylib_linux[64].so` and then 
 > [!NOTE]
 > The threadpoolfix module currently does nothing as all of the fixes it contained were implemented into the Garry's Mod itself.
 
+> [!IMPORTANT]
+> Since HolyLib provides and exposes deep engine functions, it is not guaranteed to be safe, not all functions validate given input!<br>
+> There are plans to improve safety by locking things behind the `-holylib_allowunsafe` commandline argument which was only added recently and is barelly implemented!<br>
+> If there are any functions that should be locked behind it, please let me know as I might miss them.<br>
+> On Linux unsafe code is allowed by default, on windows it is blocked as were on a client and do not want to risk anything.<br>
+> You can disable unsafe code on linux using `-holylib_denyunsafe`<br>
+
 ## Next Update
 \- [+] Any files in `lua/autorun/_holylua/` are loaded by HolyLib on startup.<br>
-\- [+] Added a new modules `luathreads`, `networkthreading`, `soundscape`<br>
+\- [+] Added a new modules `luathreads`, `networkthreading`, `soundscape`, `luagc`, `nw2`<br>
 \- [+] Added `NS_` enums to `gameserver` module.<br>
 \- [+] Added missing `CNetChan:Shutdown` function to the `gameserver` module.<br>
 \- [+] Added LZ4 compression for newly implemented net channel.<br>
@@ -94,7 +104,8 @@ This is done by first deleting the current `gmsv_holylib_linux[64].so` and then 
 \- [+] Added a fallback method for HolyLib's internal `Util::PushEntity` function in case a Gmod update breaks our offsets which previously lead to undefined behavior<br>
 \- [+] Added a `ILuaThreadedCall` to call all modules Think function when HolyLib is loaded as a binary module/loaded using `require("holylib")`<br>
 \- [+] Added a new DLL system if anything wants to be loaded with HolyLib. (See: [example-module-dll](https://github.com/RaphaelIT7/gmod-holylib/tree/f937ba454b4d86edfc72df9cb3f8a689d7de2571/example-module-dll))<br>
-\- [#] Added some more safeguards to `IPhysicsEnvironment:Simulate` to prevent one from simulating a environment that is already being simulated.<br>
+\- [#] Added missing numeric key conversion to `util.FancyJSONToTable` (See https://github.com/RaphaelIT7/gmod-holylib/pull/105)<br>
+\- [#] Added some more safeguards to `IPhysicsEnvironment:Simulate` to prevent one from simulating a environment that is already being simulated. (else you might end up with all memory freed & a certain crash)<br>
 \- [#] Highly optimized `util` module's json code to be noticably faster and use noticably less memory.<br>
 \- [#] Better support for multiple Lua states<br>
 \- \- This required most of the lua setup to be changed >:(<br>
@@ -149,6 +160,9 @@ This is done by first deleting the current `gmsv_holylib_linux[64].so` and then 
 \- [#] Fixed `util.FancyJSONToTable` not being unloaded when disabled causing a invalid function to remain in Lua that would crash on call<br>
 \- [#] Fixed `util.FancyJSONToTable` crashing when given sequential arrays (See: https://github.com/RaphaelIT7/gmod-holylib/issues/101)<br>
 \- [#] Fixed `util.FancyTableToJSON` being unable to handle `math.huge` causing the parser to stop leaving invalid json<br>
+\- [#] Implemented a workaround for 64x possibly hanging indefinetly when a threadpool is deleted<br>
+\- [#] Fixed `holylib_filesystem_splitgamepath` breaking searchpath seperation. It now only takes effects for the `GAME` path<br>
+\- [#] Fixed `INetworkStringTable:GetStringUserData` not fully pushing the userdata as a string<br>
 \- [-] Removed some unused code of former fixes that were implemented into Gmod<br>
 
 You can see all changes/commits here:<br>
@@ -162,6 +176,8 @@ https://github.com/RaphaelIT7/gmod-holylib/compare/Release0.7...main
 \- [+] Added `directData` argument to `VoiceStream:GetData`, `VoiceStream:GetIndex`, `VoiceStream:SetIndex` and `VoiceStream:SetData`<br>
 \- [+] Added overflow checks for `gameserver.BroadcastMessage`, `CNetChan:SendMessage` and `CBaseClient:SendNetMsg` when you try to use a overflowed buffer<br>
 \- [+] Added a few more arguments to `HolyLib:OnPhysicsLag` like `phys1`, `phys2`, `recalcPhys`, `callerFunction` and the arguments `ent1` & `ent2` were removed since you can call `PhysObj:GetEntity`<br>
+\- [+] Added `steamworks.GetGameServerSteamID` to the `steamworks` module.<br>
+\- [+] Added `HolyLib:OnLuaRunString` hook to the `holylib` module.<br>
 \- [#] Fixed `addonsystem.ShouldMount` & `addonsystem.SetShouldMount` `workshopID` arguments being a number when they should have been a string.<br>
 \- [#] Changed `VoiceData:GetUncompressedData` to now returns a statusCode/a number on failure instead of possibly returning a garbage string.<br>
 \- [#] Limited `HttpServer:SetName` to have a length limit of `64` characters.<br>
@@ -170,6 +186,13 @@ https://github.com/RaphaelIT7/gmod-holylib/compare/Release0.7...main
 \- [#] Fixed `bf_read:ReadBytes` and `bf_read:ReadBits` both failing to push the string properly to lua.<br>
 \- [#] Changed `voicechat.SaveVoiceStream` & `voicechat.LoadVoiceStream` to remove their 4th `sync` argument, if a callback is provided it will be async, else it'll run sync<br>
 \- [#] Renamed `HolyLib:OnPhysFrame` to `HolyLib:PrePhysFrame`<br>
+\- [#] Fixed a typo `bf_write:WriteBitVec3normal` -> `bf_write:WriteBitVec3Normal`<br>
+\- [#] Changed arguments and return value of `HolyLib:PostEntityConstructor`<br>
+\- [#] Changed `pvs.AddEntityToTransmit` to only work inside `HolyLib:PreCheckTransmit` due to safety & performance reasons<br>
+\- [#] Changed `HolyLib:[Pre/Post]CheckTransmit` hooks to be disabled by default needing to be now enabled using `pvs.Enable[Pre/Post]TransmitHook`<br>
+\- [#] Changed `HttpServer:[Get/Put/Post/OtherShit]` callback return value to be flipped, return `false` to mark a request as `NOT` handled, return `true` to mark it as handled<br>
+\- [#] Fixed `networking` module partially not working without the `pvs` module - it internally had depended on it.<br>
+\- [#] Fixed `stringtable.CreateStringTable` and `stringtable.CreateStringTableEx` both failing to catch the case in which all stringtable slots were used leading to a server error/shutdown.<br>
 \- [-] Removed `VoiceData:GetUncompressedData` decompress size argument<br>
 \- [-] Removed `CBaseClient:Transmit` third argument `fragments`.<br>
 \- [-] Removed `gameserver.CalculateCPUUsage` and `gameserver.ApproximateProcessMemoryUsage` since they never worked.<br>
@@ -291,9 +314,10 @@ All hooks that get called use `hook.Run`. Gmod calls `gamemode.Call`.<br>
 ## Debug Stuff
 There is `-holylib_startdisabled` which will cause all modules to be disabled on startup.<br>
 And with `holylib_toggledetour` you can block specific detours from being created.<br>
+You can disable holylib entirely by adding the `-holylib_disable` command line option<br>
 
 ## holylib
-This module contains the HolyLib library.<br> 
+This module contains the HolyLib library.<br>
 
 Supports: Linux32 | LINUX64<br>
 
@@ -352,7 +376,7 @@ Returns `true` on success.<br>
 > [!NOTE]
 > This function does normally **not** directly set the SignOnState.<br>
 > Instead it calls the responsible function for the given SignOnState like for `SIGNONSTATE_PRESPAWN` it will call `SpawnPlayer` on the client.<br>
-> Set the `rawSet` to `true` if you want to **directly** set the SignOnState.<br><br>
+> Set the `rawSet` to `true` if you want to **directly** set the SignOnState.	
 
 #### (Experimental - 32x safe only) HolyLib.ExitLadder(Player ply)
 Forces the player off the ladder.<br>
@@ -382,8 +406,8 @@ Internally its a direct binding to `IServerGameClients::GMOD_ReceiveClientMessag
 Example of faking a net message:<br>
 ```lua
 net.Receive("Example", function(len, ply)
-<br><br>print("Received example message: " .. tostring(ply) .. " (" .. len .. ")")
-<br><br>print("Message contained: " .. net.ReadString())
+	print("Received example message: " .. tostring(ply) .. " (" .. len .. ")")
+	print("Message contained: " .. net.ReadString())
 end)
 
 local bf = bitbuf.CreateWriteBuffer(64)
@@ -420,12 +444,25 @@ hook.Add("HolyLib:GetGModTags", "Example", function()
 end)
 ```
 
-#### HolyLib:PostEntityConstructor(Entity ent, String className)
+#### bool(default = false, makeServerOnly) HolyLib:PostEntityConstructor(String className)
 Called before `CBaseEntity::PostConstructor` is called.<br>
-This should allow you to set the `EFL_SERVER_ONLY` flag properly.<br>
+Return `true` to make the entity being created a serverside only entity.<br>
+
+This for example is useful for `light` entities as they do not need to be networked since they use the `lightstyle` stringtable easily saving 1000+ entity slots.<br>
+Example:
+```lua
+hook.Add("HolyLib:PostEntityConstructor", "Example_ServerSide_Lights", function(class)
+	if class == "light" then
+		-- Return true makes these entities serverside only since they do not need networking at all
+		-- This is because they use the lightstyle stringtable for networking / use the IVEngineServer::LightStyle binding
+		return true 
+	end
+end)
+```
 
 > [!NOTE]
-> This may currently not work.
+> This may currently not work. Thanks past me...<br>
+> This hook is now fully functional though you cannot get the Entity itself inside of it due to it not being registered anywhere yet.<br>
 
 #### HolyLib:OnPlayerGotOnLadder(Entity ladder, Entity ply)
 Called when a gets onto a ladder -> Direct bind to `CFuncLadder::PlayerGotOn`<br>
@@ -451,6 +488,12 @@ hook.Add("HolyLib:OnMapChange", "HelloThere", function(levelName, landmarkName)
     print("Using landmark: " .. landmarkName) 
 end)
 ```
+
+#### bool(executed) or string(code) HolyLib:OnLuaRunString(string code, string fileName, string gamePath)
+Called when Lua code is about to be loaded and executed.<br>
+This allows you to modify the code that will be executed, for example you can change the code and then return the new code which will be used instead.<br>
+If you return a bool, then `false` means the code failed to be executed, and `true` means the code was executed.<br>
+This is useful when you handle execution yourself - though if you want to let code silently fail just return `true` without executing code.<br>
 
 ## gameevent
 This module contains additional functions for the gameevent library.<br>
@@ -507,7 +550,7 @@ Fires the given event for only the given player.<br>
 Duplicates the given event.<br>
 
 #### gameevent.BlockCreation(string name, bool block)
-Blocks/Unblocks the creation of the given gameevent.<br> 
+Blocks/Unblocks the creation of the given gameevent.<br>
 
 ### IGameEvent
 
@@ -957,7 +1000,8 @@ bool always - If the entity should always be transmitted? (Verify)<br>
 Adds the given Entity to be transmitted.
 
 > [!NOTE]
-> Only use this function inside the `HolyLib:[Pre/Post]CheckTransmit` hook!<br>
+> Only use this function inside the `HolyLib:PreCheckTransmit` hook!<br>
+> Do **not** use it inside `HolyLib:PostCheckTransmit` since its blocked there due to else needing some expensive changes.<br>
 
 #### (REMOVED AGAIN) pvs.IsEmptyBaseline()
 Returns `true` if the baseline is empty.<br>
@@ -990,6 +1034,19 @@ Forces a full update for the specific client.<br>
 #### table pvs.GetEntitesFromTransmit()
 Returns a table containing all entities that will be networked.<br>
 
+#### pvs.ForceWeaponTransmit(Entity weapon, bool forceTransmit = false)
+Allows you to mark a weapon to be forcefully transmitted even when offhand.<br>
+The weapon will remain to be forcefully transmitted until this is called with false again or the weapon is removed!<br>
+This is only useful if you use the `networking` module with the `holylib_networking_transmit_all_weapons 0` and `holylib_networking_transmit_all_weapons_to_owner 0`<br>
+
+#### pvs.EnablePreTransmitHook(bool enable = false)
+Enables/Disables the `HolyLib:PreCheckTransmit` hook.<br>
+The internal value is reset on mapchange, so you need to set it always again on Lua startup.<br>
+
+#### pvs.EnablePostTransmitHook(bool enable = false)
+Enables/Disables the `HolyLib:PostCheckTransmit` hook.<br>
+The internal value is reset on mapchange, so you need to set it always again on Lua startup.<br>
+
 ### Enums
 
 #### pvs.FL_EDICT_DONTSEND = 1<br>
@@ -1012,8 +1069,14 @@ Return `true` to cancel it.<br>
 
 You could do the transmit stuff yourself inside this hook.<br>
 
+> [!NOTE]
+> This hook needs to be enabled first using `pvs.EnablePreTransmitHook(true)`<br>
+
 #### HolyLib:PostCheckTransmit(Entity ply)
 entity ply - The player that everything is transmitted to.<br>
+
+> [!NOTE]
+> This hook needs to be enabled first using `pvs.EnablePostTransmitHook(true)`<br>
 
 ## surffix
 This module ports over [Momentum Mod's](https://github.com/momentum-mod/game/blob/develop/mp/src/game/shared/momentum/mom_gamemovement.cpp#L2393-L2993) surf fixes.<br>
@@ -1153,7 +1216,7 @@ File: `cfg/game.cfg`<br>
 Path: `GAME`<br>
 becomes:<br>
 File: `cfg/game.cfg`<br>
-Path: `CONTENT_CONFIGS`<br><br>
+Path: `CONTENT_CONFIGS`	
 
 This will reduce the amount of searchpaths it has to go through which improves performance.<br>
 
@@ -1196,7 +1259,7 @@ If enabled, it will try to predict the path for a file.<br>
 Example:<br>
 Your loading a model.<br>
 First you load the `example.mdl` file.<br>
-Then you load the `example.phy` file.<br> 
+Then you load the `example.phy` file.<br>
 Here we can check if the `example.mdl` file is in the searchcache.<br>
 If so, we try to use the searchpath of that file for the `.phy` file and since all model files should be in the same folder, this will work for most cases.<br>
 If we fail to predict a path, it will end up using one additional search path.<br>
@@ -1222,7 +1285,16 @@ If enabled, it will cache the file handle and return it if needed.<br>
 > This is a noticeable improvement, but it seems to break .bsp files :/<br>
 
 ### (EXPERIMENTAL) holylib_filesystem_savesearchcache (default `1`)
-If enabled, the search cache will be written into a file and loaded on startup to improve startup times
+If enabled, the search cache will be written into a file and loaded on startup to improve startup times<br>
+
+### (EXPERIMENTAL) holylib_filesystem_mergesearchcache (default `1`)
+If enabled, when saving the search cache it will not remove old entries and instead keep them even if they were unused this session<br>
+
+### (EXPERIMENTAL) holylib_filesystem_skipinvalidluapaths (default `1`)
+If enabled, invalid lua paths like include/include/ will be skipped instantly<br>
+
+### (EXPERIMENTAL) holylib_filesystem_tryalternativeluapath (default `1`)
+If enabled, if it can't find a file in the search cache, it will remove the first folder and try again as when loading Lua gmod loves to test different folders first<br>
 
 #### holylib_debug_filesystem (default `0`)
 If enabled, it will print all filesyste suff.<br>
@@ -1278,7 +1350,7 @@ Works like util.Decompress but it's async.<br>
 #### string util.FancyTableToJSON(table tbl, bool pretty, bool ignorecycle)
 ignorecycle - If `true` it won't throw a lua error when you have a table that is recursive/cycle.<br>
 
-Convers the given table to json.<br>
+Converts the given table to json.<br>
 Unlike Gmod's version, this function will turn the numbers to an integer if they are one/fit one.<br>
 This version is noticably faster than Gmod's version and uses less memory in the process.<br>
 
@@ -1286,8 +1358,8 @@ This version is noticably faster than Gmod's version and uses less memory in the
 > This implementation will include `null` for values it cannot handle.<br>
 > Gmod hides `null` but we don't meaning if for example we get `{math.huge}` as input, it will return `[null]` which still is valid json.<br>
 
-#### table util.FancyJSONToTable(string json)
-Convers the json into a table.<br>
+#### table util.FancyJSONToTable(string json, bool ignoreConversions = false)
+Converts the json into a table.<br>
 This version is noticably faster than Gmod's version and uses less memory in the process.<br>
 
 #### string util.CompressLZ4(string data, number accelerationLevel = 1)
@@ -1338,7 +1410,7 @@ Supports: Linux32 | Linux64<br>
 If enabled, it completely disables the concommand/convar blacklist.<br>
 
 ## vprof
-This module adds VProf to gamemode calls, adds two convars and an entire library.
+This module adds VProf to gamemode calls, adds two convars and an entire library.<br>
 
 Supports: Linux32 | Linux64 | Windows32<br>
 
@@ -1595,12 +1667,12 @@ Theses are the CounterGroup_t enums.<br>
 If enabled, vprof results will be dumped into a file in the vprof/ folder<br>
 
 ### cvars
-This module adds one function to the `cvars` library.<br>
+This module adds a seperate `cvar` library with new functions.<br>
 
 Supports: Linux32 | Linux64 | Windows32 | Windows64<br>
 
 > [!NOTE]
-> The lua library is named `cvar` because the `cvars` library is fully declared in Lua and were running before it even exists.<br> 
+> The lua library is named `cvar` because the `cvars` library is fully declared in Lua and were running before it even exists.<br>
 
 #### Functions
 
@@ -1813,7 +1885,7 @@ Useful if you want to read the userdata of the instancebaseline stringtable.<br>
 > This is because you could cause a crash if you were to create too many stack allocated buffers!<br>
 
 > [!NOTE]
-> The size is clamped internally between a minimum of `4` bytes and a maximum of `65536` bytes.
+> The size is clamped internally between a minimum of `4` bytes and a maximum of `65536` bytes on Linux and to `8192` on Windows.
 
 #### bf_write bitbuf.CreateStackWriteBuffer(number size or string data, function callback)
 callback = `function(bf) end`<br>
@@ -1824,7 +1896,7 @@ Create a write buffer with the given size or with the given data allocated on th
 > This is because you could cause a crash if you were to create too many stack allocated buffers!<br>
 
 > [!NOTE]
-> The size is clamped internally between a minimum of `4` bytes and a maximum of `65536` bytes.
+> The size is clamped internally between a minimum of `4` bytes and a maximum of `65536` bytes on Linux and to `8192` on Windows.
 
 ### bf_read
 This class will later be used to read net messages from HLTV clients.<br>
@@ -1854,7 +1926,7 @@ You can store variables into it.<br>
 Returns the number of bits left.<br>
 
 #### number bf_read:GetNumBitsRead()
-Returns the number of bits read.
+Returns the number of bits read.<br>
 
 #### number bf_read:GetNumBits()
 Returns the size of the data in bits.<br>
@@ -1869,10 +1941,10 @@ Returns the number of bytes read.<br>
 Returns the size of the data in bytes.<br>
 
 #### number bf_read:GetCurrentBit()
-Returns the current position/bit.
+Returns the current position/bit.<br>
 
 > [!NOTE]
-> This is only available for the 32x!<br><br>
+> This is only available for the 32x!	
 
 #### bool bf_read:IsOverflowed()
 Returns `true` if the buffer is overflowed.<br>
@@ -1889,22 +1961,22 @@ Reads and Angle.<br>
 #### number bf_read:ReadBitCoord()
 
 > [!NOTE]
-> This is only available for the 32x!<br><br>
+> This is only available for the 32x!	
 
 #### number bf_read:ReadBitCoordBits()
 
 > [!NOTE]
-> This is only available for the 32x!<br><br>
+> This is only available for the 32x!	
 
 #### number bf_read:ReadBitCoordMP(bool integral = false, bool lowPrecision = false)
 
 > [!NOTE]
-> This is only available for the 32x!<br><br>
+> This is only available for the 32x!	
 
 #### number bf_read:ReadBitCoordMPBits(bool integral = false, bool lowPrecision = false)
 
 > [!NOTE]
-> This is only available for the 32x!<br><br>
+> This is only available for the 32x!	
 
 #### number bf_read:ReadBitFloat()
 
@@ -1912,7 +1984,7 @@ Reads and Angle.<br>
 Reads a number with the given number of bits.<br>
 
 > [!NOTE]
-> This is only available for the 32x!<br><br>
+> This is only available for the 32x!	
 
 #### number bf_read:ReadBitNormal()
 
@@ -1923,7 +1995,7 @@ Reads the given number of bits.<br>
 Reads a Vector.<br>
 
 #### vector bf_read:ReadBitVec3Normal()
-Reads a normalizted Vector.
+Reads a normalizted Vector.<br>
 
 #### number bf_read:ReadByte()
 Reads a byte.<br>
@@ -1978,8 +2050,8 @@ Sets the current position to the given position.<br>
 Returns `true` on success.<br>
 
 #### bool bf_read:SeekRelative(number pos)
-Sets the current position to the given position relative to the current position.
-Basicly `newPosition = currentPosition + iPos`<br><br>
+Sets the current position to the given position relative to the current position.<br>
+Basicly `newPosition = currentPosition + iPos`<br>
 Returns `true` on success.<br>
 
 ### bf_write<br>
@@ -2177,9 +2249,30 @@ This helps to reduce networking cost as networking all weapons of every player i
 Setting it to `1` causes it to network the additional weapon to **all** players<br>
 Setting it to `2` causes it to network the additional weapon **only** to the owner<br>
 
-#### networking_bind_gmodhands_to_player(default `1`)
+#### holylib_networking_bind_gmodhands_to_player(default `1`)
 If enabled, the GMOD Hands entity / the entity set with `Player:SetHands` will be bound to the player and only networked with the player himself.<br>
 Will become useless with https://github.com/Facepunch/garrysmod-requests/issues/2839<br>
+
+#### holylib_networking_bind_viewmodels_to_player(default `1`)
+If enabled, the viewmodels will be bound to the player and only networked if the player is networked.<br>
+Will become useless with https://github.com/Facepunch/garrysmod-requests/issues/2839<br>
+
+#### holylib_networking_transmit_newweapons(default `1`)
+If enabled, weapons that a player newly picked up will be networked to them.<br>
+Only functional/mean to be used with both `holylib_networking_transmit_all_weapons` and `holylib_networking_transmit_all_weapons_to_owner` being disabled<br>
+This saves lots of networking by only networking off hand weapons when they change/update and won't continously send updates about them<br>
+
+#### holylib_networking_transmit_onfullupdate(default `1`)
+If enabled, players and their own weapons are transmitted for the first x ticks when they had a full update<br>
+This means, if your client has a full update, you will be networked all other players(not their weapons only the player themselves due to performance reasons) and your own weapons.<br>
+
+#### holylib_networking_transmit_onfullupdate_networktoothers(default `1`)
+Depends on `holylib_networking_transmit_onfullupdate` being enabled.<br>
+For other players, if another player has a full update, they will be networked to everyone to ensure that every player knows of every other players existance.<br>
+
+#### holylib_networking_transmit_ticks(default `100`)
+How many ticks are used in which new weapons or full updates are networked.<br>
+This tick count is used by the `holylib_networking_transmit_newweapons`, `holylib_networking_transmit_onfullupdate` and `holylib_networking_transmit_onfullupdate_networktoothers` convars internally.<br>
 
 ## steamworks
 This module adds a few functions related to steam.<br>
@@ -2202,6 +2295,12 @@ Calls the `SV_InitGameServerSteam` function to activate the steam server exactly
 
 #### bool steamworks.ForceAuthenticate(number userID)
 Marks the given client as Authenticated even if they aren't.<br>
+
+#### string(steamID64) steamworks.GetGameServerSteamID()
+Returns the steamid of the set steam account by `sv_setsteamaccount`<br>
+
+> [!NOTE]
+> If something internally goes wrong this can throw an error.
 
 ### Hooks
 
@@ -2341,7 +2440,7 @@ It won't do any processing, it will just send it as it is.<br>
 
 #### voicechat.BroadcastVoiceData(VoiceData data, table plys = nil)
 Same as `voicechat.SendVoiceData` but broadcasts it to all players.<br>
-If given a table it will only send it to thoes players.<br>
+If given a table it will only send it to those players.<br>
 
 #### voicechat.ProcessVoiceData(Player ply, VoiceData data)
 Let's the server process the VoiceData like it was received from the client.<br>
@@ -2395,9 +2494,9 @@ If a `callback` is specified it **WONT** return **anything** and the `callback` 
 If you want it to **not** run async, simply provide **no** callback function<br>
 
 > [!NOTE]
-> It should be safe to modify/use the VoiceStream while it's saving async **BUT** you should try to avoid doing that. <br>
+> It should be safe to modify/use the VoiceStream while it's saving async **BUT** you should try to avoid doing that.<br>
 > This function also supports `.wav` files to write the data into since `0.8`.<br>
-> You should **always** inform your players if you save their voice! <br>
+> You should **always** inform your players if you save their voice!<br>
 > You can set both `fileName` and `returnWaveData` which will cause it to be written to disk and the data to be returned<br>
 > If `fileName` and `returnWaveData` are both not set then it will error as atleast one of them needs to be enabled.<br>
 
@@ -2508,6 +2607,9 @@ Sets if the VoiceData is in proximity.<br>
 
 #### VoiceData VoiceData:CreateCopy()
 Creates a exact copy of the voice data.<br>
+
+#### VoiceData:Empty()
+Empties out the voice data.<br>
 
 ### VoiceStream
 VoiceStream is a userdata value that internally contains multiple VoiceData for specific ticks.<br>
@@ -2770,7 +2872,7 @@ Enables/Disables the `HolyLib:OnPhysFrame` hook.<br>
 Returns the collision set by the given index.<br>
 
 > [!NOTE]
-> Only 32 collision sets can exist at the same time!<br> 
+> Only 32 collision sets can exist at the same time!<br>
 
 #### IPhysicsCollisionSet physenv.FindOrCreateCollisionSet(number index)
 Returns the collision set by the given index or creates it if needed.<br>
@@ -2831,7 +2933,7 @@ Returns the index of the physics model.<br>
 Sets the new mass center of the CPhysCollide.<br>
 
 #### physcollide.CollideSetOrthographicAreas(CPhysCollide collide, Vector area)
-I have no Idea....<br> 
+I have no Idea....<br>
 
 #### number physcollide.CollideSize(CPhysCollide collide)
 Returns the memory size of the CPhysCollide.<br>
@@ -2900,7 +3002,7 @@ Returns the lua table of this object.<br>
 You can store variables into it.<br>
 
 #### bool CPhysCollide:IsValid()
-Returns `true` if the CPhysCollide is still valid.<br> 
+Returns `true` if the CPhysCollide is still valid.<br>
 
 ### CPhysPolySoup
 
@@ -3184,7 +3286,7 @@ physenv.EnablePhysHook(true)
 local mainEnv = physenv.GetActiveEnvironmentByIndex(0)
 hook.Add("HolyLib:PrePhysFrame", "Example", function(deltaTime)
 	mainEnv:Simulate(deltaTime, true) -- the second argument will only cause the entities to update.
-<br><br>return true -- We stop the engine from running the simulation itself again as else it will result in issue like "Reset physics clock" being spammed
+	return true -- We stop the engine from running the simulation itself again as else it will result in issue like "Reset physics clock" being spammed
 end)
 ```
 
@@ -3211,14 +3313,22 @@ Creates a IGMODAudioChannel for the given file.<br>
 callback - function(IGMODAudioChannel channel, number errorCode, string error)<br>
 Creates a IGMODAudioChannel for the given url.<br>
 
-#### bass.Update(number time)
-Updates all bass channels processing as x(time) seconds passed.<br>
+#### bool bass.Update(number time = RealFrameTime())
+Manually updates all BASS channels as if `time` milliseconds have passed.<br>
+If no time is specified it defaults to [RealFrameTime()](https://wiki.facepunch.com/gmod/Global.RealFrameTime).<br>
+It returns true on success, false if an update is already in progress.<br>
+See https://www.un4seen.com/doc/#bass/BASS_Update.html for more details.<br>
 
 #### string bass.GetVersion()
 Returns the bass version as a string.<br>
 
 #### IGModAudioChannel(or nil), string(errMsg) bass.CreateDummyChannel(number sampleRate, number channels, number flags)
 Creates a dummy channel<br>
+See https://www.un4seen.com/doc/#bass/BASS_StreamCreate.html with `STREAMPROC_DUMMY` for more details.<br>
+
+#### IGModAudioChannel(or nil), string(errMsg) bass.CreatePushChannel(number sampleRate, number channels, number flags)
+Creates a push channel into which you can write data<br>
+See https://www.un4seen.com/doc/#bass/BASS_StreamCreate.html with `STREAMPROC_PUSH` for more details.<br>
 
 #### IGModAudioChannel(or nil), string(errMsg) bass.CreateMixerChannel(number sampleRate, number channels, number flags)
 Creates a mixer channel into which other channels can be combined into<br>
@@ -3348,7 +3458,7 @@ Restarts the channel.<br>
 Computes the DFT of the sound channel.<br>
 What even is that.<br>
 
-#### bool(success), string(errMsg - nil) IGModAudioChannel:EncodeToDisk(string fileName, number bassFlags, function callback, bool async = false)
+#### bool(success), string(errMsg - nil) IGModAudioChannel:WriteToDisk(string fileName, number bassFlags, function callback, bool async = false)
 callback - `function(success, errMsg) end`<br>
 bassFlags - bitflags, see https://www.un4seen.com/doc/#bassenc/BASS_Encode_Start.html<br>
 
@@ -3379,7 +3489,7 @@ bass.PlayFile("data/exampleSong.wav", "decode", function(channel, a, b)
 end)
 ```
 
-#### IGModAudioChannel, string(errMsg - nil) IGModAudioChannel:CreateEncoder(string fileName, number bassFlags)
+#### IGModAudioChannel, string(errMsg - nil) IGModAudioChannel:CreateEncoder(string fileName, number bassFlags = 0)
 callback - `function(success, errMsg) end`<br>
 bassFlags - bitflags, see https://www.un4seen.com/doc/#bassenc/BASS_Encode_Start.html<br>
 fileName - The filename to use to write, or just the encoder.<br>
@@ -3412,6 +3522,32 @@ See https://www.un4seen.com/doc/#bass/BASS_ChannelSetLink.html (argument order i
 Unlinks the other channel from this channel.<br>
 See https://www.un4seen.com/doc/#bass/BASS_ChannelRemoveLink.html (argument order is `this, otherChannel`)<br>
 
+#### bool(success), string(errMsg - nil) IGModAudioChannel:SetAttribute(number attribute, number value)
+Sets a channel attribute to the given value.<br>
+See https://www.un4seen.com/doc/#bass/BASS_ChannelSetAttribute.html (all `BASS_ATTRIB_` enums are exposed inside the `bass.` table)<br>
+
+#### bool(success), string(errMsg - nil) IGModAudioChannel:SetSlideAttribute(number attribute, number value, number time)
+Sets a channel attribute to the given value over a specific time.<br>
+See https://www.un4seen.com/doc/#bass/BASS_ChannelSlideAttribute.html (all `BASS_ATTRIB_` enums are exposed inside the `bass.` table)<br>
+
+#### number(value|nil on failure), string(errMsg - nil) IGModAudioChannel:GetAttribute(number attribute)
+Returns the channels attribute value.<br>
+See https://www.un4seen.com/doc/#bass/BASS_ChannelGetAttribute.html (all `BASS_ATTRIB_` enums are exposed inside the `bass.` table)<br>
+
+#### bool(sliding) IGModAudioChannel:IsAttributeSliding(number attribute)
+Returns `true` if the given attribute is actively sliding to a value over time.<br>
+See https://www.un4seen.com/doc/#bass/BASS_ChannelIsSliding.html (all `BASS_ATTRIB_` enums are exposed inside the `bass.` table)<br>
+
+#### string(nil on failure), number(length) IGModAudioChannel:GetChannelData(number nSize)
+Returns the given bytes of channel data - you cannot specify `BASS_DATA_` flags!<br>
+See https://www.un4seen.com/doc/#bass/BASS_ChannelGetData.html<br>
+
+> [!NOTE]
+> The nSize is limited to 64kb!
+
+#### number(channelCount|nil on failure), string(errMsg - nil) IGModAudioChannel:GetChannelCount()
+Returns the number of channels this channel has.<br>
+
 #### bool(success), string(errMsg - nil) IGModAudioChannel:SetFX(string fxName, number fxType, number priority, table fxParams)
 fxName - A unique name used for FX so that you can have multiple of the same fx type with unique names you assigned<br>
 
@@ -3426,10 +3562,28 @@ See https://www.un4seen.com/doc/#bass/BASS_FXReset.html<br>
 Removes the given FX from the channel<br>
 See https://www.un4seen.com/doc/#bass/BASS_FXReset.html<br>
 
+#### bool(success), string(errMsg - nil) IGModAudioChannel:InsertVoiceData( VoiceData data )
+Feeds the given voicedata into the channel.<br>
+
+> [!NOTE]
+> This function will throw an error if you call it on a non-push channel.
+
+#### bool(success), string(errMsg - nil) IGModAudioChannel:FeedEmpty( number ms, number samplerate, number channels )
+Feeds null data into the channel for the given ms frame using the given samplerate and channels.<br>
+
+> [!NOTE]
+> This function will throw an error if you call it on a non-push channel.
+
+#### bool(success), string(errMsg - nil) IGModAudioChannel:FeedData( string data )
+Feeds the given PCM data into the channel.<br>
+
+> [!NOTE]
+> This function will throw an error if you call it on a non-push channel.
+
 #### bool IGModAudioChannel:IsMixer()
 Returns `true` if the channel was created using `bass.CreateMixerChannel`<br>
 
-#### bool IGModAudioChannel:AddMixerChannel( IGModAudioChannel otherChannel )
+#### bool IGModAudioChannel:AddMixerChannel( IGModAudioChannel otherChannel, number flags = 0 )
 Adds the given channel into our mixer.<br>
 Binds internally to https://www.un4seen.com/doc/#bassmix/BASS_Mixer_StreamAddChannel.html<br>
 
@@ -3443,6 +3597,13 @@ Binds internally to https://www.un4seen.com/doc/#bassmix/BASS_Mixer_ChannelRemov
 #### number(BASS_ACTIVE_* enum) IGModAudioChannel:GetMixerState()
 Returns how a mixer would see the channels current state which could differ when buffering<br>
 See https://www.un4seen.com/doc/#bassmix/BASS_Mixer_ChannelIsActive.html for more details<br>
+
+#### bool(success), string(errMsg - nil) IGModAudioChannel:SetMixerMatrix(table matrix, float time = 0)
+Sets the channel's mixer matrix.
+See https://www.un4seen.com/doc/#bassmix/BASS_Mixer_ChannelIsActive.html for more details<br>
+
+#### number(channelCount|nil on failure), string(errMsg - nil) IGModAudioChannel:GetMixerChannelCount()
+Returns the number of channels the mixer channel that this channel is attached to has.<br>
 
 #### bool IGModAudioChannel:IsSplitter()
 Returns `true` if the channel was created using `bass.CreateSplitChannel`<br>
@@ -3478,7 +3639,7 @@ Destorys the encoder.<br>
 #### bool IGModAudioChannelEncoder:IsValid()
 Returns `true` if the encoder is valid.<br>
 
-#### bool(success), string(errMsg) IGModAudioChannelEncoder:MakeServer(string port, nummber buffer, number burst, number flags)
+#### bool(success), string(errMsg - nil) IGModAudioChannelEncoder:ServerInit(string port, nummber buffer, number burst, number flags)
 Creates a BassEnc server where the encoder will sends its data to to send to clients who are connected to the port using `sound.PlayURL`<br>
 See: https://www.un4seen.com/doc/#bassenc/BASS_Encode_ServerInit.html<br>
 
@@ -3490,7 +3651,7 @@ bass.PlayFile("data/exampleSound.wav", "", function(channel, a, b)
     local encode, errMsg = channel:CreateEncoder("ogg", 0)
 	g_Encoder = encode -- prevent gc here too else it will stop when gc hits
 	-- 20006 is the port to use (you cannot use the server port, you need a seperate one)
-    print(encode:MakeServer("20006/examplePath", 256000 * 8, 256000, 0))
+    print(encode:ServerInit("20006/examplePath", 256000 * 8, 256000, 0))
 end)
 
 --- Client code
@@ -3517,9 +3678,38 @@ Bind to https://www.un4seen.com/doc/#bassenc/BASS_Encode_SetPaused.html<br>
 Returns the state of the encoder<br>
 Binds to https://www.un4seen.com/doc/#bassenc/BASS_Encode_IsActive.html<br>
 
-#### bool(success), string(errMsg) IGModAudioChannelEncoder:SetChannel( IGModAudioChannel channel )
+#### bool(success), string(errMsg - nil) IGModAudioChannelEncoder:SetChannel( IGModAudioChannel channel )
 Moves this encoder to the given channel<br>
 Bind to https://www.un4seen.com/doc/#bassenc/BASS_Encode_SetChannel.html<br>
+
+#### bool(success) IGModAudioChannelEncoder:InsertVoiceData( VoiceData data )
+Feeds the given voicedata into the encoder skipping the channels effects & such.<br>
+
+#### bool(success) IGModAudioChannelEncoder:FeedEmpty( number ms, number samplerate, number channels )
+Feeds null data into the encoder for the given ms frame using the given samplerate and channels.<br>
+
+#### bool(success) IGModAudioChannelEncoder:FeedData( string data )
+Feeds the given PCM data into the encoder skipping the channels effects & such.<br>
+
+#### bool(success), string(errMsg - nil) IGModAudioChannelEncoder:CastInit( ... )
+Arguments:<br>
+1 - string server<br>
+2 - string password<br>
+3 - string content<br>
+4 - string name = nil<br>
+5 - string url = nil<br>
+6 - string genre = nil<br>
+7 - string desc = nil<br>
+8 - string headers = nil<br>
+9 - number bitrate = 0<br>
+10 - number flags = 0<br>
+
+Initializes sending an encoder's output to a Shoutcast or Icecast server - Official docs<br>
+See https://www.un4seen.com/doc/#bassenc/BASS_Encode_CastInit.html<br>
+
+#### IGModAudioChannelEncoder:CastSetTitle( string title = nil, string url = nil )
+Sets the cast title & url<br>
+See https://www.un4seen.com/doc/#bassenc/BASS_Encode_CastSetTitle.html<br>
 
 ## entitiylist
 This module just adds a lua class.<br>
@@ -3722,12 +3912,16 @@ end, true)
 
 If you enable the IP Whitelist, only requests sent by connected players are processed.<br>
 
-#### HttpServer:Get(string path, function (HttpRequest, HttpResponse), bool ipWhitelist)
-#### HttpServer:Put(string path, function (HttpRequest, HttpResponse), bool ipWhitelist)
-#### HttpServer:Post(string path, function (HttpRequest, HttpResponse), bool ipWhitelist)
-#### HttpServer:Patch(string path, function (HttpRequest, HttpResponse), bool ipWhitelist)
-#### HttpServer:Delete(string path, function (HttpRequest, HttpResponse), bool ipWhitelist)
-#### HttpServer:Options(string path, function (HttpRequest, HttpResponse), bool ipWhitelist)
+> [!NOTE]
+> If you return `false` you mark a request as **not** handled.<br>
+> This means that the delay will **not** be responded to until you call `HttpRequest:MarkHandled`<br>
+
+#### bool(handled) HttpServer:Get(string path, function (HttpRequest, HttpResponse), bool ipWhitelist)
+#### bool(handled) HttpServer:Put(string path, function (HttpRequest, HttpResponse), bool ipWhitelist)
+#### bool(handled) HttpServer:Post(string path, function (HttpRequest, HttpResponse), bool ipWhitelist)
+#### bool(handled) HttpServer:Patch(string path, function (HttpRequest, HttpResponse), bool ipWhitelist)
+#### bool(handled) HttpServer:Delete(string path, function (HttpRequest, HttpResponse), bool ipWhitelist)
+#### bool(handled) HttpServer:Options(string path, function (HttpRequest, HttpResponse), bool ipWhitelist)
 
 ### HttpRequest
 A incoming Http Request.
@@ -4047,7 +4241,7 @@ function BuildNetChannel(target, status) -- status should not be set when called
 
 	bf:WriteLong(-1) -- CONNECTIONLESS_HEADER
 	bf:WriteByte(REQUEST_CHANNEL) -- Our header
-<br><br>bf:WriteByte(status or 0) -- 0 = We requested it.
+	bf:WriteByte(status or 0) -- 0 = We requested it.
 
 	gameserver.SendConnectionlessPacket(bf, target)
 end
@@ -4064,19 +4258,19 @@ hook.Add("HolyLib:ProcessConnectionlessPacket", "ProcessResponse", function(bf, 
 	local status = bf:ReadByte()
 
 	local netChannel = gameserver.CreateNetChannel(ip)
-<br><br>netChannel:SetMessageCallback(function(bf, length)
-<br><br>	IncomingNetMessage(netChannel, bf, length)
-<br><br>end)
-<br><br>table.insert(netChannels, netChannel)
+	netChannel:SetMessageCallback(function(bf, length)
+		IncomingNetMessage(netChannel, bf, length)
+	end)
+	table.insert(netChannels, netChannel)
 
-<br><br>if status == 0 then
-<br><br>	print("Created a requested net channel to " .. ip)
+	if status == 0 then
+		print("Created a requested net channel to " .. ip)
 
-<br><br>	BuildNetChannel(ip, 1) -- Respond to the sender to confirm creation.
-<br><br>elseif status == 1 then
-<br><br>	print("Created our net channel to " .. ip)
-<br><br>end
-<br><br>
+		BuildNetChannel(ip, 1) -- Respond to the sender to confirm creation.
+	elseif status == 1 then
+		print("Created our net channel to " .. ip)
+	end
+	
 	return true
 end)
 
@@ -4347,17 +4541,17 @@ Returns `true` on success.<br>
 Exampe usage of this function:<br>
 ```lua
 concommand.Add("nukechannel", function(ply)
-<br> 	local string = ""
-<br><br>for k = 1, 65532 do
-<br><br><br><br>string = string .. "a"
-<br><br>end
-<br><br>util.AddNetworkString("Example")
-<br><br>for k = 1, 10 do
-<br><br><br><br>net.Start("Example", false)
-<br><br><br><br><br><br>net.WriteString(string)
-<br><br><br><br>net.Broadcast()
-<br><br><br><br>gameserver.GetClient(ply:EntIndex()-1):Transmit() -- Forces the message to be transmitted directly avoiding a overflow.
-<br><br>end 
+	local string = ""
+	for k = 1, 65532 do
+		string = string .. "a"
+	end
+	util.AddNetworkString("Example")
+	for k = 1, 10 do
+		net.Start("Example", false)
+			net.WriteString(string)
+		net.Broadcast()
+		gameserver.GetClient(ply:EntIndex()-1):Transmit() -- Forces the message to be transmitted directly avoiding a overflow.
+	end 
 end)
 ```
 
@@ -4399,8 +4593,8 @@ Example usage of this function.<br>
 ```lua
 concommand.Add("biggerBuffer", function(ply)
 	local client = gameserver.GetClient(ply:EntIndex()-1)
-<br><br>client:Transmit() -- Send everything out or else we lose data
-<br><br>client:SetMaxBufferSize(true, 524288) -- We resize the reliable stream
+	client:Transmit() -- Send everything out or else we lose data
+	client:SetMaxBufferSize(true, 524288) -- We resize the reliable stream
 end)
 ```
 
@@ -4697,26 +4891,26 @@ GetServerInfo("xxx.xxx.xxx.xxx:27015")
 
 Output:
 ```txt
-["Bots"]<br><br><br><br>=<br><br><br> 0
-["Environment"] =<br><br><br> l
-["ExtraDataFlag"]<br><br><br> =<br><br><br> 177
-["Folder"]<br><br><br>=<br><br><br> garrysmod
-["Game"]<br><br><br><br>=<br><br><br> Sandbox
-["GameID"]<br><br><br>=<br><br><br> 4000
-["Header"]<br><br><br>=<br><br><br> I
-["ID"]<br>=<br><br><br> 4000
-["Map"] =<br><br><br> gm_flatgrass
-["MaxPlayers"]<br>=<br><br><br> 128
-["Name"]<br><br><br><br>=<br><br><br> RaphaelIT7's Testing Hell
-["Players"]<br><br> =<br><br><br> 0
-["Port"]<br><br><br><br>=<br><br><br> 32108
-["Protocol"]<br><br>=<br><br><br> 17
-["ServerType"]<br>=<br><br><br> 100
-["SteamID"]<br><br> =<br><br><br> [steamid]
-["Tags"]<br><br><br><br>=<br><br><br><br>gm:sandbox gmc:other ver:250321
-["VAC"] =<br><br><br> 1
-["Version"]<br><br> =<br><br><br> 2024.10.29
-["Visibility"]<br>=<br><br><br> 1
+["Bots"]		=	0
+["Environment"] =	l
+["ExtraDataFlag"]	=	77
+["Folder"]		=	garrysmod
+["Game"]		=	Sandbox
+["GameID"]		=	4000
+["Header"]		=	I
+["ID"]			=	4000
+["Map"] 		=	gm_flatgrass
+["MaxPlayers"]	=	128
+["Name"]		=	RaphaelIT7's Testing Hell
+["Players"]	 	=	0
+["Port"]		=	32108
+["Protocol"]	=	17
+["ServerType"]	=	100
+["SteamID"]		=	[steamid]
+["Tags"]		=	gm:sandbox gmc:other ver:250321
+["VAC"]			=	1
+["Version"]		=	2024.10.29
+["Visibility"]	=	1
 ```
 
 Example of retrieving the `A2S_PLAYER` from a Source Engine Server.
@@ -4773,12 +4967,12 @@ GetServerPlayerInfo("xxx.xxx.xxx.xxx:27015")
 Output:
 ```txt
 [1]:
-<br><br><br><br><br><br><br><br>["Duration"]<br><br>=<br><br><br> 40.337387084961
-<br><br><br><br><br><br><br><br>["Index"]<br><br><br> =<br><br><br> 0
-<br><br><br><br><br><br><br><br>["Name"]<br><br><br><br>=<br><br><br> Raphael
-<br><br><br><br><br><br><br><br>["Score"]<br><br><br> =<br><br><br> 0
-["Header"]<br><br><br>=<br><br><br> D
-["Players"]<br><br> =<br><br><br> 1
+	["Duration"]	=	40.337387084961
+	["Index"]		=	0
+	["Name"]		=	Raphael
+	["Score"]		=	0
+["Header"]		=	D
+["Players"]		=	1
 ```
 
 #### number HolyLib:OnClientTimeout(CBaseClient pClient)
@@ -4984,6 +5178,7 @@ Mostly only useful to influence which soundscape could be selected.<br>
 
 #### soundscape.EnableUpdateHook(bool enable = false)
 Enables/Disables the `HolyLib:OnSoundScapeUpdateForPlayer` hook.<br>
+The internal value is reset on mapchange, so you need to set it always again on Lua startup.<br>
 
 ### Hooks
 
@@ -5007,6 +5202,126 @@ If enabled, some packets will be processed by the networking thread instead of t
 > [!NOTE]
 > This can cause the `HolyLib:ProcessConnectionlessPacket` to not be called for the affected packets!
 
+## luagc
+
+### Functions
+
+#### number luagc.GetGCCount(any targetObject = nil)
+Returns the total count of GC objects.<br>
+If given a `targetObject` object, it will count up all GCobjects until it reached the `targetObject` after which it'll stop.<br>
+(the `targetObject` **won't** be included in the result!)
+
+#### table luagc.GetReferences(any object)
+Returns a table containing **all** GCObjects that have a reference stored to the given object.<br>
+
+#### table luagc.GetContainingReferences(any object, bool recursive = false, table ignoreGCObjects = nil)
+Returns all GCobjects that the given object stores.<br>
+Can be recursive to include all GCobjects referenced by all child objects.<br>
+ignoreGCObjects - A **sequential** table inside which you can provide GC objects that should be ignored like the global table/`_G`<br>
+
+#### table luagc.GetAllGCObjects(any targetObject = nil)
+Returns a table containing all GCobjects.<br>
+If given a `targetObject` object, it will return all GCobjects until it reached the `targetObject` after which it'll stop.<br>
+(the `targetObject` **won't** be included in the result!)
+
+The GClist **always** goes from newest to oldest GCobjects due to how the GCobjects are chained.<br>
+
+> [!NOTE]
+> This function itself create a table which is why doing<br>
+> `luagc.GetAllGCObjects(luagc.GetCurrentGCHeadObject())`<br>
+> Will always have 1 object - which is the returned table.<br>
+> You can do `table.remove(gcList, 1)` to remove the first entry to get rid of it.<br>
+
+Example usage:
+```lua
+collectgarbage("stop") -- to not modify gc list
+local gcHead = luagc.GetCurrentGCHeadObject()
+
+function Example() -- 1 GCfunction
+  return {}
+end
+Example() -- Returns 1 GCtable
+debug.setfenv(Example, {}) -- to avoid printing _G below - also creates 1 GCtable
+
+-- Now print all new GC objects created by our code above
+local gcList = luagc.GetAllGCObjects(gcHead)
+table.remove(gcList, 1) -- remove the gcList table from itself since it included as the first entry.
+
+for _, gcObject in ipairs(gcList) do
+	print("object: " .. tostring(gcObject) .. " (type: " .. type(gcObject) .. ")") 
+end
+```
+
+Result:
+```lua
+object: table: 0xf0b9fdea (type: table)
+object: table: 0xf09ffc3a (type: table)
+object: function: 0xf0bf9cb2 (type: function)
+```
+
+#### any luagc.GetCurrentGCHeadObject()
+Returns the current GCobject that's at the head of the list.<br>
+
+> [!NOTE]
+> The head object is **always** the newest one.
+
+#### table luagc.GetFormattedGCObjectInfo(any object)
+Returns a nicely formatted table showing which fields store which GC references for the given object.<br>
+
+> [!NOTE]
+> Fields are not consistent and can be **nil** always check if a field exists!
+
+Example:
+```lua
+function test()
+end
+debug.setfenv(test, {hai = ":3"})
+
+local formatted = luagc.GetFormattedGCObjectInfo(test)
+PrintTable(formatted)
+PrintTable(formatted.proto) -- Let's also see the proto
+```
+
+Output:
+```lua
+["environment"]:
+                ["hai"] =       :3
+["object"]      =       function: 0xf09e29f2
+["proto"]       =       proto: 0xf0898ae2
+["type"]        =       function
+["upvalues"]:
+
+["constants"]:
+["name"]        =       @lua_run
+["object"]      =       proto: 0xefabbfb2
+["type"]        =       proto
+```
+
+#### number luagc.GetSizeOfGCObject(any object, bool recursive = false, table ignoreGCObjects = nil)
+Returns the memory size of the given object.<br>
+If recursive is set, then the size of referenced objects is added to the total result.<br>
+ignoreGCObjects - A **sequential** table inside which you can provide GC objects that should be ignored like the global table/`_G`<br>
+
+## nw2
+Simple purpose - to fix NW2Vars from breaking.<br>
+This bug happens under the following scenario:<br>
+
+An new entity spawns the **first time** / no entity of it's class was created before.<br>
+Then on this new entity - a NW2Var is set with it's creation.<br>
+
+Now the issue is - when the engine packs the entity for networking, it'll store the packed data as the baseline.<br>
+This **includes** NW2Vars and this baseline is used for all entities of the same class meaning the NW2Var would be present for all of them.<br>
+This storing into the base line **only** happens once for the first time an entitiy was created - this is per entity class!<br>
+(C++ entities - Lua's all share one class meaning this bug would apply a NW2Var to all of them!)<br>
+
+Now what this module does - it prevents writing NW2Vars into the baseline ensuring they won't be applied to all entites of the same class.<br>
+
+> [!NOTE]
+> The bug still exists clientside though seems to be rarer / variables don't seem to actually change?<br>
+> There still seems to be invalid proxy calls though nothing much I can do about that.<br>
+> This definetly needs more testing though it should be an improvement.<br>
+
+
 # Unfinished Modules
 
 ## serverplugins
@@ -5023,13 +5338,19 @@ Supports: Linux32 | Linux64<br>
 > [!NOTE]
 > Windows doesn't have plugins / we won't support it there.<br>
 
+## net
+Was meant to provide extended functions like net.Seek and so on.
+
+## networkingreplacement
+Will implement the entire packed entity code and snapshot stuff with our own implementation to hopefully achieve better performance.
+
 # Issues implemented / fixed
 `gameevent.GetListeners` -> https://github.com/Facepunch/garrysmod-requests/issues/2377<br>
 `stringtable.FindTable("modelprecache"):GetNumStrings()` -> https://github.com/Facepunch/garrysmod-requests/issues/82<br>
 `threadpoolfix` -> https://github.com/Facepunch/garrysmod-issues/issues/5932<br>
 `HolyLib.Reconnect(ply)` -> https://github.com/Facepunch/garrysmod-requests/issues/2089<br>
 `pvs.AddEntityToPVS(ent)` -> https://github.com/Facepunch/garrysmod-requests/issues/245<br>
-`util.AsyncCompress(data, nil, nil, callback)` -> https://github.com/Facepunch/garrysmod-requests/issues/2165<br> 
+`util.AsyncCompress(data, nil, nil, callback)` -> https://github.com/Facepunch/garrysmod-requests/issues/2165<br>
 It now throws a warning instead of crashing -> https://github.com/Facepunch/garrysmod-issues/issues/56<br>
 `HolyLib.Reconnect(ply)` -> https://github.com/Facepunch/garrysmod-requests/issues/2089<br>
 `concommand` module -> https://github.com/Facepunch/garrysmod-requests/issues/1534<br>
@@ -5065,7 +5386,7 @@ https://github.com/Facepunch/garrysmod-requests/issues/1323<br>
 https://github.com/Facepunch/garrysmod-requests/issues/1472<br>
 (Maybe)https://github.com/Facepunch/garrysmod-requests/issues/2129<br>
 (Maybe)https://github.com/Facepunch/garrysmod-requests/issues/1962<br>
-(Maybe)https://github.com/Facepunch/garrysmod-requests/issues/1699<br><br>
+(Maybe)https://github.com/Facepunch/garrysmod-requests/issues/1699	
 
 # Some things for later
 

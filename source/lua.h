@@ -2,11 +2,14 @@
 
 #include "util.h"
 #include "bitvec.h"
-
-extern "C"
+#if !defined(DISABLE_GMODJIT)
+#include "../gmod-luajit/luajit.h"
+#else
+extern "C" // Our JIT build
 {
 	#include "../luajit/src/lj_obj.h"
 }
+#endif
 
 namespace GarrysMod::Lua
 {
@@ -27,7 +30,7 @@ namespace RawLua {
 		}
 
 		// Registers the ctype that represents HolyLib userdata.
-		void RegisterHolyLibUserData(int nTypeID)
+		void RegisterHolyLibUserData(uint16_t nTypeID)
 		{
 			nHolyLibUserDataTypeID = nTypeID;
 			pRegisteredTypes.Set(nTypeID); // Mark this too as else HolyLib's userdata would be seen as cdata and it'll shit everything
@@ -57,7 +60,7 @@ namespace RawLua {
 	private:
 		CBitVec<USHRT_MAX> pRegisteredTypes;
 		std::unordered_map<unsigned char, uint16_t> pMetaIDToCType = {};
-		uint32_t nHolyLibUserDataTypeID = 0; // cData TypeID of the HOLYLIB_UserData struct.
+		uint16_t nHolyLibUserDataTypeID = 0; // cData TypeID of the HOLYLIB_UserData struct.
 		TValue nHolyLibUserDataGC;
 		int nHolyLibUserDataGCFuncReference = -1;
 	};
@@ -76,9 +79,12 @@ namespace RawLua {
 	// Allocates either a cData if there is a registered ctype and else it allocates userdata.
 	// Returns a pointer to the userdata.
 	extern void* AllocateCDataOrUserData(GarrysMod::Lua::ILuaInterface* pLua, int nMetaID, int nSize);
+
+	extern int GetCDataSize(lua_State* L, GCcdata* pVar);
 }
 
 struct LuaUserData;
+struct ReferencedLuaUserData;
 class CLuaInterfaceProxy;
 namespace Lua
 {
@@ -153,6 +159,7 @@ namespace Lua
 		// WavAudioFile,
 		IGModAudioChannelEncoder,
 
+		_HOLYLIB_CORE_TEST_REFERENCED = UCHAR_MAX-2,
 		_HOLYLIB_CORE_TEST = UCHAR_MAX-1,
 		TOTAL_TYPES = UCHAR_MAX,
 	};
@@ -173,10 +180,10 @@ namespace Lua
 		void* pOtherData[4]; // If any other plugin wants to use this, they can.
 		// ID 0 is used by HolyLib core!!!
 		// It uses the assigned module IDs
-		Lua::ModuleData* pModuelData[Lua::Internal::pMaxEntries] = { NULL };
+		Lua::ModuleData* pModuelData[Lua::Internal::pMaxEntries] = { nullptr };
 		LuaMetaEntry pLuaTypes[LuaTypes::TOTAL_TYPES];
-		std::unordered_map<void*, LuaUserData*> pPushedUserData; // Would love to get rid of this
-		GarrysMod::Lua::ILuaInterface* pLua = NULL;
+		std::unordered_map<void*, ReferencedLuaUserData*> pPushedUserData; // Would love to get rid of this
+		GarrysMod::Lua::ILuaInterface* pLua = nullptr;
 		CLuaInterfaceProxy* pProxy;
 		GCRef nErrorFunc;
 #if LUA_CDATA_SUPPORT
@@ -187,7 +194,7 @@ namespace Lua
 		{
 			setgcrefnull(nErrorFunc);
 
-			for (int i=0; i<LuaTypes::TOTAL_TYPES; ++i)
+			for (unsigned char i=0; i<LuaTypes::TOTAL_TYPES; ++i)
 				pLuaTypes[i].iLuaType = i;
 		}
 
@@ -264,7 +271,7 @@ namespace Lua
 		inline void* GetModuleData(int moduleID)
 		{
 			if (moduleID >= Lua::Internal::pMaxEntries || moduleID < 0) // out of bounds
-				return NULL;
+				return nullptr;
 
 			return (void*)pModuelData[moduleID];
 		}
@@ -283,7 +290,7 @@ namespace Lua
 			pModuelData[moduleID] = moduleData;
 		}
 
-		inline std::unordered_map<void*, LuaUserData*>& GetPushedUserData()
+		inline std::unordered_map<void*, ReferencedLuaUserData*>& GetPushedUserData()
 		{
 			return pPushedUserData;
 		}
@@ -358,7 +365,7 @@ namespace Lua
 static inline className* Get##funcName##LuaData(GarrysMod::Lua::ILuaInterface* pLua) \
 { \
 	if (!pLua) { \
-		return NULL; \
+		return nullptr; \
 	} \
 \
 	return (className*)Lua::GetLuaData(pLua)->GetModuleData(id); \
@@ -374,7 +381,7 @@ static inline className* Get##funcName##LuaData(GarrysMod::Lua::ILuaInterface* p
 
 // Lua's GCudata struct, same on 2.1 & 2.0 so this should work everywere.
 // We use our own version of it because we can save memory by doing so, gmod could do the same yet they chose to not to??? idk.
-typedef struct GCudata_holylib { // We cannot change layout/sizes.
+struct GCudata_holylib { // We cannot change layout/sizes.
 	GCHeader; // GCHeader
 	uint8_t udtype;	/* Userdata type. */
 	uint8_t flags;	/* Unused normally - we use it to store flags */
@@ -382,15 +389,15 @@ typedef struct GCudata_holylib { // We cannot change layout/sizes.
 	MSize len;		/* Size of payload. */
 	GCRef metatable;	/* Must be at same offset in GCtab. */
 	void* data;
-} GCudata_holylib;
+};
 constexpr int GCudata_holylib_dataoffset = sizeof(GCudata_holylib) - sizeof(void*);
 
-enum udataFlags // we use bit flags so only a total of 8 are allowed.v
+enum class udataFlags // we use bit flags so only a total of 8 are allowed.v
 {
 	UDATA_EXPLICIT_DELETE = 1 << 0,
-	UDATA_NO_GC = 1 << 1, // Causes additional flags to be set onto "marked" GCHeader var
-	UDATA_NO_USERTABLE = 1 << 2,
-	UDATA_INLINED_DATA = 1 << 3,
+	UDATA_NO_USERTABLE = 1 << 1,
+	UDATA_INLINED_DATA = 1 << 2,
+	UDATA_REFERENCED = 1 << 3, // This userdata is a ReferencedLuaUserData and NOT LuaUserData
 };
 
 /*
@@ -407,6 +414,13 @@ enum udataFlags // we use bit flags so only a total of 8 are allowed.v
  *
  * NOTE: If you use PushReferenced_LuaClass you should ALWAYS call DeleteAll_[YourClass] for your userdata
  *	   as else it COULD persist across lua states which is VERY BAD as the references will ALL be INVALID.
+ * 
+ * Internal Notes:
+ * When creating userdata you do it like this:
+ * (LuaUserData*)((char*)LUA->NewUserdata(LuaUserData) - sizeof(GCudata));
+ * 
+ * Why do we only use - sizeof(GCudata) and not - sizeof(LuaUserData)?
+ * Because the pointe returned is to our data/always the end of the GCudata regardless of the size we pass.
  */
 
 // This WILL slow down userData creation & deletion so we disable this in release builds.
@@ -428,10 +442,11 @@ struct LuaUserData : GCudata_holylib { // No constructor/deconstructor since its
 	{
 		setgcrefnull(nextgc);
 		gct = 0x0;
-		marked = 0x4; // mark black. We are stack allocated, we are never white, never grey
+		marked = 0x4; // mark black. We are stack allocated, we are never white, never grey.
+		// tbh the gc doesn't even know we exist... so were fine anyways, though LuaJITs VM does care
 	}
 	
-	inline void Init(GarrysMod::Lua::ILuaInterface* LUA, const Lua::LuaMetaEntry& pMetaEntry, void* pData, bool bNoGC = false, bool bNoUserTable = false, bool bIsInline = false)
+	inline void Init(GarrysMod::Lua::ILuaInterface* LUA, const Lua::LuaMetaEntry& pMetaEntry, void* pData, bool bNoUserTable = false, bool bIsInline = false)
 	{
 		// Since Lua creates our userdata, we need to set all the fields ourself!
 
@@ -439,13 +454,7 @@ struct LuaUserData : GCudata_holylib { // No constructor/deconstructor since its
 		if (!bIsInline)
 			data = pData;
 		else
-			flags |= UDATA_INLINED_DATA;
-
-		if (bNoGC)
-		{
-			marked |= 0x20 | 0x40;
-			flags |= UDATA_NO_GC;
-		}
+			flags |= (int)udataFlags::UDATA_INLINED_DATA;
 
 		udtype = pMetaEntry.iType;
 		metatable = pMetaEntry.metatable;
@@ -457,7 +466,7 @@ struct LuaUserData : GCudata_holylib { // No constructor/deconstructor since its
 
 		if (bNoUserTable)
 		{
-			flags |= UDATA_NO_USERTABLE;
+			flags |= (int)udataFlags::UDATA_NO_USERTABLE;
 			// setgcrefnull(usertable); // Verify: Do we need to always have a valid usertable? iirc the gc is missing a null check
 		} else {
 			ClearLuaTable(LUA, true);
@@ -481,7 +490,7 @@ struct LuaUserData : GCudata_holylib { // No constructor/deconstructor since its
 
 	inline void* GetData()
 	{
-		if (flags & UDATA_INLINED_DATA)
+		if (flags & (int)udataFlags::UDATA_INLINED_DATA)
 			return (void*)((char*)this + GCudata_holylib_dataoffset);
 
 		return data;
@@ -493,7 +502,7 @@ struct LuaUserData : GCudata_holylib { // No constructor/deconstructor since its
 		Msg("holylib - util: LuaUserdata got new data %p - %p\n", this, data);
 #endif
 
-		if (flags & UDATA_INLINED_DATA)
+		if (flags & (int)udataFlags::UDATA_INLINED_DATA)
 		{
 			Warning(PROJECT_NAME " - LuaUserData: Tried to call SetData when the data is inlined into the userdata!\n");
 			return;
@@ -505,7 +514,7 @@ struct LuaUserData : GCudata_holylib { // No constructor/deconstructor since its
 	inline void PushLuaTable(GarrysMod::Lua::ILuaInterface* pLua)
 	{
 		lua_State* L = pLua->GetState();
-		if (flags & UDATA_NO_USERTABLE)
+		if (flags & (int)udataFlags::UDATA_NO_USERTABLE)
 		{
 			setnilV(L->top++);
 		} else {
@@ -526,7 +535,7 @@ struct LuaUserData : GCudata_holylib { // No constructor/deconstructor since its
 
 	inline void ClearLuaTable(GarrysMod::Lua::ILuaInterface* pLua, bool bFresh = false) // bFresh = if we got freshly created / are in a white state
 	{
-		if (flags & UDATA_NO_USERTABLE)
+		if (flags & (int)udataFlags::UDATA_NO_USERTABLE)
 			return;
 
 		lua_State* L = pLua->GetState();
@@ -586,13 +595,8 @@ struct LuaUserData : GCudata_holylib { // No constructor/deconstructor since its
 #if HOLYLIB_UTIL_DEBUG_LUAUSERDATA
 		g_pLuaUserData.erase(this);
 #endif
-		if (!(flags & UDATA_INLINED_DATA))
-			data = NULL;
-
-		if (flags & UDATA_NO_GC)
-		{
-			marked &= (uint8_t)~(0x20 | 0x40); // Unset FIXED GC flags if they were set. Else GC is not gonna like this
-		}
+		if (!(flags & (int)udataFlags::UDATA_INLINED_DATA))
+			data = nullptr;
 
 		return true;
 	}
@@ -602,26 +606,24 @@ struct LuaUserData : GCudata_holylib { // No constructor/deconstructor since its
 		return udtype;
 	}
 
-	static void ForceGlobalRelease(void* pData);
-
 	inline bool IsFlagExplicitDelete()
 	{
-		return (flags & UDATA_EXPLICIT_DELETE) != 0;
+		return (flags & (int)udataFlags::UDATA_EXPLICIT_DELETE) != 0;
 	}
 
 	inline void SetFlagExplicitDelete()
 	{
-		flags |= UDATA_EXPLICIT_DELETE;
+		flags |= (int)udataFlags::UDATA_EXPLICIT_DELETE;
 	}
 
 	inline bool IsInlined()
 	{
-		return (flags & UDATA_INLINED_DATA) != 0;
+		return (flags & (int)udataFlags::UDATA_INLINED_DATA) != 0;
 	}
 
 	inline void SetAsInlined()
 	{
-		flags |= UDATA_INLINED_DATA;
+		flags |= (int)udataFlags::UDATA_INLINED_DATA;
 	}
 
 	inline int GetFlags()
@@ -630,6 +632,41 @@ struct LuaUserData : GCudata_holylib { // No constructor/deconstructor since its
 	}
 };
 static constexpr int udataSize = sizeof(LuaUserData) - sizeof(GCudata);
+
+struct ReferencedLuaUserData : LuaUserData {
+	inline void Init(GarrysMod::Lua::ILuaInterface* LUA, const Lua::LuaMetaEntry& pMetaEntry, void* pData, bool bNoUserTable = false, bool bIsInline = false)
+	{
+		LuaUserData::Init(LUA, pMetaEntry, pData, bNoUserTable, bIsInline);
+
+		flags |= (int)udataFlags::UDATA_REFERENCED;
+
+		// NOTE:
+		// In the past I set the 0x20 & 0x40 flags into marked for the GC_FIXED & GC_SFIXED but those do not ensure that userdata won't be cleared
+		// So we are required to keep them as a reference and cannot just set a GC flag.
+
+		// Slow :sob:
+		LUA->Push(-1);
+		nReference = LUA->ReferenceCreate();
+	}
+	
+	inline bool Release(GarrysMod::Lua::ILuaInterface* pLua, bool bGCCall = false)
+	{
+		bool bReturn = LuaUserData::Release(pLua, bGCCall);
+
+		if (bReturn && nReference != -1)
+		{
+			pLua->ReferenceFree(nReference);
+			nReference = -1;
+		}
+
+		return bReturn;
+	}
+
+	static void ForceGlobalRelease(void* pData);
+
+	int nReference;
+};
+static constexpr int referencedUdataSize = sizeof(ReferencedLuaUserData) - sizeof(GCudata);
 
 #define TO_LUA_TYPE( className ) Lua::className
 
@@ -647,7 +684,7 @@ inline LuaUserData* Get_##className##_Data(GarrysMod::Lua::ILuaInterface* LUA, i
 		if (bError) \
 			LUA->ThrowError(invalidType_##className.c_str()); \
 \
-		return NULL; \
+		return nullptr; \
 	} \
 \
 	if ((!pVar || !pVar->GetData()) && bError) \
@@ -660,7 +697,7 @@ className* Get_##className(GarrysMod::Lua::ILuaInterface* LUA, int iStackPos, bo
 { \
 	LuaUserData* pLuaData = Get_##className##_Data(LUA, iStackPos, bError); \
 	if (!pLuaData) \
-		return NULL; \
+		return nullptr; \
  \
 	return (className*)pLuaData->GetData(); \
 }
@@ -688,7 +725,7 @@ className* Get_##className(GarrysMod::Lua::ILuaInterface* LUA, int iStackPos, bo
 		if (bError) \
 			LUA->ThrowError(invalidType_##className.c_str()); \
 \
-		return NULL; \
+		return nullptr; \
 	} \
 \
 	if (!pVar && bError) \
@@ -719,7 +756,7 @@ inline LuaUserData* Get_##className##_Data(GarrysMod::Lua::ILuaInterface* LUA, i
 		if (bError) \
 			LUA->ThrowError(invalidType_##className.c_str()); \
 \
-		return NULL; \
+		return nullptr; \
 	} \
 \
 	return pVar; \
@@ -729,7 +766,7 @@ className* Get_##className(GarrysMod::Lua::ILuaInterface* LUA, int iStackPos, bo
 { \
 	LuaUserData* pLuaData = Get_##className##_Data(LUA, iStackPos, bError); \
 	if (!pLuaData) \
-		return NULL; \
+		return nullptr; \
  \
 	className* pVar = (className*)pLuaData->GetData(); \
 	if (!pVar || !isvalid) \
@@ -737,7 +774,7 @@ className* Get_##className(GarrysMod::Lua::ILuaInterface* LUA, int iStackPos, bo
 		if (bError) \
 			LUA->ThrowError(triedNull_##className.c_str()); \
 \
-		return NULL; \
+		return nullptr; \
 	} \
 \
 	return pVar; \
@@ -750,7 +787,7 @@ LuaUserData* Push_##className(GarrysMod::Lua::ILuaInterface* LUA, className* var
 	if (!var) \
 	{ \
 		LUA->PushNil(); \
-		return NULL; \
+		return nullptr; \
 	} \
 \
 	const Lua::LuaMetaEntry& pMeta = Lua::GetLuaData(LUA)->GetMetaEntry(TO_LUA_TYPE(className)); \
@@ -768,7 +805,7 @@ LuaUserData* PushInlined_##className(GarrysMod::Lua::ILuaInterface* LUA, int nAd
 	constexpr int thisUDataSize = udataSize + sizeof(className) - sizeof(void*); \
 	/*We only do - sizeof(GCudata) because Lua returns a pointer that is only offset by this much regardless of size*/ \
 	LuaUserData* userData = (LuaUserData*)((char*)RawLua::AllocateCDataOrUserData(LUA, pMeta.iType, thisUDataSize + nAdditionalSize) - sizeof(GCudata)); \
-	userData->Init(LUA, pMeta, NULL, false, false, true); \
+	userData->Init(LUA, pMeta, nullptr, false, true); \
 	return userData; \
 }
 
@@ -797,8 +834,8 @@ void Push_##className(GarrysMod::Lua::ILuaInterface* LUA, className* var) \
 		const Lua::LuaMetaEntry& pMeta = Lua::GetLuaData(LUA)->GetMetaEntry(TO_LUA_TYPE(className)); \
 		if (pMeta.iType == UCHAR_MAX) \
 			LUA->ThrowError(triedPushing_##className.c_str()); \
-		LuaUserData* userData = (LuaUserData*)((char*)LUA->NewUserdata(udataSize) - sizeof(GCudata)); \
-		userData->Init(LUA, pMeta, var, true); \
+		ReferencedLuaUserData* userData = (ReferencedLuaUserData*)((char*)LUA->NewUserdata(referencedUdataSize) - sizeof(GCudata)); \
+		userData->Init(LUA, pMeta, var); \
 		pushedUserData[var] = userData; \
 	} \
 } \
@@ -833,7 +870,7 @@ void Push_##className(GarrysMod::Lua::ILuaInterface* LUA, className* var) \
 \
 [[maybe_unused]] static void DeleteGlobal_##className(className* var) \
 { \
-	LuaUserData::ForceGlobalRelease(var); \
+	ReferencedLuaUserData::ForceGlobalRelease(var); \
 }
 
 // A default index function for userData,
@@ -881,13 +918,13 @@ LUA_FUNCTION_STATIC(className ## __gc) \
 	LuaUserData* pData = Get_##className##_Data(LUA, 1, false); \
 	if (pData) \
 	{ \
-		int pFlags = pData->GetFlags(); \
-		bool bFlagExplicitDelete = pData->IsFlagExplicitDelete(); \
-		bool bIsInlined = pData->IsInlined(); \
-		void* pStoredData = pData->GetData(); \
+		[[maybe_unused]] int pFlags = pData->GetFlags(); \
+		[[maybe_unused]] bool bFlagExplicitDelete = pData->IsFlagExplicitDelete(); \
+		[[maybe_unused]] bool bIsInlined = pData->IsInlined(); \
+		[[maybe_unused]] void* pStoredData = pData->GetData(); \
 		if (pData->Release(LUA, true)) \
 		{ \
-			pData = NULL; /*Don't let any idiot(that's me) use it*/ \
+			pData = nullptr; /*Don't let any idiot(that's me) use it*/ \
 			func \
 		} \
 	} \
@@ -995,7 +1032,7 @@ struct EntityList // entitylist module.
 	inline void Invalidate()
 	{
 		Clear();
-		m_pLua = NULL;
+		m_pLua = nullptr;
 	}
 
 	inline void SetLua(GarrysMod::Lua::ILuaInterface* pLua)
@@ -1007,7 +1044,7 @@ private:
 	// NOTE: The Entity will always be valid but the reference can be -1!
 	std::unordered_map<CBaseEntity*, GCudata*> m_pEntReferences;
 	std::vector<CBaseEntity*> m_pEntities;
-	GarrysMod::Lua::ILuaInterface* m_pLua = NULL;
+	GarrysMod::Lua::ILuaInterface* m_pLua = nullptr;
 };
 
 extern EntityList& GetGlobalEntityList(GarrysMod::Lua::ILuaInterface* pLua);

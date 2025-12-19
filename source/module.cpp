@@ -87,7 +87,13 @@ void CModule::SetupConfig()
 		return;
 
 	Bootil::Data::Tree& pData = pConfig->GetData().GetChild(m_pModule->Name());
-	m_bEnabled = pData.EnsureChildVar<bool>("enabled", m_bEnabled);
+	if (pData.EnsureChildVar<bool>("enabledByDefault", m_bEnabled) != m_bEnabled)
+	{ // Module was disabled by default, and now is enabled. Happens when compatibility changes
+		pData.GetChild("enabled").Var<bool>(m_bEnabled);
+	} else {
+		m_bEnabled = pData.EnsureChildVar<bool>("enabled", m_bEnabled);
+	}
+
 	m_pModule->SetDebug(pData.EnsureChildVar<int>("debugLevel", m_pModule->InDebug()));
 
 	m_pModule->OnConfigLoad(pData);
@@ -102,34 +108,35 @@ void CModule::SetupConfig()
 	3 - Command line - The module's command line argument
 	4 - holylib_startdisabled - If all modules should start disabled.
 */
-void CModule::SetModule(IModule* module)
+void CModule::SetModule(IModule* pModule)
 {
 	m_bStartup = true;
-	m_pModule = module;
+	m_pModule = pModule;
 #ifdef SYSTEM_LINUX // Welcome to ifdef hell
 #if ARCHITECTURE_IS_X86
-	if (module->Compatibility() & LINUX32)
+	if (pModule->Compatibility() & LINUX32)
 		m_bCompatible = true;
 #else
-	if (module->Compatibility() & LINUX64)
+	if (pModule->Compatibility() & LINUX64)
 		m_bCompatible = true;
 #endif
 #else
 #if ARCHITECTURE_IS_X86
-	if (module->Compatibility() & WINDOWS32)
+	if (pModule->Compatibility() & WINDOWS32)
 		m_bCompatible = true;
 #else
-	if (module->Compatibility() & WINDOWS64)
+	if (pModule->Compatibility() & WINDOWS64)
 		m_bCompatible = true;
 #endif
 #endif
 
 	m_bEnabled = m_pModule->IsEnabledByDefault() ? m_bCompatible : false;
 
+	// Setup here so that command line arguments do not intentionally change the config.
 	SetupConfig();
 
 	std::string pStrName = "holylib_enable_";
-	pStrName.append(module->Name());
+	pStrName.append(pModule->Name());
 	std::string cmdStr = "-";
 	cmdStr.append(pStrName);
 	int cmd = CommandLine()->ParmValue(cmdStr.c_str(), -1); // checks for "-holylib_enable_[module name] [1 / 0]"
@@ -147,7 +154,7 @@ void CModule::SetModule(IModule* module)
 	m_pCVar = new ConVar(m_pCVarName, m_bEnabled ? "1" : "0", FCVAR_ARCHIVE, "Whether this module should be active or not", OnModuleConVarChange);
 
 	std::string pDebugStrName = "holylib_debug_";
-	pDebugStrName.append(module->Name());
+	pDebugStrName.append(pModule->Name());
 
 	int cmdDebug = CommandLine()->ParmValue(((std::string)"-" + pDebugStrName).c_str(), -1);
 	if (cmdDebug > -1)
@@ -247,14 +254,29 @@ CModuleManager::CModuleManager()
 		module_debug.SetValue("1");
 	}*/
 
+	if (CommandLine()->FindParm("-holylib_allowunsafe"))
+	{
+		Msg(PROJECT_NAME " - code: Found -holylib_allowunsafe enabling unsafe code...\n");
+		m_bEnabledUnsafeCode = true;
+	}
+
+	if (CommandLine()->FindParm("-holylib_denyunsafe"))
+	{
+		Msg(PROJECT_NAME " - code: Found -holylib_denyunsafe disabling unsafe code...\n");
+		m_bEnabledUnsafeCode = false;
+	}
+
+	if (CommandLine()->FindParm("-holylib_allowunsafe") && CommandLine()->FindParm("-holylib_denyunsafe"))
+		Msg(PROJECT_NAME " - code: Both -holylib_allowunsafe and -holylib_denyunsafe were found -holylib_denyunsafe takes priority! (But... Why... Why both...)\n");
+
 	if (!m_pConfig)
 	{
-		m_pConfig = g_pConfigSystem->LoadConfig("garrysmod/holylib/cfg/modules.json");
+		m_pConfig = g_pConfigSystem->LoadConfig(HOLYLIB_CONFIG_PATH "modules.json");
 		if (m_pConfig->GetState() == ConfigState::INVALID_JSON)
 		{
 			Warning(PROJECT_NAME " - modulesystem: Failed to load modules.json!\n- Check if the json is valid or delete the config to let a new one be generated!\n");
 			m_pConfig->Destroy(); // Our config is in a invaid state :/
-			m_pConfig = NULL;
+			m_pConfig = nullptr;
 		}
 	}
 
@@ -279,7 +301,7 @@ CModuleManager::~CModuleManager()
 	{
 		//m_pConfig->Save(); // We don't save because we else would possibly override any changes made while the server was running, which we don't want.
 		m_pConfig->Destroy();
-		m_pConfig = NULL;
+		m_pConfig = nullptr;
 	}
 }
 
@@ -292,12 +314,12 @@ IModuleWrapper* CModuleManager::RegisterModule(IModule* pModule)
 	module->SetModule(pModule);
 	module->SetID(g_pIDs);
 	Msg(PROJECT_NAME ": Registered module %-*s (%-*i Enabled: %s Compatible: %s MultiLua: %s)\n", 
-		15,
+		20,
 		module->FastGetModule()->Name(), 
 		2,
 		g_pIDs,
 		module->IsEnabled() ? "true, " : "false,", 
-		module->FastIsCompatible() ? "true " : "false",
+		module->FastIsCompatible() ? "true, " : "false,",
 		module->GetModule()->SupportsMultipleLuaStates() ? "true " : "false"
 	);
 
@@ -315,7 +337,7 @@ IModuleWrapper* CModuleManager::FindModuleByConVar(ConVar* convar)
 			return module;
 	}
 
-	return NULL;
+	return nullptr;
 }
 
 IModuleWrapper* CModuleManager::FindModuleByName(const char* name)
@@ -324,7 +346,15 @@ IModuleWrapper* CModuleManager::FindModuleByName(const char* name)
 		if (V_stricmp(module->FastGetModule()->Name(), name) == 0)
 			return module;
 
-	return NULL;
+	return nullptr;
+}
+
+IModuleWrapper* CModuleManager::GetModuleByID(int nIndex)
+{
+	if (0 > nIndex || nIndex > m_pModules.size())
+		return nullptr;
+
+	return m_pModules[nIndex];
 }
 
 void CModuleManager::Setup(CreateInterfaceFn appfn, CreateInterfaceFn gamefn)
@@ -513,10 +543,10 @@ void CModuleManager::ClientPutInServer(edict_t* pClient, const char* pPlayerName
 
 MODULE_RESULT CModuleManager::ClientConnect(bool* bAllowConnect, edict_t* pClient, const char* pszName, const char* pszAddress, char* reject, int maxrejectlen)
 {
-	MODULE_RESULT result = MODULE_RESULT::MODULE_CONTINUE;
+	MODULE_RESULT result = MODULE_RESULT::CONTINUE;
 	BASE_CALL_ENABLED_MODULES(
 		result = pModule->GetModule()->ClientConnect(bAllowConnect, pClient, pszName, pszAddress, reject, maxrejectlen);
-		if (result != MODULE_RESULT::MODULE_CONTINUE)
+		if (result != MODULE_RESULT::CONTINUE)
 			break;
 	, );
 
@@ -525,10 +555,10 @@ MODULE_RESULT CModuleManager::ClientConnect(bool* bAllowConnect, edict_t* pClien
 
 MODULE_RESULT CModuleManager::ClientCommand(edict_t *pClient, const CCommand* args)
 {
-	MODULE_RESULT result = MODULE_RESULT::MODULE_CONTINUE;
+	MODULE_RESULT result = MODULE_RESULT::CONTINUE;
 	BASE_CALL_ENABLED_MODULES(
 		result = pModule->GetModule()->ClientCommand(pClient, args);
-		if (result != MODULE_RESULT::MODULE_CONTINUE)
+		if (result != MODULE_RESULT::CONTINUE)
 			break;
 	, );
 
@@ -537,10 +567,10 @@ MODULE_RESULT CModuleManager::ClientCommand(edict_t *pClient, const CCommand* ar
 
 MODULE_RESULT CModuleManager::NetworkIDValidated(const char *pszUserName, const char *pszNetworkID)
 {
-	MODULE_RESULT result = MODULE_RESULT::MODULE_CONTINUE;
+	MODULE_RESULT result = MODULE_RESULT::CONTINUE;
 	BASE_CALL_ENABLED_MODULES(
 		result = pModule->GetModule()->NetworkIDValidated(pszUserName, pszNetworkID);
-		if (result != MODULE_RESULT::MODULE_CONTINUE)
+		if (result != MODULE_RESULT::CONTINUE)
 			break;
 	, );
 

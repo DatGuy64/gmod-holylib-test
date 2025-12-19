@@ -13,13 +13,13 @@
 class CHolyLuaModule : public IModule
 {
 public:
-	virtual void Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn) OVERRIDE;
-	virtual void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) OVERRIDE;
-	virtual void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) OVERRIDE;
-	virtual void Think(bool bSimulating) OVERRIDE;
-	virtual void Shutdown() OVERRIDE;
-	virtual const char* Name() { return "holylua"; };
-	virtual int Compatibility() { return LINUX32 | LINUX64 | WINDOWS32 | WINDOWS64; };
+	void Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn) override;
+	void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) override;
+	void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) override;
+	void Think(bool bSimulating) override;
+	void Shutdown() override;
+	const char* Name() override { return "holylua"; };
+	int Compatibility() override { return LINUX32 | LINUX64 | WINDOWS32 | WINDOWS64; };
 
 public: // Just to make it easier with the ConVar callback.
 	void HolyLua_Init();
@@ -29,7 +29,7 @@ public: // Just to make it easier with the ConVar callback.
 static CHolyLuaModule g_pHolyLuaModule;
 IModule* pHolyLuaModule = &g_pHolyLuaModule;
 
-static GarrysMod::Lua::ILuaInterface* g_HolyLua = NULL;
+static GarrysMod::Lua::ILuaInterface* g_HolyLua = nullptr;
 static void OnLuaChange(IConVar* convar, const char* pOldValue, float flOldValue)
 {
 	bool bNewValue = ((ConVar*)convar)->GetBool();
@@ -58,12 +58,8 @@ static void lua_run_holylibCmd(const CCommand &args)
 }
 static ConCommand lua_run_holylib("lua_run_holylib", lua_run_holylibCmd, "Runs code in the holylib lua state", 0);
 
-static CGameEventManager* pGameEventManager = nullptr;
 void CHolyLuaModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn)
 {
-	pGameEventManager = (CGameEventManager*)appfn[0](INTERFACEVERSION_GAMEEVENTSMANAGER2, NULL);
-	Detour::CheckValue("get interface", "CGameEventManager", pGameEventManager != NULL);
-
 	g_pHolyLuaModule.HolyLua_Init();
 }
 
@@ -129,7 +125,7 @@ void CHolyLuaModule::HolyLua_Shutdown()
 
 	g_pModuleManager.LuaShutdown(g_HolyLua);
 	Lua::DestroyInterface(g_HolyLua);
-	g_HolyLua = NULL;
+	g_HolyLua = nullptr;
 }
 
 static inline void PushEvent(GarrysMod::Lua::ILuaInterface* pLua, CGameEvent* event)
@@ -181,8 +177,7 @@ public:
 			LUA->CallFunctionProtected(2, 0, true);
 		}
 
-		if (pGameEventManager)
-			pGameEventManager->FreeEvent(m_pEvent);
+		Util::gameeventmanager->FreeEvent(m_pEvent);
 	}
 
 private:
@@ -201,11 +196,8 @@ public:
 
 	void FireGameEvent(IGameEvent* pEvent)
 	{
-		if (!pGameEventManager)
-			return;
-
-		CLuaGameEventCallbackCall* pCallback = new CLuaGameEventCallbackCall(pGameEventManager->DuplicateEvent(pEvent));
-		m_pLua->AddThreadedCall((GarrysMod::Lua::ILuaThreadedCall*)pEvent);
+		CLuaGameEventCallbackCall* pCallback = new CLuaGameEventCallbackCall(Util::gameeventmanager->DuplicateEvent(pEvent));
+		m_pLua->AddThreadedCall((GarrysMod::Lua::ILuaThreadedCall*)pCallback);
 	}
 
 private:
@@ -223,8 +215,8 @@ LUA_FUNCTION_STATIC(gameevent_Listen) {
 	const char* name = LUA->CheckString(1);
 
 	auto pData = GetHolyLuaLuaData(LUA);
-	if (!pGameEventManager->FindListener(&pData->m_pEventListener, name))
-		pGameEventManager->AddListener(&pData->m_pEventListener, name, false);
+	if (!Util::gameeventmanager->FindListener(&pData->m_pEventListener, name))
+		Util::gameeventmanager->AddListener(&pData->m_pEventListener, name, false);
  
 	return 0;
 }
@@ -249,9 +241,6 @@ void CHolyLuaModule::LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua)
 	if (pLua != g_HolyLua)
 		return;
 
-	if (pGameEventManager)
-	{
-		auto pData = GetHolyLuaLuaData(pLua);
-		pGameEventManager->RemoveListener(&pData->m_pEventListener);
-	}
+	auto pData = GetHolyLuaLuaData(pLua);
+	Util::gameeventmanager->RemoveListener(&pData->m_pEventListener);
 }

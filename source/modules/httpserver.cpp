@@ -13,13 +13,13 @@
 class CHTTPServerModule : public IModule
 {
 public:
-	virtual void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) OVERRIDE;
-	virtual void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) OVERRIDE;
-	virtual void Think(bool bSimulating) OVERRIDE;
-	virtual void OnClientDisconnect(CBaseClient* pClient) OVERRIDE;
-	virtual const char* Name() { return "httpserver"; };
-	virtual int Compatibility() { return LINUX32 | LINUX64 | WINDOWS32 | WINDOWS64; };
-	virtual bool SupportsMultipleLuaStates() { return true; };
+	void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) override;
+	void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) override;
+	void Think(bool bSimulating) override;
+	void OnClientDisconnect(CBaseClient* pClient) override;
+	const char* Name() override { return "httpserver"; };
+	int Compatibility() override { return LINUX32 | LINUX64 | WINDOWS32 | WINDOWS64; };
+	bool SupportsMultipleLuaStates() override { return true; };
 };
 
 static CHTTPServerModule g_pHttpServerModule;
@@ -106,7 +106,7 @@ struct HttpRequest {
 	httplib::Response m_pResponse;
 	httplib::Request m_pRequest;
 	int m_pClientUserID = -1;
-	GarrysMod::Lua::ILuaInterface* m_pLua = NULL;
+	GarrysMod::Lua::ILuaInterface* m_pLua = nullptr;
 };
 
 enum
@@ -152,7 +152,7 @@ public:
 	{
 		if (!ThreadInMainThread())
 		{
-			Warning(PROJECT_NAME ": Something deleted a HttpServer from another thread!\n"); // Spooky leaking references.
+			Warning(PROJECT_NAME " - httpserver: Something deleted a HttpServer from another thread!\n"); // Spooky leaking references.
 			return;
 		}
 
@@ -346,7 +346,7 @@ private:
 	std::unordered_map<int, std::vector<PreparedHttpResponse*>> m_pPreparedResponses;
 	CThreadFastMutex m_pPreparedResponsesMutex;
 
-	GarrysMod::Lua::ILuaInterface* m_pLua = NULL;
+	GarrysMod::Lua::ILuaInterface* m_pLua = nullptr;
 };
 
 PushReferenced_LuaClass(HttpResponse)
@@ -384,7 +384,7 @@ Default__GetTable(HttpResponse);
 
 LUA_FUNCTION_STATIC(HttpResponse_IsValid)
 {
-	LUA->PushBool(Get_HttpResponse(LUA, 1, false) != NULL);
+	LUA->PushBool(Get_HttpResponse(LUA, 1, false) != nullptr);
 	return 1;
 }
 
@@ -447,7 +447,7 @@ Default__GetTable(HttpRequest);
 
 LUA_FUNCTION_STATIC(HttpRequest_IsValid)
 {
-	LUA->PushBool(Get_HttpRequest(LUA, 1, false) != NULL);
+	LUA->PushBool(Get_HttpRequest(LUA, 1, false) != nullptr);
 	return 1;
 }
 
@@ -582,7 +582,7 @@ LUA_FUNCTION_STATIC(HttpRequest_GetPlayer)
 {
 	HttpRequest* pData = Get_HttpRequest(LUA, 1, false);
 	CBaseClient* pClient = Util::GetClientByUserID(pData->m_pClientUserID);
-	CBasePlayer* pPlayer = pClient ? Util::GetPlayerByClient(pClient) : NULL;
+	CBasePlayer* pPlayer = pClient ? Util::GetPlayerByClient(pClient) : nullptr;
 
 	if (pPlayer)
 		Util::Push_Entity(LUA, (CBaseEntity*)pPlayer);
@@ -605,17 +605,15 @@ void CallFunc(GarrysMod::Lua::ILuaInterface* pLua, int callbackFunction, HttpReq
 	Util::ReferencePush(pLua, callbackFunction);
 
 	if (g_pHttpServerModule.InDebug())
-		Msg(PROJECT_NAME ": pushed handler function %i with type %i\n", callbackFunction, pLua->GetType(-1));
+		Msg(PROJECT_NAME " - httpserver: pushed handler function %i with type %i\n", callbackFunction, pLua->GetType(-1));
 
 	Push_HttpRequest(pLua, request);
 	Push_HttpResponse(pLua, response);
 
 	if (pLua->CallFunctionProtected(2, 1, true))
 	{
-		if (!pLua->GetBool(-1))
-		{
+		if (!pLua->IsType(-1, GarrysMod::Lua::Type::Bool) || pLua->GetBool(-1))
 			request->MarkHandled();
-		}
 
 		pLua->Pop(1);
 	} else {
@@ -717,7 +715,7 @@ httplib::Server::Handler HttpServer::CreateHandler(const char* path, int func, b
 		if (ipWhitelist && userID == -1)
 		{
 			if (g_pHttpServerModule.InDebug())
-				Msg("holylib - httpserver: Request was denied as the ipWhitelist is enabled and the client couldn't be found.\n");
+				Msg(PROJECT_NAME " - httpserver: Request was denied as the ipWhitelist is enabled and the client couldn't be found.\n");
 
 			return;
 		}
@@ -742,7 +740,7 @@ httplib::Server::Handler HttpServer::CreateHandler(const char* path, int func, b
 		m_pPreparedResponsesMutex.Unlock();
 
 		if (g_pHttpServerModule.InDebug())
-			Msg("holylib - httpserver: Waiting for Main thread to pick up request\n");
+			Msg(PROJECT_NAME " - httpserver: Waiting for Main thread to pick up request\n");
 
 		HttpRequest* request = new HttpRequest;
 		request->m_strPath = path;
@@ -762,7 +760,7 @@ httplib::Server::Handler HttpServer::CreateHandler(const char* path, int func, b
 		request->m_bDelete = true;
 
 		if (g_pHttpServerModule.InDebug())
-			Msg("holylib - httpserver: Finished request\n");
+			Msg(PROJECT_NAME " - httpserver: Finished request\n");
 	};
 }
 
@@ -815,7 +813,7 @@ Default__GetTable(HttpServer);
 
 LUA_FUNCTION_STATIC(HttpServer_IsValid)
 {
-	LUA->PushBool(Get_HttpServer(LUA, 1, false) != NULL);
+	LUA->PushBool(Get_HttpServer(LUA, 1, false) != nullptr);
 	return 1;
 }
 

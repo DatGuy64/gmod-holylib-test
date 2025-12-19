@@ -57,6 +57,118 @@ namespace Detour
 		(void*)hook_##name, m_pID \
 	)
 
+#if SYSTEM_WINDOWS
+/*
+	__thiscall is funky, the compiler LOVES to screw up registers causing invalid/corrupted arguments
+	and deny __thiscall directly as you are REQUIRED to only use it on a non-static method
+	so to workaround this, you can use these to let your hook be called properly by having a wrapper around it.
+
+	How this works:
+	
+	First you call 
+		DETOUR_THISCALL_START()
+	This will setup a static class into which then our wrapper functions are added.
+
+	Then use
+		DETOUR_THISCALL_ADDFUNC1( hook_Bla_ExampleHook, ExampleHook, CExampleClass*, const char* );
+	Which will translate to 
+		virtual void ExampleHook(const char* __arg1) {
+			realHook((CExampleClass*)this, __arg1); // this will always be your CExampleClass* given as the first argument to the hook
+		};
+
+	You can continue adding more, when your done, use
+		DETOUR_THISCALL_FINISH()
+	Which will close the class and setup a static g_pThisCallConversionWorkaround variable.
+
+	Now, when you do your Detour::Create calls, instead of just passing your hook directly, you instead use
+		DETOUR_THISCALL(hook_Bla_ExampleHook, ExampleHook) -- First is your normal hook, second is the name you used when calling AddFunc
+
+	Detour::Create(
+		&detour_CBaseFileSystem_GetFileTime, "CBaseFileSystem::GetFileTime",
+		filesystem_loader.GetModule(), Symbols::CBaseFileSystem_GetFileTimeSym,
+		(void*)DETOUR_THISCALL(hook_CBaseFileSystem_GetFileTime, GetFileTime), <------- Here you just use it
+		m_pID
+	);
+*/
+
+// Uses an anonymous namespace since else the compile LOVES to merge variables/vtable into one global class breaking everything and overriving vtable entries
+#define DETOUR_THISCALL_START() \
+namespace { \
+class ThisCallWorkaround \
+{ \
+public:
+
+#define DETOUR_THISCALL_FINISH() \
+}; \
+static ThisCallWorkaround g_pThisCallConversionWorkaround; \
+}
+
+#define DETOUR_THISCALL_ADDFUNC0( realHook, name, thisType ) \
+virtual void name() { realHook((thisType)this); }; \
+byte m_##name = 0;
+
+#define DETOUR_THISCALL_ADDFUNC1( realHook, name, thisType, arg1 ) \
+virtual void name(arg1 __arg1) { realHook((thisType)this, __arg1); };\
+byte m_##name = 0;
+
+#define DETOUR_THISCALL_ADDFUNC2( realHook, name, thisType, arg1, arg2 ) \
+virtual void name(arg1 __arg1, arg2 __arg2) { realHook((thisType)this, __arg1, __arg2); };\
+byte m_##name = 0;
+
+#define DETOUR_THISCALL_ADDFUNC3( realHook, name, thisType, arg1, arg2, arg3 ) \
+virtual void name(arg1 __arg1, arg2 __arg2, arg3 __arg3) { realHook((thisType)this, __arg1, __arg2, __arg3); };\
+byte m_##name = 0;
+
+#define DETOUR_THISCALL_ADDFUNC4( realHook, name, thisType, arg1, arg2, arg3, arg4 ) \
+virtual void name(arg1 __arg1, arg2 __arg2, arg3 __arg3, arg4 __arg4) { realHook((thisType)this, __arg1, __arg2, __arg3, __arg4); };\
+byte m_##name = 0;
+
+#define DETOUR_THISCALL_ADDFUNC8( realHook, name, thisType, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8 ) \
+virtual void name(arg1 __arg1, arg2 __arg2, arg3 __arg3, arg4 __arg4, arg5 __arg5, arg6 __arg6, arg7 __arg7, arg8 __arg8) { realHook((thisType)this, __arg1, __arg2, __arg3, __arg4, __arg5, __arg6, __arg7, __arg8); };\
+byte m_##name = 0;
+
+#define DETOUR_THISCALL_ADDRETFUNC0( realHook, returnValue, name, thisType ) \
+virtual returnValue name() { return realHook((thisType)this); };\
+byte m_##name = 0;
+
+#define DETOUR_THISCALL_ADDRETFUNC1( realHook, returnValue, name, thisType, arg1 ) \
+virtual returnValue name(arg1 __arg1) { return realHook((thisType)this, __arg1); };\
+byte m_##name = 0;
+
+#define DETOUR_THISCALL_ADDRETFUNC2( realHook, returnValue, name, thisType, arg1, arg2 ) \
+virtual returnValue name(arg1 __arg1, arg2 __arg2) { return realHook((thisType)this, __arg1, __arg2); };\
+byte m_##name = 0;
+
+#define DETOUR_THISCALL_ADDRETFUNC3( realHook, returnValue, name, thisType, arg1, arg2, arg3 ) \
+virtual returnValue name(arg1 __arg1, arg2 __arg2, arg3 __arg3) { return realHook((thisType)this, __arg1, __arg2, __arg3); };\
+byte m_##name = 0;
+
+#define DETOUR_THISCALL_ADDRETFUNC4( realHook, returnValue, name, thisType, arg1, arg2, arg3, arg4 ) \
+virtual returnValue name(arg1 __arg1, arg2 __arg2, arg3 __arg3, arg4 __arg4) { return realHook((thisType)this, __arg1, __arg2, __arg3, __arg4); };\
+byte m_##name = 0;
+
+#define DETOUR_THISCALL_ADDRETFUNC5( realHook, returnValue, name, thisType, arg1, arg2, arg3, arg4, arg5 ) \
+virtual returnValue name(arg1 __arg1, arg2 __arg2, arg3 __arg3, arg4 __arg4, arg5 __arg5) { return realHook((thisType)this, __arg1, __arg2, __arg3, __arg4, __arg5); };\
+byte m_##name = 0;
+
+#define DETOUR_THISCALL_ADDRETFUNC7( realHook, returnValue, name, thisType, arg1, arg2, arg3, arg4, arg5, arg6, arg7 ) \
+virtual returnValue name(arg1 __arg1, arg2 __arg2, arg3 __arg3, arg4 __arg4, arg5 __arg5, arg6 __arg6, arg7 __arg7) { return realHook((thisType)this, __arg1, __arg2, __arg3, __arg4, __arg5, __arg6, __arg7); };\
+byte m_##name = 0;
+
+#define DETOUR_PREPARE_THISCALL() void** pWorkaroundVTable = *(void***)&g_pThisCallConversionWorkaround
+/*
+	HACK
+	Since we cannot just get the index of a vtable function
+	I decided to use member variables as its straight forward and easy to get their offset
+	And since we create a virtual function and a variable together we can be 100% sure that the variable offset will match the vtable offset.
+	Since the vtable is always first, we also remove sizeof(void*) as thats the 4/8 bytes of the vtable.
+*/
+#define DETOUR_THISCALL( linuxHook, windowsHook ) pWorkaroundVTable[((size_t)&(((ThisCallWorkaround*)0)->m_##windowsHook)) - sizeof(void*)]
+#else
+#define DETOUR_PREPARE_THISCALL( varName )
+#define DETOUR_THISCALL( linuxHook, windowsHook ) linuxHook
+#endif
+
 	inline bool CheckValue(const char* strMsg, const char* strName, bool bRet)
 	{
 		if (!bRet) {
@@ -78,8 +190,11 @@ namespace Detour
 	}
 
 	extern void* GetFunction(void* pModule, Symbol pSymbol);
-	extern void Create(Detouring::Hook* pHook, const char* strName, void* pModule, Symbol pSymbol, void* pHookFunc, unsigned int category = 0);
+	extern void Create(Detouring::Hook* pHook, const char* strName, void* pModule, Symbol pSymbol, void* pHookFunc, unsigned int category = 0, bool bEnable = true);
 	extern void Remove(unsigned int category); // 0 = All
+	// Only works with detours that went through Detour::Create!
+	extern void EnableHook(Detouring::Hook* pHook);
+	extern void DisableHook(Detouring::Hook* pHook);
 	extern void ReportLeak();
 	extern const std::unordered_set<std::string>& GetDisabledDetours();
 	extern const std::unordered_set<std::string>& GetFailedDetours();
@@ -112,9 +227,11 @@ namespace Detour
 #if ARCHITECTURE_IS_X86
 #define DLL_EXTENSION "_srv.so"
 #define DETOUR_SYMBOL_ID 0
+#define MODULE_EXTENSION "linux64"
 #else
 #define DLL_EXTENSION ".so"
 #define DETOUR_SYMBOL_ID 1
+#define MODULE_EXTENSION "linux"
 #endif
 #else
 #define DLL_PREEXTENSION ""
@@ -122,8 +239,10 @@ namespace Detour
 #define LIBRARY_EXTENSION ".dll"
 #if ARCHITECTURE_IS_X86
 #define DETOUR_SYMBOL_ID 2
+#define MODULE_EXTENSION "win32"
 #else
 #define DETOUR_SYMBOL_ID 3
+#define MODULE_EXTENSION "win64"
 #endif
 #endif
 
@@ -134,7 +253,7 @@ namespace Detour
 	{
 	#if DETOUR_SYMBOL_ID != 0
 		if ((pSymbols.size()-1) < DETOUR_SYMBOL_ID)
-			return NULL;
+			return nullptr;
 	#endif
 
 	#if defined SYSTEM_WINDOWS
@@ -150,18 +269,57 @@ namespace Detour
 	}
 
 	template<class T>
-	inline T* ResolveSymbolFromLea(void* pModule, const std::vector<Symbol>& pSymbols)
+	inline T* ResolveSymbolNoDereference(
+		SourceSDK::FactoryLoader& pLoader, Symbol& pSymbol
+	)
+	{
+	#if defined SYSTEM_WINDOWS
+		auto iface = reinterpret_cast<T*>(symfinder.Resolve(
+			pLoader.GetModule(), pSymbol.name.c_str(), pSymbol.length
+		));
+		return iface != nullptr ? iface : nullptr;
+	#elif defined SYSTEM_POSIX
+		return reinterpret_cast<T*>(symfinder.Resolve(
+			pLoader.GetModule(), pSymbol.name.c_str(), pSymbol.length
+		));
+	#endif
+	}
+
+	/*
+	 * This function is used to resolve a global variable on a version without symbols.
+
+		Let's take per exemple g_PathIDTable
+
+		To retrive it on x86 we need to use the symbol cause it's the simplest way, but on x64 we need to find a workaround.
+
+		So i (and grok) end up with the idea to use the signature of a function that call g_PathIDTable somewhere and then use a offset to get the address of g_PathIDTable.
+
+		So g_PathIDTable is used inside CBaseFileSystem::OpenForRead, so we can use the signature of CBaseFileSystem::OpenForRead to get the address of g_PathIDTable.
+
+		Once we have CBaseFileSystem::OpenForRead, go to ida and find g_PathIDTable, you'll see that it's at the offset 0x67 (just click on the line where g_PathIDTable is used and look at bottom of IDA, it's written +something)
+
+		Then the line on x64 will be something like LEA, eax, g_PathIDTable
+
+		So my function will look the first byte and deduct what type is it and return you the address of the variable!
+
+		(Note: don't forget to add the offset at the 2nd argument of the signature)								|
+		ex: Symbol::FromSignature("\x48\x89\x5C\x24\x10\x57\x48\x83\xEC\x20\xB8\xFF\xFF\x00\x00\x48\x8B\xD9", 0x67)
+
+		Congratulations, you just learned how to resolve a global variable on a version without symbols!
+	 */
+	template<class T>
+	inline T* ResolveSymbolWithOffset(void* pModule, const std::vector<Symbol>& pSymbols)
 	{
 	#if DETOUR_SYMBOL_ID != 0
 		if ((pSymbols.size()-1) < DETOUR_SYMBOL_ID)
-			return NULL;
+			return nullptr;
 	#endif
 
 		void* matchAddr = GetFunction(pModule, pSymbols[DETOUR_SYMBOL_ID]);
-		if (matchAddr == NULL)
+		if (matchAddr == nullptr)
 		{
-			Warning(PROJECT_NAME ": Failed to get matchAddr!\n");
-			return NULL;
+			Warning(PROJECT_NAME ": Failed to get matchAddr! %s\n", pSymbols[DETOUR_SYMBOL_ID].name.c_str());
+			return nullptr;
 		}
 
 	#if defined(SYSTEM_WINDOWS)
@@ -171,29 +329,89 @@ namespace Detour
 	#endif
 
 		//
+		void* symbolAddr = nullptr;
+
+#ifdef SYSTEM_LINUX
+
 		if (ip[0] == 0x48) {
 			const size_t instrLen = 7;
 			int32_t disp = *reinterpret_cast<int32_t*>(ip + 3); // disp32 at offset 3
 			uint8_t* next = ip + instrLen;                      // RIP after the instruction
-			void* gEntListAddr = next + disp;                   // final address = next + disp32
-
-		#if defined SYSTEM_WINDOWS
-			auto iface = reinterpret_cast<T**>(gEntListAddr);
-			return iface != nullptr ? *iface : nullptr;
-		#elif defined SYSTEM_POSIX
-			return reinterpret_cast<T*>(gEntListAddr);
-		#endif
+			symbolAddr = next + disp;                         // final address = next + disp32
 		}
+#elif defined(SYSTEM_WINDOWS) && defined(ARCHITECTURE_X86)
+    	// Primary: PUSH imm32 (0x68 + RVA) - g_BSPData pattern
+		if (ip[0] == 0x68)
+		{
+			const size_t instrLen = 5;
+			int32_t rva = *reinterpret_cast<uint32_t*>(ip + 1);
+			uint8_t* next = ip + instrLen;
+			symbolAddr = reinterpret_cast<void*>(next + rva);
+			return reinterpret_cast<T*>(symbolAddr);
+		}
+		// Fallback: PUSH ds:[imm32] (0xFF 35 + RVA at +2) - indirect push
+		if (ip[0] == 0xFF && ip[1] == 0x35) {
+			const size_t instrLen = 6;
+			int32_t rva = *reinterpret_cast<uint32_t*>(ip + 2);
+			uint8_t* next = ip + instrLen;
+			symbolAddr = reinterpret_cast<void*>(next + (uintptr_t)rva);  // Points to the pointer; data at [*symbolAddr]
+			return reinterpret_cast<T*>(symbolAddr);
+		}
+		// Primary: MOV ECX, imm32 (0xB9 + RVA as imm32) - your exact pattern
+		if (ip[0] == 0xB9) {
+			const size_t instrLen = 5;
+			int32_t rva = *reinterpret_cast<int32_t*>(ip + 1);
+			uint8_t* next = ip + instrLen;
+			symbolAddr = reinterpret_cast<void*>(next + rva);
+		}
+		// Fallback: MOV ECX, ds:[imm32] (0x8B 0D + RVA as address operand)
+		else if (ip[0] == 0x8B && ip[1] == 0x0D) {
+			const size_t instrLen = 6;
+			int32_t rva = *reinterpret_cast<int32_t*>(ip + 2);
+			uint8_t* next = ip + instrLen;
+			symbolAddr = reinterpret_cast<void*>(next + rva);
+		}
+		// Rare variant: LEA ECX, [imm32] (0x8D 0D + RVA)
+		else if (ip[0] == 0x8D && ip[1] == 0x0D) {
+			const size_t instrLen = 6;
+			int32_t rva = *reinterpret_cast<int32_t*>(ip + 2);
+			uint8_t* next = ip + instrLen;
+			symbolAddr = reinterpret_cast<void*>(next + rva);
+		}
+#elif defined(SYSTEM_WINDOWS) && defined(ARCHITECTURE_X86_64)
+		// LEA RCX, [RIP+imm32] (0x48 0x8D 0x0D + RVA)
+		// LEA loads the effective address directly, no need to dereference
+		if (ip[0] == 0x48 && ip[1] == 0x8D && ip[2] == 0x0D) {
+			const size_t instrLen = 7;
+			int32_t rva = *reinterpret_cast<int32_t*>(ip + 3);
+			uint8_t* next = ip + instrLen;
+			symbolAddr = reinterpret_cast<void*>(next + rva);
+			// For LEA, symbolAddr is the direct address of the object
+			return reinterpret_cast<T*>(symbolAddr);
+		}
+#endif
+
+#if defined SYSTEM_WINDOWS
+	if (symbolAddr != nullptr)
+	{
+		// For MOV instructions, we need to dereference
+		auto iface = reinterpret_cast<T**>(symbolAddr);
+		return iface != nullptr ? *iface : nullptr;
+	}
+#elif defined SYSTEM_POSIX
+	if (symbolAddr != nullptr)
+		return reinterpret_cast<T*>(symbolAddr);
+#endif
 
 		Warning(PROJECT_NAME ": Failed to match LEA bytes!\n");
-		return NULL;
+		return nullptr;
 	}
 
 	inline void* GetFunction(void* pModule, std::vector<Symbol> pSymbols)
 	{
 #if DETOUR_SYMBOL_ID != 0
 		if ((pSymbols.size()-1) < DETOUR_SYMBOL_ID)
-			return NULL;
+			return nullptr;
 #endif
 
 		return GetFunction(pModule, pSymbols[DETOUR_SYMBOL_ID]);

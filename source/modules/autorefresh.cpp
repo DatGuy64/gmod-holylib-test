@@ -10,19 +10,19 @@
 class CAutoRefreshModule : public IModule
 {
 public:
-	virtual void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) OVERRIDE;
-	virtual void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) OVERRIDE;
-	virtual void Shutdown() OVERRIDE;
-	virtual void InitDetour(bool bPreServer) OVERRIDE;
-	virtual const char* Name() { return "autorefresh"; };
-	virtual int Compatibility() { return LINUX32; };
-	virtual bool IsEnabledByDefault() { return false; };
+	void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) override;
+	void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) override;
+	void Shutdown() override;
+	void InitDetour(bool bPreServer) override;
+	const char* Name() override { return "autorefresh"; };
+	int Compatibility() override { return LINUX32; };
+	bool IsEnabledByDefault() override { return false; };
 };
 
-CAutoRefreshModule g_pAutoRefreshModule;
+static CAutoRefreshModule g_pAutoRefreshModule;
 IModule* pAutoRefreshModule = &g_pAutoRefreshModule;
 
-static IThreadPool* pFileTimePool = NULL; // Used when checking the file times since the filesystem can be slow.
+static IThreadPool* pFileTimePool = nullptr; // Used when checking the file times since the filesystem can be slow.
 static void OnFileTimeThreadsChange(IConVar* convar, const char* pOldValue, float flOldValue)
 {
 	if (!pFileTimePool)
@@ -84,15 +84,15 @@ static void CheckFileTime(FileTimeJob* pJob)
 
 static Bootil::File::ChangeMonitor* g_pChangeMonitor = nullptr;
 static bool bForceHasChangedCall = false;
-static Detouring::Hook detour_Bootil_File_ChangeMonitor_HasChanged;
-static bool hook_Bootil_File_ChangeMonitor_HasChanged(Bootil::File::ChangeMonitor* pMonitor)
+static Detouring::Hook detour_Bootil_File_ChangeMonitor_HasChanges;
+static bool hook_Bootil_File_ChangeMonitor_HasChanges(Bootil::File::ChangeMonitor* pMonitor)
 {
 	g_pChangeMonitor = pMonitor; // We cannot just load g_pChangeMonitor since the symbol has an additional fked offset that can change with every gmod build making it unreliable.
 
 	if (bForceHasChangedCall)
 		return false;
 
-	return detour_Bootil_File_ChangeMonitor_HasChanged.GetTrampoline<Symbols::Bootil_File_ChangeMonitor_HasChanged>()(pMonitor);
+	return detour_Bootil_File_ChangeMonitor_HasChanges.GetTrampoline<Symbols::Bootil_File_ChangeMonitor_HasChanges>()(pMonitor);
 }
 
 static Detouring::Hook detour_Bootil_File_ChangeMonitor_CheckForChanges;
@@ -297,10 +297,17 @@ void CAutoRefreshModule::Shutdown()
 {
 	if (pFileTimePool)
 	{
-		V_DestroyThreadPool(pFileTimePool);
+		Util::DestroyThreadPool(pFileTimePool);
 		pFileTimePool = nullptr;
 	}
 }
+
+#if SYSTEM_WINDOWS
+DETOUR_THISCALL_START()
+	DETOUR_THISCALL_ADDFUNC0( hook_Bootil_File_ChangeMonitor_CheckForChanges, CheckForChanges, Bootil::File::ChangeMonitor* );
+	DETOUR_THISCALL_ADDRETFUNC0( hook_Bootil_File_ChangeMonitor_HasChanges, bool, HasChanges, Bootil::File::ChangeMonitor* );
+DETOUR_THISCALL_FINISH();
+#endif
 
 void CAutoRefreshModule::InitDetour(bool bPreServer)
 {
@@ -314,16 +321,17 @@ void CAutoRefreshModule::InitDetour(bool bPreServer)
 		(void*)hook_GarrysMod_AutoRefresh_HandleChange_Lua, m_pID
 	);
 
+	DETOUR_PREPARE_THISCALL();
 	Detour::Create(
 		&detour_Bootil_File_ChangeMonitor_CheckForChanges, "Bootil::File::ChangeMonitor::CheckForChanges",
 		server_loader.GetModule(), Symbols::Bootil_File_ChangeMonitor_CheckForChangesSym,
-		(void*)hook_Bootil_File_ChangeMonitor_CheckForChanges, m_pID
+		(void*)DETOUR_THISCALL(hook_Bootil_File_ChangeMonitor_CheckForChanges, CheckForChanges), m_pID
 	);
 
 	Detour::Create(
-		&detour_Bootil_File_ChangeMonitor_HasChanged, "Bootil::File::ChangeMonitor::HasChanged",
-		server_loader.GetModule(), Symbols::Bootil_File_ChangeMonitor_HasChangedSym,
-		(void*)hook_Bootil_File_ChangeMonitor_HasChanged, m_pID
+		&detour_Bootil_File_ChangeMonitor_HasChanges, "Bootil::File::ChangeMonitor::HasChanges",
+		server_loader.GetModule(), Symbols::Bootil_File_ChangeMonitor_HasChangesSym,
+		(void*)DETOUR_THISCALL(hook_Bootil_File_ChangeMonitor_HasChanges, HasChanges), m_pID
 	);
 
 	func_GarrysMod_AutoRefresh_Init = (Symbols::GarrysMod_AutoRefresh_Init)Detour::GetFunction(server_loader.GetModule(), Symbols::GarrysMod_AutoRefresh_InitSym);

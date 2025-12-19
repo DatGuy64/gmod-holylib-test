@@ -11,10 +11,10 @@
 class CSurfFixModule : public IModule
 {
 public:
-	virtual void Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn) OVERRIDE;
-	virtual void InitDetour(bool bPreServer) OVERRIDE;
-	virtual const char* Name() { return "surffix"; };
-	virtual int Compatibility() { return LINUX32; };
+	void Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn) override;
+	void InitDetour(bool bPreServer) override;
+	const char* Name() override { return "surffix"; };
+	int Compatibility() override { return LINUX32; };
 };
 
 static CSurfFixModule g_pSurfFixModule;
@@ -68,9 +68,9 @@ static bool CGameMovement_IsValidMovementTrace(CGameMovement* gamemovement, trac
 }
 
 #define	MAX_CLIP_PLANES		5
-static Symbols::MoveHelperServer func_MoveHelperServer = NULL;
-static Symbols::CGameMovement_ClipVelocity func_CGameMovement_ClipVelocity = NULL;
-static Symbols::CTraceFilterSimple_ShouldHitEntity func_CTraceFilterSimple_ShouldHitEntity = NULL;
+static Symbols::MoveHelperServer func_MoveHelperServer = nullptr;
+static Symbols::CGameMovement_ClipVelocity func_CGameMovement_ClipVelocity = nullptr;
+static Symbols::CTraceFilterSimple_ShouldHitEntity func_CTraceFilterSimple_ShouldHitEntity = nullptr;
 static inline IMoveHelper* HolyLib_MoveHelper()
 {
 	return (IMoveHelper*)func_MoveHelperServer();
@@ -120,7 +120,7 @@ static inline int GetMoveType(void* pPlayer)
 	return *(int*)pMoveType;
 }
 
-inline void HolyLib_UTIL_TraceRay(const Ray_t &ray, unsigned int mask, const IHandleEntity *ignore, int collisionGroup, trace_t *ptr, ShouldHitFunc_t pExtraShouldHitCheckFn = NULL)
+inline void HolyLib_UTIL_TraceRay(const Ray_t &ray, unsigned int mask, const IHandleEntity *ignore, int collisionGroup, trace_t *ptr, ShouldHitFunc_t pExtraShouldHitCheckFn = nullptr)
 {
 	VPROF_BUDGET("HolyLib - UTIL_TraceRay", VPROF_BUDGETGROUP_HOLYLIB);
 	CTraceFilterSimple traceFilter(ignore, collisionGroup, pExtraShouldHitCheckFn);
@@ -132,6 +132,11 @@ inline void HolyLib_UTIL_TraceRay(const Ray_t &ray, unsigned int mask, const IHa
 	//	DebugDrawLine( ptr->startpos, ptr->endpos, 255, 0, 0, true, -1.0f );
 	//}
 }
+
+/*
+	Momentum-Mod made this code!
+	Origin: https://github.com/momentum-mod/game/blob/develop/mp/src/game/shared/momentum/mom_gamemovement.cpp#L2393-L2993
+*/
 
 static Detouring::Hook detour_CGameMovement_TryPlayerMove;
 static int hook_CGameMovement_TryPlayerMove(CGameMovement* gamemovement, Vector* pFirstDest, trace_t* pFirstTrace) // Raphael: We still need to support player->m_surfaceFriction or what it's name was. I removed it since I currently can't get it.
@@ -445,7 +450,7 @@ static int hook_CGameMovement_TryPlayerMove(CGameMovement* gamemovement, Vector*
 		//  and pressing forward and nobody was really using this bounce/reflection feature anyway...
 		if ( numplanes == 1 &&
 			GetMoveType(gamemovement->player) == MOVETYPE_WALK &&
-			GetGroundEntity(gamemovement->player) == NULL )	
+			GetGroundEntity(gamemovement->player) == nullptr )	
 		{
 			for ( i = 0; i < numplanes; i++ )
 			{
@@ -541,23 +546,30 @@ static int hook_CGameMovement_TryPlayerMove(CGameMovement* gamemovement, Vector*
 	return blocked;
 }
 
-IEngineTrace* enginetrace = NULL; // Not static since it's defined as extern in enginecallbacks.h
+IEngineTrace* enginetrace = nullptr; // Not static since it's defined as extern in enginecallbacks.h
 void CSurfFixModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn)
 {
-	enginetrace = (IEngineTrace*)appfn[0](INTERFACEVERSION_ENGINETRACE_SERVER, NULL);
-	Detour::CheckValue("get interface", "enginetrace", enginetrace != NULL);
+	enginetrace = (IEngineTrace*)appfn[0](INTERFACEVERSION_ENGINETRACE_SERVER, nullptr);
+	Detour::CheckValue("get interface", "enginetrace", enginetrace != nullptr);
 }
+
+#if SYSTEM_WINDOWS
+DETOUR_THISCALL_START()
+	DETOUR_THISCALL_ADDRETFUNC2( hook_CGameMovement_TryPlayerMove, int, TryPlayerMove, CGameMovement*, Vector*, trace_t* );
+DETOUR_THISCALL_FINISH();
+#endif
 
 void CSurfFixModule::InitDetour(bool bPreServer)
 {
 	if (bPreServer || !gpGlobals)
 		return;
 
+	DETOUR_PREPARE_THISCALL();
 	SourceSDK::FactoryLoader server_loader("server");
 	Detour::Create(
 		&detour_CGameMovement_TryPlayerMove, "CGameMovement::TryPlayerMove",
 		server_loader.GetModule(), Symbols::CGameMovement_TryPlayerMoveSym,
-		(void*)hook_CGameMovement_TryPlayerMove, m_pID
+		(void*)DETOUR_THISCALL(hook_CGameMovement_TryPlayerMove, TryPlayerMove), m_pID
 	);
 
 	func_MoveHelperServer = (Symbols::MoveHelperServer)Detour::GetFunction(server_loader.GetModule(), Symbols::MoveHelperServerSym);

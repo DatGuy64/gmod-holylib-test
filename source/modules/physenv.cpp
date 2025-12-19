@@ -40,8 +40,8 @@
 #endif
 
 #if !defined(CUSTOM_VPHYSICS_BUILD)
-typedef GMODSDK::CPhysicsEnvironment CPhysicsEnvironment;
-typedef GMODSDK::CPhysicsObject CPhysicsObject;
+using CPhysicsEnvironment = GMODSDK::CPhysicsEnvironment;
+using CPhysicsObject = GMODSDK::CPhysicsObject;
 #endif
 #include "physics_collisionevent.h"
 
@@ -51,22 +51,22 @@ typedef GMODSDK::CPhysicsObject CPhysicsObject;
 class CPhysEnvModule : public IModule
 {
 public:
-	virtual void Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn);
-	virtual void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit);
-	virtual void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua);
-	virtual void InitDetour(bool bPreServer);
-	virtual void Shutdown();
-	virtual const char* Name() { return "physenv"; };
-	virtual int Compatibility() { return LINUX32 | LINUX64; };
+	void Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn) override;
+	void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) override;
+	void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) override;
+	void InitDetour(bool bPreServer) override;
+	void Shutdown() override;
+	const char* Name() override { return "physenv"; };
+	int Compatibility() override { return LINUX32 | LINUX64; };
 };
 
-CPhysEnvModule g_pPhysEnvModule;
+static CPhysEnvModule g_pPhysEnvModule;
 IModule* pPhysEnvModule = &g_pPhysEnvModule;
 
 // Useful when you need a stacktrace of what happens before HolyLib:OnPhysicsLag is called. Having it as a lua function causes the backtracing to fail in gdb :sob:
 #define IVP_ALLOW_DIE_FOR_DEBUGGING 0
 
-enum IVP_SkipType {
+enum class IVP_SkipType {
 	//IVP_NoCall = -2, // Were not in our expected simulation, so don't handle anything.
 	IVP_None = -1, // We didn't ask lua yet. So make the lua call.
 
@@ -91,53 +91,58 @@ static inline ILuaPhysicsEnvironment* RegisterPhysicsEnvironment(IPhysicsEnviron
 static inline void UnregisterPhysicsEnvironment(IPhysicsEnvironment* pEnv);
 void CheckPhysicsLag(const char* strFunctionName, CPhysicsObject* pObject1, CPhysicsObject* pObject2);
 static thread_local bool g_pIsInPhysicsLagCall = false;
+#if CUSTOM_VPHYSICS_BUILD
+#define IVPHolyLib_OVERRIDE override
+#else
+#define IVPHolyLib_OVERRIDE
+#endif
 class IVPHolyLib
 #if CUSTOM_VPHYSICS_BUILD
 	: public IVP_HolyLib_Callbacks
 #endif
 {
 public:
-	virtual ~IVPHolyLib() {};
+	~IVPHolyLib() IVPHolyLib_OVERRIDE {};
 
-	virtual bool CheckLag(const char* strFunctionName, void* pObject1, void* pObject2)
+	bool CheckLag(const char* strFunctionName, void* pObject1, void* pObject2) IVPHolyLib_OVERRIDE
 	{
 		CheckPhysicsLag(strFunctionName, static_cast<CPhysicsObject*>(pObject1), static_cast<CPhysicsObject*>(pObject2));
 
 		return ShouldSkip();
 	}
 
-	virtual void OnEnvironmentCreated(IPhysicsEnvironment* pEnvironment)
+	void OnEnvironmentCreated(IPhysicsEnvironment* pEnvironment) IVPHolyLib_OVERRIDE
 	{
 		RegisterPhysicsEnvironment(pEnvironment);
 	}
 
-	virtual void OnEnvironmentDestroyed(IPhysicsEnvironment* pEnvironment)
+	void OnEnvironmentDestroyed(IPhysicsEnvironment* pEnvironment) IVPHolyLib_OVERRIDE
 	{
 		UnregisterPhysicsEnvironment(pEnvironment);
 	}
 
-	virtual void SimulationBegin()
+	void SimulationBegin() IVPHolyLib_OVERRIDE
 	{
 		pCurrentTime = std::chrono::high_resolution_clock::now();
 		pCurrentSkipType = IVP_SkipType::IVP_None;
 	}
 
-	virtual void SimulationFinish()
+	void SimulationFinish() IVPHolyLib_OVERRIDE
 	{
 		pCurrentSkipType = IVP_SkipType::IVP_None;
 	}
 	
-	virtual bool ShouldSkip()
+	bool ShouldSkip() IVPHolyLib_OVERRIDE
 	{
 		return ((int)pCurrentSkipType) > 0;
 	}
 
-	virtual void ThrowRecheckOVWarning()
+	void ThrowRecheckOVWarning() IVPHolyLib_OVERRIDE
 	{
 		Warning(PROJECT_NAME " - physenv: Tried to recheck_ov_element while already in a recheck_ov_element call!\nDon't change the collision rules of the current physObject!\n");
 	}
 
-	virtual bool ShouldSkipRecheck_ov_element()
+	bool ShouldSkipRecheck_ov_element() IVPHolyLib_OVERRIDE
 	{
 		if (g_pIsInPhysicsLagCall)
 		{
@@ -187,7 +192,6 @@ void CheckPhysicsLag(const char* pFunctionName, CPhysicsObject* pObject1, CPhysi
 			{
 				auto ivp_vector = g_pPhysicsHolyLib->GetRecheckOVVector();
 				g_Lua->PreCreateTable(ivp_vector.len(), ivp_vector.len());
-				int i = 0;
 				for (int i=0; i< ivp_vector.len(); ++i)
 				{
 					IPhysicsObject* pCurrentOVObject = (IPhysicsObject*)ivp_vector.element_at(i)->client_data;
@@ -230,8 +234,8 @@ void CheckPhysicsLag(const char* pFunctionName, CPhysicsObject* pObject1, CPhysi
 			if (g_Lua->CallFunctionProtected(6, 1, true))
 			{
 				int pType = (int)g_Lua->GetNumber(-1);
-				if (pType >= IVP_SkipType::IVP_LastSkipType || pType < -1)
-					pType = IVP_NoSkip; // Invalid value. So we won't do shit.
+				if (pType >= (int)IVP_SkipType::IVP_LastSkipType || pType < -1)
+					pType = (int)IVP_SkipType::IVP_NoSkip; // Invalid value. So we won't do shit.
 
 #if IVP_ALLOW_DIE_FOR_DEBUGGING
 				if (pType == IVP_Die)
@@ -256,22 +260,38 @@ void CheckPhysicsLag(const char* pFunctionName, CPhysicsObject* pObject1, CPhysi
 	}
 }
 
+IPhysics* g_pPhysics = nullptr;
+static thread_local bool g_pIsInPostPhysicsLagCall = false;
 void PostPhysicsLag()
 {
-	if (pCurrentSkipType != IVP_None && !g_pIsInPhysicsLagCall && Lua::PushHook("HolyLib:PostPhysicsLag"))
+	if (pCurrentSkipType != IVP_SkipType::IVP_None && !g_pIsInPostPhysicsLagCall && Lua::PushHook("HolyLib:PostPhysicsLag"))
 	{
 		auto pTime = std::chrono::high_resolution_clock::now();
 		auto pSimulationTime = std::chrono::duration_cast<std::chrono::milliseconds>(pTime - pCurrentTime).count();
 		g_Lua->PushNumber((double)pSimulationTime);
 
-		g_pIsInPhysicsLagCall = true;
+		g_pIsInPostPhysicsLagCall = true;
+		// VERIFY: What if someone calls IPhysicsEnvironment:Simulate? I mean... it should kinda be fine... right?
+		// BUG: I hate that this is hard coded for the main environment... how the heck could one know which environment is lagging+
+		bool bPrevious = false;
+		CPhysicsEnvironment* pEnvironment = (CPhysicsEnvironment*)g_pPhysics->GetActiveEnvironmentByIndex(0);
+		if (pEnvironment)
+		{
+			bPrevious = pEnvironment->IsInSimulation();
+			pEnvironment->m_inSimulation = false; // ToDo: Jolt needs support
+		}
+
 		pCurrentTime = std::chrono::high_resolution_clock::now(); // Update timer.
 		if (g_Lua->CallFunctionProtected(2, 0, true))
 		{
 			if (g_pPhysEnvModule.InDebug() > 2)
 				Msg(PROJECT_NAME " - physenv: HolyLib:PostPhysicsLag hook called!\n");
 		}
-		g_pIsInPhysicsLagCall = false;
+
+		if (pEnvironment)
+			pEnvironment->m_inSimulation = bPrevious;
+
+		g_pIsInPostPhysicsLagCall = false;
 	}
 }
 
@@ -285,7 +305,7 @@ static thread_local bool* g_fDeferDeleteMindist;
 static Detouring::Hook detour_IVP_Mindist_D2;
 static void hook_IVP_Mindist_D2(IVP_Mindist* mindist)
 {
-	if (g_bInImpactCall && *g_fDeferDeleteMindist && *g_pCurrentMindist == NULL)
+	if (g_bInImpactCall && *g_fDeferDeleteMindist && *g_pCurrentMindist == nullptr)
 	{
 		*g_fDeferDeleteMindist = false; // The single thing missing in the physics engine that causes it to break.....
 		Warning(PROJECT_NAME " - physenv: Someone forgot to call Entity:CollisionRulesChanged!\n");
@@ -331,12 +351,12 @@ static void hook_IVP_Mindist_simulate_time_event(GMODSDK::IVP_Mindist* mindist, 
 		Msg(PROJECT_NAME " - physenv: IVP_Mindist::simulate_time_event called! (%i)\n", (int)pCurrentSkipType);
 
 	
-	GMODSDK::IVP_Real_Object* pObjs[2] = {NULL, NULL};
+	GMODSDK::IVP_Real_Object* pObjs[2] = {nullptr, nullptr};
 	if (func_IVP_Mindist_Base_get_objects)
 	{
 		func_IVP_Mindist_Base_get_objects(mindist, pObjs);
 
-		CheckPhysicsLag("IVP_Mindist::simulate_time_event", pObjs[0] ? (CPhysicsObject*)pObjs[0]->client_data : NULL, pObjs[1] ? (CPhysicsObject*)pObjs[1]->client_data : NULL);
+		CheckPhysicsLag("IVP_Mindist::simulate_time_event", pObjs[0] ? (CPhysicsObject*)pObjs[0]->client_data : nullptr, pObjs[1] ? (CPhysicsObject*)pObjs[1]->client_data : nullptr);
 	}
 
 	if (pCurrentSkipType == IVP_SkipType::IVP_SkipSimulation)
@@ -351,12 +371,12 @@ static void hook_IVP_Mindist_update_exact_mindist_events(GMODSDK::IVP_Mindist* m
 	if (g_pPhysEnvModule.InDebug() > 2)
 		Msg(PROJECT_NAME " - physenv: IVP_Mindist::update_exact_mindist_events called! (%i)\n", (int)pCurrentSkipType);
 
-	GMODSDK::IVP_Real_Object* pObjs[2] = {NULL, NULL};
+	GMODSDK::IVP_Real_Object* pObjs[2] = {nullptr, nullptr};
 	if (func_IVP_Mindist_Base_get_objects)
 	{
 		func_IVP_Mindist_Base_get_objects(mindist, pObjs);
 
-		CheckPhysicsLag("IVP_Mindist::update_exact_mindist_events", pObjs[0] ? (CPhysicsObject*)pObjs[0]->client_data : NULL, pObjs[1] ? (CPhysicsObject*)pObjs[1]->client_data : NULL);
+		CheckPhysicsLag("IVP_Mindist::update_exact_mindist_events", pObjs[0] ? (CPhysicsObject*)pObjs[0]->client_data : nullptr, pObjs[1] ? (CPhysicsObject*)pObjs[1]->client_data : nullptr);
 	}
 
 	if (pCurrentSkipType == IVP_SkipType::IVP_SkipSimulation)
@@ -370,12 +390,12 @@ static void hook_IVP_Mindist_update_exact_mindist_events(GMODSDK::IVP_Mindist* m
 static Detouring::Hook detour_IVP_Mindist_Minimize_Solver_p_minimize_PP;
 static GMODSDK::IVP_MRC_TYPE hook_IVP_Mindist_Minimize_Solver_p_minimize_PP(GMODSDK::IVP_Mindist_Minimize_Solver* mindistMinimizeSolver, const GMODSDK::IVP_Compact_Edge *A, const GMODSDK::IVP_Compact_Edge *B, IVP_Cache_Ledge_Point *m_cache_A, IVP_Cache_Ledge_Point *m_cache_B)
 {
-	GMODSDK::IVP_Real_Object* pObjs[2] = {NULL, NULL};
+	GMODSDK::IVP_Real_Object* pObjs[2] = {nullptr, nullptr};
 	if (func_IVP_Mindist_Base_get_objects)
 	{
 		func_IVP_Mindist_Base_get_objects(mindistMinimizeSolver->mindist, pObjs);
 
-		CheckPhysicsLag("IVP_Mindist_Minimize_Solver::p_minimize_PP", pObjs[0] ? (CPhysicsObject*)pObjs[0]->client_data : NULL, pObjs[1] ? (CPhysicsObject*)pObjs[1]->client_data : NULL);
+		CheckPhysicsLag("IVP_Mindist_Minimize_Solver::p_minimize_PP", pObjs[0] ? (CPhysicsObject*)pObjs[0]->client_data : nullptr, pObjs[1] ? (CPhysicsObject*)pObjs[1]->client_data : nullptr);
 	}
 
 	return detour_IVP_Mindist_Minimize_Solver_p_minimize_PP.GetTrampoline<Symbols::IVP_Mindist_Minimize_Solver_p_minimize_PP>()(mindistMinimizeSolver, A, B, m_cache_A, m_cache_B);
@@ -460,7 +480,7 @@ LUA_FUNCTION_STATIC(physenv_SetPhysSkipType)
 
 LUA_FUNCTION_STATIC(physenv_GetPhysSkipType)
 {
-	LUA->PushNumber(pCurrentSkipType);
+	LUA->PushNumber((int)pCurrentSkipType);
 	return 1;
 }
 
@@ -472,7 +492,7 @@ LUA_FUNCTION_STATIC(physenv_ShouldSkip)
 
 class CPhysicsCollisionSet : public IPhysicsCollisionSet
 {
-	virtual ~CPhysicsCollisionSet() {}
+	~CPhysicsCollisionSet() {}
 private:
 	unsigned int m_bits[32];
 };
@@ -488,16 +508,15 @@ public: // private? Naaaa I beg to differ
 
 IVModelInfo* modelinfo;
 IStaticPropMgrServer* staticpropmgr;
-IPhysics* g_pPhysics = NULL;
-static IPhysicsCollision* g_pPhysCollide = NULL;
+static IPhysicsCollision* g_pPhysCollide = nullptr;
 static IPhysicsSurfaceProps* g_pPhysProps;
 void CPhysEnvModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn)
 {
 	if (appfn[0])
 	{
-		g_pPhysics = (IPhysics*)appfn[0](VPHYSICS_INTERFACE_VERSION, NULL);
-		g_pPhysProps = (IPhysicsSurfaceProps*)appfn[0](VPHYSICS_SURFACEPROPS_INTERFACE_VERSION, NULL);
-		g_pPhysCollide = (IPhysicsCollision*)appfn[0](VPHYSICS_COLLISION_INTERFACE_VERSION, NULL);
+		g_pPhysics = (IPhysics*)appfn[0](VPHYSICS_INTERFACE_VERSION, nullptr);
+		g_pPhysProps = (IPhysicsSurfaceProps*)appfn[0](VPHYSICS_SURFACEPROPS_INTERFACE_VERSION, nullptr);
+		g_pPhysCollide = (IPhysicsCollision*)appfn[0](VPHYSICS_COLLISION_INTERFACE_VERSION, nullptr);
 	} else {
 		SourceSDK::FactoryLoader vphysics_loader("vphysics");
 		g_pPhysics = vphysics_loader.GetInterface<IPhysics>(VPHYSICS_INTERFACE_VERSION);
@@ -505,22 +524,22 @@ void CPhysEnvModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn)
 		g_pPhysCollide = vphysics_loader.GetInterface<IPhysicsCollision>(VPHYSICS_COLLISION_INTERFACE_VERSION);
 	}
 
-	Detour::CheckValue("get interface", "g_pPhysics", g_pPhysics != NULL);
-	Detour::CheckValue("get interface", "g_pPhysProps", g_pPhysProps != NULL);
-	Detour::CheckValue("get interface", "g_pPhysCollide", g_pPhysCollide != NULL);
+	Detour::CheckValue("get interface", "g_pPhysics", g_pPhysics != nullptr);
+	Detour::CheckValue("get interface", "g_pPhysProps", g_pPhysProps != nullptr);
+	Detour::CheckValue("get interface", "g_pPhysCollide", g_pPhysCollide != nullptr);
 
 	if (appfn[0])
 	{
-		staticpropmgr = (IStaticPropMgrServer*)appfn[0](INTERFACEVERSION_STATICPROPMGR_SERVER, NULL);
-		modelinfo = (IVModelInfo*)appfn[0](VMODELINFO_SERVER_INTERFACE_VERSION, NULL);
+		staticpropmgr = (IStaticPropMgrServer*)appfn[0](INTERFACEVERSION_STATICPROPMGR_SERVER, nullptr);
+		modelinfo = (IVModelInfo*)appfn[0](VMODELINFO_SERVER_INTERFACE_VERSION, nullptr);
 	} else {
 		SourceSDK::FactoryLoader engine_loader("engine");
 		staticpropmgr = engine_loader.GetInterface<IStaticPropMgrServer>(INTERFACEVERSION_STATICPROPMGR_SERVER);
 		modelinfo = engine_loader.GetInterface<IVModelInfo>(VMODELINFO_SERVER_INTERFACE_VERSION);
 	}
 
-	Detour::CheckValue("get interface", "staticpropmgr", staticpropmgr != NULL);
-	Detour::CheckValue("get interface", "modelinfo", modelinfo != NULL);
+	Detour::CheckValue("get interface", "staticpropmgr", staticpropmgr != nullptr);
+	Detour::CheckValue("get interface", "modelinfo", modelinfo != nullptr);
 }
 
 //PushReferenced_LuaClass(IPhysicsObject) // This will later cause so much pain when they become Invalid XD
@@ -529,7 +548,7 @@ void CPhysEnvModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn)
 static inline bool IsRegisteredPhysicsObject(IPhysicsObject* pObject);
 #if CUSTOM_VPHYSICS_BUILD
 GMODGet_LuaClass(IPhysicsObject, GarrysMod::Lua::Type::PhysObj, "PhysObj",
-	if (!(g_pPhysicsHolyLib != NULL ? g_pPhysicsHolyLib->IsValidObject(pVar) : IsRegisteredPhysicsObject(pVar)) && bError) {
+	if (!(g_pPhysicsHolyLib != nullptr ? g_pPhysicsHolyLib->IsValidObject(pVar) : IsRegisteredPhysicsObject(pVar)) && bError) {
 		LUA->ThrowError(triedNull_IPhysicsObject.c_str());
 	}
 );
@@ -540,10 +559,10 @@ GMODGet_LuaClass(IPhysicsObject, GarrysMod::Lua::Type::PhysObj, "PhysObj",
 	}
 );
 #endif
-static CCollisionEvent* g_Collisions = NULL;
+static CCollisionEvent* g_Collisions = nullptr;
 static void TryFetchingGCollisions()
 {
-	if (g_Collisions != NULL)
+	if (g_Collisions != nullptr)
 		return;
 
 	CPhysicsEnvironment* pMainEnvironment = (CPhysicsEnvironment*)g_pPhysics->GetActiveEnvironmentByIndex(0);
@@ -564,7 +583,7 @@ static void TryFetchingGCollisions()
 class CLuaPhysicsObjectEvent : public IPhysicsObjectEvent
 {
 public:
-	virtual void ObjectWake(IPhysicsObject* obj)
+	void ObjectWake(IPhysicsObject* obj)
 	{
 		g_Collisions->ObjectWake(obj);
 
@@ -576,7 +595,7 @@ public:
 		pLua->CallFunctionProtected(1, 0, true);
 	}
 
-	virtual void ObjectSleep(IPhysicsObject* obj)
+	void ObjectSleep(IPhysicsObject* obj)
 	{
 		g_Collisions->ObjectSleep(obj);
 
@@ -589,7 +608,7 @@ public:
 	}
 
 public:
-	virtual ~CLuaPhysicsObjectEvent()
+	~CLuaPhysicsObjectEvent()
 	{
 		if (m_iObjectWakeFunction != -1)
 		{
@@ -634,7 +653,7 @@ public:
 		UnHook(&IPhysicsEnvironment::DestroyObject);
 	}
 
-	virtual void DestroyObject(IPhysicsObject* pObject)
+	void DestroyObject(IPhysicsObject* pObject)
 	{
 		hook_CPhysicsEnvironment_DestroyObject((GMODSDK::CPhysicsEnvironment*)This(), pObject);
 	}
@@ -675,7 +694,7 @@ struct ILuaPhysicsEnvironment
 		pEnvironmentProxy->DeInit();
 #endif
 		//g_pPhysics->DestroyEnvironment(pEnvironment);
-		pEnvironment = NULL;
+		pEnvironment = nullptr;
 
 #if PHYSENV_INCLUDEIVPFALLBACK
 		for (IPhysicsObject* pObject : pObjects)
@@ -730,14 +749,14 @@ struct ILuaPhysicsEnvironment
 	std::unordered_set<IPhysicsObject*> pObjects;
 #endif
 	
-	IPhysicsEnvironment* pEnvironment = NULL;
+	IPhysicsEnvironment* pEnvironment = nullptr;
 #if defined(SYSTEM_WINDOWS) && PHYSENV_INCLUDEIVPFALLBACK
-	std::unique_ptr<CPhysicsEnvironmentProxy> pEnvironmentProxy = NULL;
+	std::unique_ptr<CPhysicsEnvironmentProxy> pEnvironmentProxy = nullptr;
 #endif
-	CLuaPhysicsObjectEvent* pObjectEvent = NULL;
+	CLuaPhysicsObjectEvent* pObjectEvent = nullptr;
 	GarrysMod::Lua::ILuaInterface* pLua = g_Lua;
-	//CLuaPhysicsCollisionSolver* pCollisionSolver = NULL;
-	//CLuaPhysicsCollisionEvent* pCollisionEvent = NULL;
+	//CLuaPhysicsCollisionSolver* pCollisionSolver = nullptr;
+	//CLuaPhysicsCollisionEvent* pCollisionEvent = nullptr;
 };
 
 /*
@@ -772,7 +791,7 @@ static inline ILuaPhysicsEnvironment* GetPhysicsEnvironment(IPhysicsEnvironment*
 	if (it != g_pEnvironmentToLua.end())
 		return it->second;
 
-	return NULL;
+	return nullptr;
 }
 
 #if PHYSENV_INCLUDEIVPFALLBACK
@@ -807,7 +826,7 @@ static inline ILuaPhysicsEnvironment* GetPhysicsObjectLuaEnvironment(IPhysicsObj
 	if (it != g_pObjects.end())
 		return it->second;
 
-	return NULL;
+	return nullptr;
 }
 
 /*
@@ -998,7 +1017,7 @@ static IPhysicsEnvironment* GetPhysicsEnvironmentFromLua(GarrysMod::Lua::ILuaInt
 	if (bError && (!pLuaEnv || !pLuaEnv->pEnvironment))
 		LUA->ThrowError(triedNull_ILuaPhysicsEnvironment.c_str());
 
-	return pLuaEnv ? pLuaEnv->pEnvironment : NULL;
+	return pLuaEnv ? pLuaEnv->pEnvironment : nullptr;
 }
 
 LUA_FUNCTION_STATIC(physenv_CreateEnvironment)
@@ -1077,7 +1096,7 @@ LUA_FUNCTION_STATIC(physenv_GetActiveEnvironmentByIndex)
 	IPhysicsEnvironment* pEnvironment = g_pPhysics->GetActiveEnvironmentByIndex(index);
 	if (!pEnvironment)
 	{
-		Push_ILuaPhysicsEnvironment(LUA, NULL);
+		Push_ILuaPhysicsEnvironment(LUA, nullptr);
 		return 1;
 	}
 
@@ -1181,7 +1200,7 @@ LUA_FUNCTION_STATIC(IPhysicsCollisionSet_IsValid)
 {
 	IPhysicsCollisionSet* pCollideSet = Get_IPhysicsCollisionSet(LUA, 1, false);
 
-	LUA->PushBool(pCollideSet != NULL);
+	LUA->PushBool(pCollideSet != nullptr);
 	return 1;
 }
 
@@ -1234,7 +1253,7 @@ LUA_FUNCTION_STATIC(IPhysicsEnvironment_IsValid)
 {
 	IPhysicsEnvironment* pEnvironment = GetPhysicsEnvironmentFromLua(LUA, 1, false);
 
-	LUA->PushBool(pEnvironment != NULL);
+	LUA->PushBool(pEnvironment != nullptr);
 	return 1;
 }
 
@@ -1394,7 +1413,7 @@ LUA_FUNCTION_STATIC(IPhysicsEnvironment_GetActiveObjects)
 	IPhysicsEnvironment* pEnvironment = GetPhysicsEnvironmentFromLua(LUA, 1, true);
 
 	int activeCount = pEnvironment->GetActiveObjectCount();
-	IPhysicsObject** pActiveList = NULL;
+	IPhysicsObject** pActiveList = nullptr;
 	if (!activeCount)
 		return 0;
 
@@ -1513,7 +1532,7 @@ LUA_FUNCTION_STATIC(IPhysicsEnvironment_Simulate)
 		pEnvironment->Simulate(deltaTime);
 
 	int activeCount = pEnvironment->GetActiveObjectCount();
-	IPhysicsObject **pActiveList = NULL;
+	IPhysicsObject **pActiveList = nullptr;
 	if ( activeCount )
 	{
 		pActiveList = (IPhysicsObject **)stackalloc( sizeof(IPhysicsObject *)*activeCount );
@@ -1574,14 +1593,14 @@ LUA_FUNCTION_STATIC(physenv_GetCurrentEnvironment)
 
 const objectparams_t g_PhysDefaultObjectParams =
 {
-	NULL,
+	nullptr,
 	1.0, //mass
 	1.0, // inertia
 	0.1f, // damping
 	0.1f, // rotdamping
 	0.05f, // rotIntertiaLimit
 	"DEFAULT",
-	NULL,// game data
+	nullptr,// game data
 	0.f, // volume (leave 0 if you don't have one or call physcollision->CollideVolume() to compute it)
 	1.0f, // drag coefficient
 	true,// enable collisions?
@@ -1800,7 +1819,7 @@ IPhysicsObject *PhysCreateWorld_Shared( IPhysicsEnvironment* pEnvironment, CBase
 	fluid_t fluid;
 
 	if ( !pEnvironment )
-		return NULL;
+		return nullptr;
 
 	int surfaceData = g_pPhysProps->GetSurfaceIndex( "default" );
 
@@ -1861,7 +1880,7 @@ IPhysicsObject *PhysCreateWorld_Shared( IPhysicsEnvironment* pEnvironment, CBase
 		}
 		else if ( !strcmpi( pBlock, "fluid" ) )
 		{
-			pParse->ParseFluid( &fluid, NULL );
+			pParse->ParseFluid( &fluid, nullptr );
 
 			// create a fluid for floating
 			if ( fluid.index > 0 )
@@ -1885,7 +1904,7 @@ IPhysicsObject *PhysCreateWorld_Shared( IPhysicsEnvironment* pEnvironment, CBase
 			intp surfaceTable[128];
 			memset( surfaceTable, 0, sizeof(surfaceTable) );
 
-			pParse->ParseSurfaceTable( surfaceTable, NULL );
+			pParse->ParseSurfaceTable( surfaceTable, nullptr );
 			g_pPhysProps->SetWorldMaterialIndexTable( surfaceTable, 128 );
 		}
 		else if ( !strcmpi(pBlock, "virtualterrain" ) )
@@ -1917,7 +1936,9 @@ IPhysicsObject *PhysCreateWorld(IPhysicsEnvironment* pEnvironment, CBaseEntity* 
 
 LUA_FUNCTION_STATIC(IPhysicsEnvironment_CreateWorldPhysics)
 {
+#if 0
 	ILuaPhysicsEnvironment* pLuaEnv = Get_ILuaPhysicsEnvironment(LUA, 1, true);
+#endif
 	IPhysicsEnvironment* pEnvironment = GetPhysicsEnvironmentFromLua(LUA, 1, true);
 	
 #if ARCHITECTURE_IS_X86
@@ -1951,7 +1972,7 @@ LUA_FUNCTION_STATIC(CPhysCollide_IsValid)
 {
 	CPhysCollide* pCollide = Get_CPhysCollide(LUA, 1, false);
 
-	LUA->PushBool(pCollide != NULL);
+	LUA->PushBool(pCollide != nullptr);
 	return 1;
 }
 
@@ -1974,7 +1995,7 @@ LUA_FUNCTION_STATIC(CPhysPolysoup_IsValid)
 {
 	CPhysPolysoup* pPolySoup = Get_CPhysPolysoup(LUA, 1, false);
 
-	LUA->PushBool(pPolySoup != NULL);
+	LUA->PushBool(pPolySoup != nullptr);
 	return 1;
 }
 
@@ -1997,7 +2018,7 @@ LUA_FUNCTION_STATIC(CPhysConvex_IsValid)
 {
 	CPhysConvex* pConvex = Get_CPhysConvex(LUA, 1, false);
 
-	LUA->PushBool(pConvex != NULL);
+	LUA->PushBool(pConvex != nullptr);
 	return 1;
 }
 
@@ -2020,7 +2041,7 @@ LUA_FUNCTION_STATIC(ICollisionQuery_IsValid)
 {
 	ICollisionQuery* pQuery = Get_ICollisionQuery(LUA, 1, false);
 
-	LUA->PushBool(pQuery != NULL);
+	LUA->PushBool(pQuery != nullptr);
 	return 1;
 }
 
@@ -2641,10 +2662,10 @@ void CPhysEnvModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerIn
 		Util::AddFunc(pLua, physenv_GetPhysSkipType, "GetPhysSkipType");
 		Util::AddFunc(pLua, physenv_ShouldSkip, "ShouldSkip");
 
-		Util::AddValue(pLua, IVP_SkipType::IVP_None, "IVP_None");
-		Util::AddValue(pLua, IVP_SkipType::IVP_NoSkip, "IVP_NoSkip");
-		Util::AddValue(pLua, IVP_SkipType::IVP_SkipImpact, "IVP_SkipImpact");
-		Util::AddValue(pLua, IVP_SkipType::IVP_SkipSimulation, "IVP_SkipSimulation");
+		Util::AddValue(pLua, (int)IVP_SkipType::IVP_None, "IVP_None");
+		Util::AddValue(pLua, (int)IVP_SkipType::IVP_NoSkip, "IVP_NoSkip");
+		Util::AddValue(pLua, (int)IVP_SkipType::IVP_SkipImpact, "IVP_SkipImpact");
+		Util::AddValue(pLua, (int)IVP_SkipType::IVP_SkipSimulation, "IVP_SkipSimulation");
 #if IVP_ALLOW_DIE_FOR_DEBUGGING
 		Util::AddValue(pLua, IVP_SkipType::IVP_Die, "IVP_Die");
 #endif
@@ -2712,7 +2733,13 @@ void CPhysEnvModule::LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua)
 	DeleteAll_IPhysicsCollisionSet(pLua);
 }
 
-static DLL_Handle g_pPhysicsModule = NULL;
+#if SYSTEM_WINDOWS
+DETOUR_THISCALL_START()
+	DETOUR_THISCALL_ADDFUNC0( hook_CPhysicsHook_FrameUpdatePostEntityThink, FrameUpdatePostEntityThink, void* );
+DETOUR_THISCALL_FINISH();
+#endif
+
+static DLL_Handle g_pPhysicsModule = nullptr;
 void CPhysEnvModule::InitDetour(bool bPreServer)
 {
 #if CUSTOM_VPHYSICS_BUILD
@@ -2731,7 +2758,7 @@ void CPhysEnvModule::InitDetour(bool bPreServer)
 			SetIVPHolyLibCallbacks(&g_pIVPHolyLib);
 			g_bReplacedIVP = true;
 		} else {
-			g_pPhysicsHolyLib = NULL;
+			g_pPhysicsHolyLib = nullptr;
 		}
 		return;
 	}
@@ -2740,9 +2767,10 @@ void CPhysEnvModule::InitDetour(bool bPreServer)
 	if (g_pPhysicsModule)
 	{
 		DLL_UnloadModule(g_pPhysicsModule);
-		g_pPhysicsModule = NULL;
+		g_pPhysicsModule = nullptr;
 	}
 
+	DETOUR_PREPARE_THISCALL();
 #if PHYSENV_INCLUDEIVPFALLBACK
 	if (g_pFullFileSystem)
 	{
@@ -2756,7 +2784,7 @@ void CPhysEnvModule::InitDetour(bool bPreServer)
 			{
 				FileFindHandle_t findHandle;
 				const char *pFilename = g_pFullFileSystem->FindFirstEx("bin/vphysics_jolt_*.*", "BASE_PATH", &findHandle);
-				bIsJoltPhysics = pFilename != NULL;
+				bIsJoltPhysics = pFilename != nullptr;
 				g_pFullFileSystem->FindClose(findHandle);
 			}
 		}
@@ -2883,10 +2911,10 @@ void CPhysEnvModule::InitDetour(bool bPreServer)
 
 #if defined(ARCHITECTURE_X86) 
 		g_pCurrentMindist = Detour::ResolveSymbol<IVP_Mindist*>(vphysics_loader, Symbols::g_pCurrentMindistSym);
-		Detour::CheckValue("get class", "g_pCurrentMindist", g_pCurrentMindist != NULL);
+		Detour::CheckValue("get class", "g_pCurrentMindist", g_pCurrentMindist != nullptr);
 
 		g_fDeferDeleteMindist = Detour::ResolveSymbol<bool>(vphysics_loader, Symbols::g_fDeferDeleteMindistSym);
-		Detour::CheckValue("get class", "g_fDeferDeleteMindist", g_fDeferDeleteMindist != NULL);
+		Detour::CheckValue("get class", "g_fDeferDeleteMindist", g_fDeferDeleteMindist != nullptr);
 #endif
 
 		func_IVP_Mindist_Base_get_objects = (Symbols::IVP_Mindist_Base_get_objects)Detour::GetFunction(vphysics_loader.GetModule(), Symbols::IVP_Mindist_Base_get_objectsSym);
@@ -2918,7 +2946,7 @@ void CPhysEnvModule::InitDetour(bool bPreServer)
 	Detour::Create(
 		&detour_CPhysicsHook_FrameUpdatePostEntityThink, "CPhysicsHook::FrameUpdatePostEntityThink",
 		server_loader.GetModule(), Symbols::CPhysicsHook_FrameUpdatePostEntityThinkSym,
-		(void*)hook_CPhysicsHook_FrameUpdatePostEntityThink, m_pID
+		(void*)DETOUR_THISCALL(hook_CPhysicsHook_FrameUpdatePostEntityThink, FrameUpdatePostEntityThink), m_pID
 	);
 
 	func_CCollisionEvent_FrameUpdate = (Symbols::CCollisionEvent_FrameUpdate)Detour::GetFunction(server_loader.GetModule(), Symbols::CCollisionEvent_FrameUpdateSym);
@@ -2942,7 +2970,7 @@ void CPhysEnvModule::Shutdown()
 	if (g_pPhysicsModule)
 	{
 		DLL_UnloadModule(g_pPhysicsModule);
-		g_pPhysicsModule = NULL;
+		g_pPhysicsModule = nullptr;
 		g_bReplacedIVP = false;
 	}
 

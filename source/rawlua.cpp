@@ -58,9 +58,9 @@ void* RawLua::GetUserDataOrFFIVar(lua_State* L, int idx, CDataBridge& cDataBridg
 		if (cDataBridge.IsRegistered(o))
 			return (void*)lj_obj_ptr(G(L), o); // won't mind the const void* -> void* it'll be fine
 		else
-			return NULL;
+			return nullptr;
 	else
-		return NULL;
+		return nullptr;
 }
 
 uint16_t RawLua::GetCDataType(lua_State* L, int idx)
@@ -69,7 +69,7 @@ uint16_t RawLua::GetCDataType(lua_State* L, int idx)
 	if (tviscdata(o))
 		return cdataV(o)->ctypeid;
 	
-	return -1;
+	return (uint16_t)-1;
 }
 
 CTypeID ffi_checkctype(lua_State *L, CTState *cts, TValue* param, const char* pStr)
@@ -92,7 +92,7 @@ CTypeID ffi_checkctype(lua_State *L, CTState *cts, TValue* param, const char* pS
 uint32_t RawLua::GetCTypeFromName(lua_State* L, const char* pName, CDataBridge* cDataBridge)
 {
 	CTState* cts = ctype_cts(L);
-	CTypeID pType = ffi_checkctype(L, cts, NULL, pName);
+	CTypeID pType = ffi_checkctype(L, cts, nullptr, pName);
 	CType* ct = ctype_raw(cts, pType);
 	GCtab* t = cts->miscmap;
 
@@ -175,4 +175,16 @@ int func_isdebugblocked(lua_State* L)
   
 	lua_pushboolean(L, isblockdebug(func->c));
 	return 1;
+}
+
+int RawLua::GetCDataSize(lua_State* L, GCcdata* pVar)
+{
+	if (!cdataisv(pVar))
+	{
+		CType *ct = ctype_raw(ctype_ctsG(G(L)), pVar->ctypeid);
+		CTSize sz = ctype_hassize(ct->info) ? ct->size : CTSIZE_PTR;
+		return sizeof(GCcdata) + sz;
+	} else {
+		return sizecdatav(pVar);
+	}
 }

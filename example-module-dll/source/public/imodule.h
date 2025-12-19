@@ -225,6 +225,9 @@ public:
 	// Returns the IModuleWrapper from the given name.
 	virtual IModuleWrapper* FindModuleByName(const char* name) = 0;
 
+	// Returns the IModuleWrapper form the given module id
+	virtual IModuleWrapper* GetModuleByID(int nIndex) = 0;
+
 	// Marks us to be loaded by a ghostinj.
 	virtual void SetGhostInj() = 0;
 
@@ -245,6 +248,15 @@ public:
 	// Returns true if we were marked as a binary module.
 	// This usually means we were loaded by require("holylib")
 	virtual bool IsMarkedAsBinaryModule() = 0;
+
+	// Tells modules that they can expose / use unsafe code
+	// This allows them to provide an unrestricted API
+	// Though of course people should only use it if they know their code isn't potentially malicious.
+	// (or they may have outside addons/sources that could become malicious)
+	virtual void EnableUnsafeCode() = 0;
+
+	// Returns true if unsafe code is allowed
+	virtual bool IsUnsafeCodeEnabled() = 0;
 
 	// This function is sets the internal variables.
 	virtual void Setup(CreateInterfaceFn appfn, CreateInterfaceFn gamefn) = 0;

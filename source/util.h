@@ -41,7 +41,7 @@ class IGameEventManager2;
 class IServer;
 class IServerGameDLL;
 class ISteamUser;
-struct CBaseHandle;
+class CBaseHandle;
 namespace Util
 {
 	#define LUA_REGISTRYINDEX	(-10000)
@@ -230,6 +230,13 @@ namespace Util
 		return LUA->IsType(-1, iType);
 	}
 
+	// Blocks execution by throwing an error if you tried to call a unsafe function
+	inline void DoUnsafeCodeCheck(GarrysMod::Lua::ILuaInterface* LUA)
+	{
+		if (!g_pModuleManager.IsUnsafeCodeEnabled())
+			LUA->ThrowError("Tried to use a unsafe code function while -holylib_allowunsafe is not active!");
+	}
+
 	// Gmod's functions:
 	extern CBasePlayer* Get_Player(GarrysMod::Lua::ILuaInterface* LUA, int iStackPos, bool bError);
 	extern CBaseEntity* Get_Entity(GarrysMod::Lua::ILuaInterface* LUA, int iStackPos, bool bError);
@@ -258,7 +265,7 @@ namespace Util
 	extern void ResetClusers(VisData* data);
 
 	extern bool ShouldLoad();
-	extern void CheckVersion();
+	extern void CheckVersion(bool bAutoUpdate);
 
 	// The main load/unload functions
 	extern void Load();
@@ -274,7 +281,7 @@ namespace Util
 
 	inline void StartThreadPool(IThreadPool* pool, ThreadPoolStartParams_t& startParams)
 	{
-#if ARCHITECTURE_IS_X86_64 && SYSTEM_LINUX
+#if ARCHITECTURE_IS_X86_64 && SYSTEM_LINUX && DEDICATED
 		startParams.bEnableOnLinuxDedicatedServer = true;
 #endif
 		pool->Start(startParams);
@@ -286,6 +293,14 @@ namespace Util
 		startParams.nThreads = iThreads;
 		startParams.nThreadsMax = startParams.nThreads;
 		Util::StartThreadPool(pool, startParams);
+	}
+
+	// Workaround until https://github.com/Facepunch/garrysmod-issues/issues/6583
+	// On 32x deleting a pool goes fine, on 64x it can randomly freeze indefinetly, its not even consistent. Its random.
+	inline void DestroyThreadPool(IThreadPool* pool)
+	{
+		pool->Stop();
+		::V_DestroyThreadPool(pool);
 	}
 
 	// Gameevent stuff
@@ -350,6 +365,7 @@ public:
 	{
 		m_pDTName = pDTName;
 		m_pVarName = pVarName;
+		m_nArraySize = nArraySize;
 	}
 
 	inline void Init()
@@ -379,7 +395,7 @@ public:
 		return *(void**)Util::GoToNetworkVarOffset(pBase, m_nOffset);
 	}
 
-	FORCEINLINE void* GetPointerArray(const void* pBase, int nArraySlot)
+	FORCEINLINE void* GetPointerArray(const void* pBase, const int nArraySlot)
 	{
 		if (m_nOffset == -1)
 			Init();

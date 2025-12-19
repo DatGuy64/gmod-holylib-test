@@ -11,16 +11,16 @@
 class CEntListModule : public IModule
 {
 public:
-	virtual void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) OVERRIDE;
-	virtual void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) OVERRIDE;
-	virtual void OnEntityCreated(CBaseEntity* pEntity) OVERRIDE;
-	virtual void OnEntityDeleted(CBaseEntity* pEntity) OVERRIDE;
-	virtual const char* Name() { return "entitylist"; };
-	virtual int Compatibility() { return LINUX32 | LINUX64; };
-	//virtual bool SupportsMultipleLuaStates() { return true; };
+	void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) override;
+	void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) override;
+	void OnEntityCreated(CBaseEntity* pEntity) override;
+	void OnEntityDeleted(CBaseEntity* pEntity) override;
+	const char* Name() override { return "entitylist"; };
+	int Compatibility() override { return LINUX32 | LINUX64 | WINDOWS32 | WINDOWS64; };
+	//bool SupportsMultipleLuaStates() override { return true; };
 };
 
-CEntListModule g_pEntListModule;
+static CEntListModule g_pEntListModule;
 IModule* pEntListModule = &g_pEntListModule;
 
 Push_LuaClass(EntityList)
@@ -137,7 +137,7 @@ Default__gc(EntityList,
 
 LUA_FUNCTION_STATIC(EntityList_IsValid)
 {
-	LUA->PushBool(Get_EntityList(LUA, 1, false) != NULL);
+	LUA->PushBool(Get_EntityList(LUA, 1, false) != nullptr);
 	return 1;
 }
 
@@ -245,7 +245,7 @@ LUA_FUNCTION_STATIC(CreateEntityList)
 	EntityList* pList = new EntityList();
 	pList->SetLua(LUA);
 
-	LuaUserData* pData = Push_EntityList(LUA, pList);
+	Push_EntityList(LUA, pList);
 	return 1;
 }
 

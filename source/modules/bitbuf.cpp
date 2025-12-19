@@ -3,6 +3,7 @@
 #include "module.h"
 #include "lua.h"
 #include "bitbuf.h"
+#include <memory>
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -10,10 +11,10 @@
 class CBitBufModule : public IModule
 {
 public:
-	virtual void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) OVERRIDE;
-	virtual void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) OVERRIDE;
-	virtual const char* Name() { return "bitbuf"; };
-	virtual int Compatibility() { return LINUX32 | LINUX64 | WINDOWS32 | WINDOWS64; };
+	void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) override;
+	void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) override;
+	const char* Name() override { return "bitbuf"; };
+	int Compatibility() override { return LINUX32 | LINUX64 | WINDOWS32 | WINDOWS64; };
 };
 
 static CBitBufModule g_pBitBufModule;
@@ -670,7 +671,7 @@ LUA_FUNCTION_STATIC(bf_write_WriteLongLong)
 
 	if (LUA->IsType(2, GarrysMod::Lua::Type::String))
 	{
-		pBF->WriteLongLong(strtoull(LUA->GetString(2), NULL, 0));
+		pBF->WriteLongLong(strtoull(LUA->GetString(2), nullptr, 0));
 	} else {
 		pBF->WriteLongLong((int64)LUA->CheckNumber(2));
 	}
@@ -945,7 +946,7 @@ LUA_FUNCTION_STATIC(bitbuf_CreateStackReadBuffer)
 	// Pushes it onto the stack, since we never use the Push_ HolyLib function.
 	// this will be untracked by the GC BUT you'll have to pop it off the stack BEFORE we leave the scope!
 	LuaUserData pStackLuaData;
-	pStackLuaData.Init(LUA, Lua::GetLuaData(LUA)->GetMetaEntry(Lua::bf_read), &pNewBf, true, true);
+	pStackLuaData.Init(LUA, Lua::GetLuaData(LUA)->GetMetaEntry(Lua::bf_read), &pNewBf, true);
 	pStackLuaData.Push(LUA);
 
 	if (bSimpleCall)
@@ -1015,7 +1016,7 @@ LUA_FUNCTION_STATIC(bitbuf_CreateStackWriteBuffer)
 	// Pushes it onto the stack, since we never use the Push_ HolyLib function.
 	// this will be untracked by the GC BUT you'll have to pop it off the stack BEFORE we leave the scope!
 	LuaUserData pStackLuaData;
-	pStackLuaData.Init(LUA, Lua::GetLuaData(LUA)->GetMetaEntry(Lua::bf_read), &pNewBf, true, true);
+	pStackLuaData.Init(LUA, Lua::GetLuaData(LUA)->GetMetaEntry(Lua::bf_read), &pNewBf, true);
 	pStackLuaData.Push(LUA);
 
 	LUA->CallFunctionProtected(1, 0, true);
@@ -1121,7 +1122,7 @@ void CBitBufModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerIni
 		Util::AddFunc(pLua, bf_write_WriteBitAngle, "WriteBitAngle");
 		Util::AddFunc(pLua, bf_write_WriteBitAngles, "WriteBitAngles");
 		Util::AddFunc(pLua, bf_write_WriteBitVec3Coord, "WriteBitVec3Coord");
-		Util::AddFunc(pLua, bf_write_WriteBitVec3Normal, "WriteBitVec3normal");
+		Util::AddFunc(pLua, bf_write_WriteBitVec3Normal, "WriteBitVec3Normal");
 		Util::AddFunc(pLua, bf_write_WriteBits, "WriteBits");
 		Util::AddFunc(pLua, bf_write_WriteBitsFromBuffer, "WriteBitsFromBuffer");
 		Util::AddFunc(pLua, bf_write_WriteBitNormal, "WriteBitNormal");

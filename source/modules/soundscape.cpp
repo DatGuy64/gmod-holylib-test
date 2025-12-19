@@ -15,15 +15,15 @@
 class CSoundscapeModule : public IModule
 {
 public:
-	virtual void Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn) OVERRIDE;
-	virtual void InitDetour(bool bPreServer) OVERRIDE;
-	virtual void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) OVERRIDE;
-	virtual void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) OVERRIDE;
-	virtual void Shutdown() OVERRIDE;
-	virtual void ClientDisconnect(edict_t* pClient) OVERRIDE;
-	virtual const char* Name() { return "soundscape"; };
-	virtual int Compatibility() { return LINUX32; };
-	virtual bool IsEnabledByDefault() { return true; };
+	void Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn) override;
+	void InitDetour(bool bPreServer) override;
+	void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) override;
+	void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) override;
+	void Shutdown() override;
+	void ClientDisconnect(edict_t* pClient) override;
+	const char* Name() override { return "soundscape"; };
+	int Compatibility() override { return LINUX32; };
+	bool IsEnabledByDefault() override { return true; };
 };
 
 static CSoundscapeModule g_pSoundscapeModule;
@@ -304,16 +304,23 @@ void CSoundscapeModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn
 {
 }
 
+#if SYSTEM_WINDOWS
+DETOUR_THISCALL_START()
+	DETOUR_THISCALL_ADDFUNC1( hook_CEnvSoundscape_UpdateForPlayer, UpdateForPlayer, CBaseEntity*, ss_update_t& );
+DETOUR_THISCALL_FINISH();
+#endif
+
 void CSoundscapeModule::InitDetour(bool bPreServer)
 {
 	if (bPreServer)
 		return;
 
+	DETOUR_PREPARE_THISCALL();
 	SourceSDK::FactoryLoader server_loader("server");
 	Detour::Create(
 		&detour_CEnvSoundscape_UpdateForPlayer, "CEnvSoundscape::UpdateForPlayer",
 		server_loader.GetModule(), Symbols::CEnvSoundscape_UpdateForPlayerSym,
-		(void*)hook_CEnvSoundscape_UpdateForPlayer, m_pID
+		(void*)DETOUR_THISCALL(hook_CEnvSoundscape_UpdateForPlayer, UpdateForPlayer), m_pID
 	);
 
 	g_pSoundscapeSystem = Detour::ResolveSymbol<CSoundscapeSystem>(server_loader, Symbols::g_SoundscapeSystemSym);

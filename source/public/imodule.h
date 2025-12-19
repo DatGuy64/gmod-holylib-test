@@ -18,22 +18,22 @@ namespace GarrysMod::Lua
 
 namespace Bootil
 {
-	typedef std::string BString;
+	using BString = std::string;
 
 	namespace Data
 	{
 		template <typename TString>
 		class TreeT;
-		typedef TreeT<Bootil::BString> Tree;
+		using Tree = TreeT<Bootil::BString>;
 	}
 }
 
-typedef enum // Same as PLUGIN_RESULT of iserverplugin.h
+enum class MODULE_RESULT // Same as PLUGIN_RESULT of iserverplugin.h
 {
-	MODULE_CONTINUE = 0, // keep going
-	MODULE_OVERRIDE, // run the game dll function but use our return value instead
-	MODULE_STOP, // don't run the game dll function at all
-} MODULE_RESULT;
+	CONTINUE = 0, // keep going
+	TAKEOVER, // run the game dll function but use our return value instead
+	STOP, // don't run the game dll function at all
+};
 
 class ConVar;
 class KeyValues;
@@ -43,10 +43,10 @@ struct lua_State;
 class CBaseClient;
 class CCommand;
 
-typedef enum
+enum class IModuleVersion
 {
 	VERSION_1 = 1,
-} IModuleVersion;
+};
 
 class IModule
 {
@@ -148,13 +148,13 @@ public:
 	virtual void ClientPutInServer(edict_t* pClient, const char* pPlayerName) { (void)pClient; (void)pPlayerName; };
 
 	// called when a client connects to the servers
-	virtual MODULE_RESULT ClientConnect(bool* bAllowConnect, edict_t* pClient, const char* pszName, const char* pszAddress, char* reject, int maxrejectlen) { (void)bAllowConnect; (void)pClient; (void)pszName; (void)pszAddress; (void)reject; (void)maxrejectlen; return MODULE_CONTINUE; };
+	virtual MODULE_RESULT ClientConnect(bool* bAllowConnect, edict_t* pClient, const char* pszName, const char* pszAddress, char* reject, int maxrejectlen) { (void)bAllowConnect; (void)pClient; (void)pszName; (void)pszAddress; (void)reject; (void)maxrejectlen; return MODULE_RESULT::CONTINUE; };
 
 	// called when a client spawns into the server
-	virtual MODULE_RESULT ClientCommand(edict_t *pClient, const CCommand* args) { (void)pClient; (void)args; return MODULE_CONTINUE; };
+	virtual MODULE_RESULT ClientCommand(edict_t *pClient, const CCommand* args) { (void)pClient; (void)args; return MODULE_RESULT::CONTINUE; };
 
 	// called when a client spawns into the server
-	virtual MODULE_RESULT NetworkIDValidated(const char *pszUserName, const char *pszNetworkID) { (void)pszUserName; (void)pszNetworkID; return MODULE_CONTINUE; };
+	virtual MODULE_RESULT NetworkIDValidated(const char *pszUserName, const char *pszNetworkID) { (void)pszUserName; (void)pszNetworkID; return MODULE_RESULT::CONTINUE; };
 
 public: // I would like to remove these at some point but it's more efficient if the modules themself have them.
 	unsigned int m_pID = 0; // Set by the CModuleManager when registering it! Don't touch it.
@@ -172,7 +172,7 @@ public:
 	virtual ~IModuleWrapper() = default;
 
 	// Binds the IModuleWrapper to the IModule and Initializes itself.
-	virtual void SetModule(IModule* module) = 0;
+	virtual void SetModule(IModule* pModule) = 0;
 
 	// Returns the module that this wrapper is linked to.
 	virtual IModule* GetModule() = 0;
@@ -203,7 +203,7 @@ public:
 #define LoadStatus_LuaServerInit (1<<4)
 #define LoadStatus_ServerActivate (1<<5)
 
-enum Module_Realm : unsigned char
+enum class Module_Realm : unsigned char
 {
 	CLIENT = 0,
 	SERVER,
@@ -225,6 +225,9 @@ public:
 	// Returns the IModuleWrapper from the given name.
 	virtual IModuleWrapper* FindModuleByName(const char* name) = 0;
 
+	// Returns the IModuleWrapper form the given module id
+	virtual IModuleWrapper* GetModuleByID(int nIndex) = 0;
+
 	// Marks us to be loaded by a ghostinj.
 	virtual void SetGhostInj() = 0;
 
@@ -245,6 +248,15 @@ public:
 	// Returns true if we were marked as a binary module.
 	// This usually means we were loaded by require("holylib")
 	virtual bool IsMarkedAsBinaryModule() = 0;
+
+	// Tells modules that they can expose / use unsafe code
+	// This allows them to provide an unrestricted API
+	// Though of course people should only use it if they know their code isn't potentially malicious.
+	// (or they may have outside addons/sources that could become malicious)
+	virtual void EnableUnsafeCode() = 0;
+
+	// Returns true if unsafe code is allowed
+	virtual bool IsUnsafeCodeEnabled() = 0;
 
 	// This function is sets the internal variables.
 	virtual void Setup(CreateInterfaceFn appfn, CreateInterfaceFn gamefn) = 0;

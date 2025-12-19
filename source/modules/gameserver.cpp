@@ -17,20 +17,20 @@
 class CGameServerModule : public IModule
 {
 public:
-	virtual void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) OVERRIDE;
-	virtual void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) OVERRIDE;
-	virtual void InitDetour(bool bPreServer) OVERRIDE;
-	virtual void OnClientDisconnect(CBaseClient* pClient) OVERRIDE;
-	virtual const char* Name() { return "gameserver"; };
-	virtual int Compatibility() { return LINUX32 | LINUX64; };
-	virtual bool SupportsMultipleLuaStates() { return true; };
+	void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) override;
+	void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) override;
+	void InitDetour(bool bPreServer) override;
+	void OnClientDisconnect(CBaseClient* pClient) override;
+	const char* Name() override { return "gameserver"; };
+	int Compatibility() override { return LINUX32 | LINUX64 | WINDOWS32 | WINDOWS64; };
+	bool SupportsMultipleLuaStates() override { return true; };
 };
 
 static ConVar gameserver_disablespawnsafety("holylib_gameserver_disablespawnsafety", "0", 0, "If enabled, players can spawn on slots above 128 but this WILL cause stability and many other issues!");
 static ConVar gameserver_connectionlesspackethook("holylib_gameserver_connectionlesspackethook", "1", 0, "If enabled, the HolyLib:ProcessConnectionlessPacket hook is active and will be called.");
 ConVar sv_filter_nobanresponse("sv_filter_nobanresponse", "0", 0, "If enabled, a blocked ip won't be informed that its even blocked.");
 
-CGameServerModule g_pGameServerModule;
+static CGameServerModule g_pGameServerModule;
 IModule* pGameServerModule = &g_pGameServerModule;
 
 double net_time;
@@ -49,7 +49,7 @@ public:
 	int				GetType() const { return m_iType; }
 	const char		*GetName() const { return m_strName; }
 
-	INetMessageHandler *m_pMessageHandler = NULL;
+	INetMessageHandler *m_pMessageHandler = nullptr;
 	bool Process() { Warning(PROJECT_NAME ": Tried to process this message? This should never happen!\n"); return true; };
 
 	SVC_CustomMessage() { m_bReliable = false; }
@@ -121,7 +121,7 @@ LUA_FUNCTION_STATIC(CBaseClient_IsValid)
 {
 	CBaseClient* pClient = Get_CBaseClient(LUA, 1, false);
 	
-	LUA->PushBool(pClient != NULL && pClient->IsConnected());
+	LUA->PushBool(pClient != nullptr && pClient->IsConnected());
 	return 1;
 }
 
@@ -219,7 +219,7 @@ LUA_FUNCTION_STATIC(CBaseClient_Disconnect)
 	bool bNoEvent = LUA->GetBool(4);
 
 	if (bSilent)
-		pClient->GetNetChannel()->Shutdown(NULL); // NULL = Send no disconnect message
+		pClient->GetNetChannel()->Shutdown(nullptr); // nullptr = Send no disconnect message
 
 	if (bNoEvent)
 		Util::BlockGameEvent("player_disconnect");
@@ -495,7 +495,7 @@ LUA_FUNCTION_STATIC(CBaseClient_SendSnapshot)
 {
 	CBaseClient* pClient = Get_CBaseClient(LUA, 1, true);
 
-	pClient->SendSnapshot(NULL);
+	pClient->SendSnapshot(nullptr);
 	return 0;
 }*/
 
@@ -575,7 +575,7 @@ LUA_FUNCTION_STATIC(CBaseClient_SetSteamID)
 {
 	CBaseClient* pClient = Get_CBaseClient(LUA, 1, true);
 	const char* steamID64 = LUA->CheckString(2);
-	uint64 steamID = strtoull(steamID64, NULL, 0);
+	uint64 steamID = strtoull(steamID64, nullptr, 0);
 
 	if (steamID == 0)
 	{
@@ -1025,7 +1025,7 @@ LUA_FUNCTION_STATIC(CNetChan_IsValid)
 {
 	CNetChan* pNetChannel = Get_CNetChan(LUA, 1, false);
 	
-	LUA->PushBool(pNetChannel != NULL);
+	LUA->PushBool(pNetChannel != nullptr);
 	return 1;
 }
 
@@ -1431,7 +1431,7 @@ LUA_FUNCTION_STATIC(CNetChan_GetMaxRoutablePayloadSize)
 LUA_FUNCTION_STATIC(CNetChan_Shutdown)
 {
 	CNetChan* pNetChannel = Get_CNetChan(LUA, 1, true);
-	const char* reason = LUA->CheckStringOpt(2, NULL);
+	const char* reason = LUA->CheckStringOpt(2, nullptr);
 
 	pNetChannel->Shutdown(reason);
 	return 0;
@@ -1447,7 +1447,7 @@ LUA_FUNCTION_STATIC(CNetChan_CanPacket)
 }
 
 static Detouring::Hook detour_CNetChan_D2;
-void hook_CNetChan_D2(CNetChan* pNetChan)
+static void hook_CNetChan_D2(CNetChan* pNetChan)
 {
 	if (!ThreadInMainThread())
 	{
@@ -1466,24 +1466,24 @@ class ILuaNetMessageHandler : INetChannelHandler
 {
 public:
 	ILuaNetMessageHandler(GarrysMod::Lua::ILuaInterface* pLua);
-	virtual ~ILuaNetMessageHandler();
+	~ILuaNetMessageHandler();
 
-	virtual void ConnectionStart(INetChannel *chan);	// called first time network channel is established
-	virtual void ConnectionClosing(const char *reason); // network channel is being closed by remote site
-	virtual void ConnectionCrashed(const char *reason); // network error occured
-	virtual void PacketStart(int incoming_sequence, int outgoing_acknowledged);	// called each time a new packet arrived
-	virtual void PacketEnd(void); // all messages has been parsed
-	virtual void FileRequested(const char *fileName, unsigned int transferID ); // other side request a file for download
-	virtual void FileReceived(const char *fileName, unsigned int transferID ); // we received a file
-	virtual void FileDenied(const char *fileName, unsigned int transferID );	// a file request was denied by other side
-	virtual void FileSent(const char *fileName, unsigned int transferID );	// we sent a file
-	virtual bool ShouldAcceptFile(const char *fileName, unsigned int transferID);
+	void ConnectionStart(INetChannel *chan);	// called first time network channel is established
+	void ConnectionClosing(const char *reason); // network channel is being closed by remote site
+	void ConnectionCrashed(const char *reason); // network error occured
+	void PacketStart(int incoming_sequence, int outgoing_acknowledged);	// called each time a new packet arrived
+	void PacketEnd(void); // all messages has been parsed
+	void FileRequested(const char *fileName, unsigned int transferID ); // other side request a file for download
+	void FileReceived(const char *fileName, unsigned int transferID ); // we received a file
+	void FileDenied(const char *fileName, unsigned int transferID );	// a file request was denied by other side
+	void FileSent(const char *fileName, unsigned int transferID );	// we sent a file
+	bool ShouldAcceptFile(const char *fileName, unsigned int transferID);
 
-	virtual bool ProcessLuaNetChanMessage( [[maybe_unused]] NET_LuaNetChanMessage *msg );
+	bool ProcessLuaNetChanMessage( [[maybe_unused]] NET_LuaNetChanMessage *msg );
 
 public:
-	CNetChan* m_pChan = NULL;
-	NET_LuaNetChanMessage* m_pLuaNetChanMessage = NULL;
+	CNetChan* m_pChan = nullptr;
+	NET_LuaNetChanMessage* m_pLuaNetChanMessage = nullptr;
 	int m_iMessageCallbackFunction = -1;
 	int m_iConnectionStartFunction = -1;
 	int m_iConnectionClosingFunction = -1;
@@ -1519,7 +1519,7 @@ public:
 	int GetType() const { return net_LuaNetChanMessage; }
 	const char *GetName() const { return "NET_LuaNetChanMessage"; }
 
-	ILuaNetMessageHandler *m_pMessageHandler = NULL;
+	ILuaNetMessageHandler *m_pMessageHandler = nullptr;
 	bool Process() { return m_pMessageHandler->ProcessLuaNetChanMessage( this ); };
 
 	NET_LuaNetChanMessage() { m_bReliable = true; }
@@ -1545,7 +1545,7 @@ ILuaNetMessageHandler::~ILuaNetMessageHandler()
 	if (m_pLuaNetChanMessage)
 	{
 		delete m_pLuaNetChanMessage;
-		m_pLuaNetChanMessage = NULL;
+		m_pLuaNetChanMessage = nullptr;
 	}
 
 	g_pNetMessageHandlers.erase(this);
@@ -1727,7 +1727,7 @@ LUA_FUNCTION_STATIC(CNetChan_SendFile)
 {
 	CNetChan* pNetChannel = Get_CNetChan(LUA, 1, true);
 	const char* pFileName = LUA->CheckString(2);
-	int transferID = LUA->CheckNumber(3);
+	int transferID = (int)LUA->CheckNumber(3);
 
 	LUA->PushBool(pNetChannel->SendFile(pFileName, transferID));
 	return 1;
@@ -1925,7 +1925,7 @@ LUA_FUNCTION_STATIC(gameserver_GetClient)
 
 	CBaseClient* pClient = (CBaseClient*)((IServer*)Util::server)->GetClient(iClientIndex);
 	if (pClient && !pClient->IsConnected())
-		pClient = NULL;
+		pClient = nullptr;
 
 	Push_CBaseClient(LUA, pClient);
 
@@ -2236,21 +2236,21 @@ LUA_FUNCTION_STATIC(gameserver_SendConnectionlessPacket)
 	if (!func_NET_SendPacket)
 		LUA->ThrowError("Failed to load NET_SendPacket");
 
-	LUA->PushNumber(func_NET_SendPacket(NULL, nSocket, (netadr_t&)adr,
+	LUA->PushNumber(func_NET_SendPacket(nullptr, nSocket, (netadr_t&)adr,
 #if MODULE_EXISTS_BITBUF
 		msg->GetData(), msg->GetNumBytesWritten(),
 #else
 		(const unsigned char*)pData, nLength,
 #endif
-	NULL, false));
+	nullptr, false));
 	return 1;
 }
 
-static CUtlVectorMT<CUtlVector<CNetChan*>>* s_NetChannels = NULL;
+static CUtlVectorMT<CUtlVector<CNetChan*>>* s_NetChannels = nullptr;
 CNetChan* NET_CreateHolyLibNetChannel(int socket, netadrnew_t* adr, const char* name, INetChannelHandler* handler, bool bForceNewChannel, int nProtocolVersion)
 {
 	if (!s_NetChannels)
-		return NULL;
+		return nullptr;
 
 	CNetChan* pChan = new CNetChan;
 
@@ -2278,7 +2278,7 @@ LUA_FUNCTION_STATIC(gameserver_CreateNetChannel)
 
 	if (!adr.IsValid())
 	{
-		Push_CNetChan(LUA, NULL);
+		Push_CNetChan(LUA, nullptr);
 		return 1;
 	}
 
@@ -2814,7 +2814,7 @@ static void MoveCGameClientIntoCGameClient(CGameClient* origin, CGameClient* tar
 			Base_CmdKeyValues* keyVal = (Base_CmdKeyValues*)msg;
 			if (keyVal->m_pKeyValues)
 			{
-				keyVal->m_pKeyValues = NULL; // Will leak memory but we can't safely delete it currently.
+				keyVal->m_pKeyValues = nullptr; // Will leak memory but we can't safely delete it currently.
 				// ToDo: Fix this small memory leak.
 			}
 		}
@@ -2824,8 +2824,8 @@ static void MoveCGameClientIntoCGameClient(CGameClient* origin, CGameClient* tar
 	 * Nuke the origin client
 	 */
 
-	origin->m_NetChannel = NULL; // Nuke the net channel or else it might touch it.
-	//origin->m_ConVars = NULL; // Same here
+	origin->m_NetChannel = nullptr; // Nuke the net channel or else it might touch it.
+	//origin->m_ConVars = nullptr; // Same here
 	origin->Inactivate();
 	origin->Clear();
 
@@ -2878,7 +2878,7 @@ static int FindFreeClientSlot()
 }
 
 static Detouring::Hook detour_CGameClient_SpawnPlayer;
-void hook_CGameClient_SpawnPlayer(CGameClient* client)
+static void hook_CGameClient_SpawnPlayer(CGameClient* client)
 {
 	if (client->m_nClientSlot <= MAX_PLAYERS && !gameserver_disablespawnsafety.GetBool())
 	{
@@ -2927,7 +2927,7 @@ void CGameServerModule::OnClientDisconnect(CBaseClient* pClient)
 }
 
 static Detouring::Hook detour_CNetChan_SendDatagram;
-int hook_CNetChan_SendDatagram(CNetChan* chan, bf_write *datagram)
+static int hook_CNetChan_SendDatagram(CNetChan* chan, bf_write *datagram)
 {
 	int sequenceNr = detour_CNetChan_SendDatagram.GetTrampoline<Symbols::CNetChan_SendDatagram>()(chan, datagram);
 
@@ -2977,7 +2977,7 @@ void NET_RemoveNetChannel(INetChannel* chan, bool bDeleteNetChan)
 	return func_NET_RemoveNetChannel(chan, bDeleteNetChan);
 }
 
-int NET_SendPacket(INetChannel *chan, int sock, const netadr_t &to, const unsigned char *data, int length, bf_write *pVoicePayload /* = NULL */, bool bUseCompression /*=false*/)
+int NET_SendPacket(INetChannel *chan, int sock, const netadr_t &to, const unsigned char *data, int length, bf_write *pVoicePayload /* = nullptr */, bool bUseCompression /*=false*/)
 {
 	if (!func_NET_SendPacket)
 		Error(PROJECT_NAME " - gameserver: Failed to load NET_SendPacket!\n");
@@ -3029,48 +3029,66 @@ static void hook_NET_SetTime(double flRealtime) // We need this hook to keep net
 	net_time += frametime * (host_timescale ? host_timescale->GetFloat() : 1.0f);
 }
 
+#if SYSTEM_WINDOWS
+DETOUR_THISCALL_START()
+	DETOUR_THISCALL_ADDFUNC1(hook_CBaseServer_FillServerInfo, Base_FillServerInfo, CBaseServer*, SVC_ServerInfo&);
+	DETOUR_THISCALL_ADDFUNC1(hook_CHLTVServer_FillServerInfo, HLTV_FillServerInfo, CHLTVServer*, SVC_ServerInfo&);
+	DETOUR_THISCALL_ADDFUNC0(hook_CBaseServer_CheckTimeouts, CheckTimeouts, CBaseServer*);
+	DETOUR_THISCALL_ADDFUNC0(hook_CGameClient_SpawnPlayer, SpawnPlayer, CGameClient*);
+	DETOUR_THISCALL_ADDFUNC3(hook_CServerGameClients_GetPlayerLimit, GetPlayerLimit, void*, int&, int&, int&);
+	DETOUR_THISCALL_ADDRETFUNC2(hook_CBaseClient_SetSignonState, bool, SetSignonState, CBaseClient*, int, int);
+	DETOUR_THISCALL_ADDRETFUNC0(hook_CBaseServer_IsMultiplayer, bool, IsMultiplayer, CBaseServer*);
+	DETOUR_THISCALL_ADDRETFUNC0(hook_GModDataPack_IsSingleplayer, bool, IsSingleplayer, void*);
+	DETOUR_THISCALL_ADDRETFUNC0(hook_CBaseClient_ShouldSendMessages, bool, ShouldSendMessages, CBaseClient*);
+	DETOUR_THISCALL_ADDRETFUNC1(hook_CBaseServer_ProcessConnectionlessPacket, bool, ProcessConnectionlessPacket, IServer*, netpacket_s*);
+	DETOUR_THISCALL_ADDRETFUNC1(hook_CNetChan_SendDatagram, int, SendDatagram, CNetChan*, bf_write*);
+	DETOUR_THISCALL_ADDFUNC0(hook_CNetChan_D2, D2, CNetChan*);
+DETOUR_THISCALL_FINISH()
+#endif
+
 void CGameServerModule::InitDetour(bool bPreServer)
 {
 	if (bPreServer)
 		return;
 
+	DETOUR_PREPARE_THISCALL();
 	SourceSDK::FactoryLoader engine_loader("engine");
 	Detour::Create(
 		&detour_CBaseServer_FillServerInfo, "CBaseServer::FillServerInfo",
 		engine_loader.GetModule(), Symbols::CBaseServer_FillServerInfoSym,
-		(void*)hook_CBaseServer_FillServerInfo, m_pID
+		(void*)DETOUR_THISCALL(hook_CBaseServer_FillServerInfo, Base_FillServerInfo), m_pID
 	);
 
 	Detour::Create(
 		&detour_CHLTVServer_FillServerInfo, "CHLTVServer::FillServerInfo",
 		engine_loader.GetModule(), Symbols::CHLTVServer_FillServerInfoSym,
-		(void*)hook_CHLTVServer_FillServerInfo, m_pID
+		(void*)DETOUR_THISCALL(hook_CHLTVServer_FillServerInfo, HLTV_FillServerInfo), m_pID
 	);
 
 	Detour::Create(
 		&detour_CBaseClient_SetSignonState, "CBaseClient::SetSignonState",
 		engine_loader.GetModule(), Symbols::CBaseClient_SetSignonStateSym,
-		(void*)hook_CBaseClient_SetSignonState, m_pID
+		(void*)DETOUR_THISCALL(hook_CBaseClient_SetSignonState, SetSignonState), m_pID
 	);
 
 #if ARCHITECTURE_IS_X86
 	Detour::Create(
 		&detour_CBaseClient_ShouldSendMessages, "CBaseClient::ShouldSendMessages",
 		engine_loader.GetModule(), Symbols::CBaseClient_ShouldSendMessagesSym,
-		(void*)hook_CBaseClient_ShouldSendMessages, m_pID
+		(void*)DETOUR_THISCALL(hook_CBaseClient_ShouldSendMessages, ShouldSendMessages), m_pID
 	);
 #endif
 
 	Detour::Create(
 		&detour_CBaseServer_CheckTimeouts, "CBaseServer::CheckTimeouts",
 		engine_loader.GetModule(), Symbols::CBaseServer_CheckTimeoutsSym,
-		(void*)hook_CBaseServer_CheckTimeouts, m_pID
+		(void*)DETOUR_THISCALL(hook_CBaseServer_CheckTimeouts, CheckTimeouts), m_pID
 	);
 
 	Detour::Create(
 		&detour_CGameClient_SpawnPlayer, "CGameClient::SpawnPlayer",
 		engine_loader.GetModule(), Symbols::CGameClient_SpawnPlayerSym,
-		(void*)hook_CGameClient_SpawnPlayer, m_pID
+		(void*)DETOUR_THISCALL(hook_CGameClient_SpawnPlayer, SpawnPlayer), m_pID
 	);
 
 	Detour::Create(
@@ -3085,26 +3103,26 @@ void CGameServerModule::InitDetour(bool bPreServer)
 		Detour::Create(
 			&detour_CBaseServer_IsMultiplayer, "CBaseServer::IsMultiplayer",
 			engine_loader.GetModule(), Symbols::CBaseServer_IsMultiplayerSym,
-			(void*)hook_CBaseServer_IsMultiplayer, m_pID
+			(void*)DETOUR_THISCALL(hook_CBaseServer_IsMultiplayer, IsMultiplayer), m_pID
 		);
 
 		Detour::Create(
 			&detour_GModDataPack_IsSingleplayer, "GModDataPack::IsSingleplayer",
 			server_loader.GetModule(), Symbols::GModDataPack_IsSingleplayerSym,
-			(void*)hook_GModDataPack_IsSingleplayer, m_pID
+			(void*)DETOUR_THISCALL(hook_GModDataPack_IsSingleplayer, IsSingleplayer), m_pID
 		);
 	}
 
 	Detour::Create(
 		&detour_CServerGameClients_GetPlayerLimit, "CServerGameClients::GetPlayerLimit",
 		server_loader.GetModule(), Symbols::CServerGameClients_GetPlayerLimitSym,
-		(void*)hook_CServerGameClients_GetPlayerLimit, m_pID
+		(void*)DETOUR_THISCALL(hook_CServerGameClients_GetPlayerLimit, GetPlayerLimit), m_pID
 	);
 
 	Detour::Create(
 		&detour_CBaseServer_ProcessConnectionlessPacket, "CBaseServer::ProcessConnectionlessPacket",
 		engine_loader.GetModule(), Symbols::CBaseServer_ProcessConnectionlessPacketSym,
-		(void*)hook_CBaseServer_ProcessConnectionlessPacket, m_pID
+		(void*)DETOUR_THISCALL(hook_CBaseServer_ProcessConnectionlessPacket, ProcessConnectionlessPacket), m_pID
 	);
 
 	func_CBaseClient_OnRequestFullUpdate = (Symbols::CBaseClient_OnRequestFullUpdate)Detour::GetFunction(engine_loader.GetModule(), Symbols::CBaseClient_OnRequestFullUpdateSym);
@@ -3117,7 +3135,7 @@ void CGameServerModule::InitDetour(bool bPreServer)
 	Detour::Create(
 		&detour_CNetChan_D2, "CNetChan::~CNetChan",
 		engine_loader.GetModule(), Symbols::CNetChan_D2Sym,
-		(void*)hook_CNetChan_D2, m_pID
+		(void*)DETOUR_THISCALL(hook_CNetChan_D2, D2), m_pID
 	);
 
 	func_NET_CreateNetChannel = (Symbols::NET_CreateNetChannel)Detour::GetFunction(engine_loader.GetModule(), Symbols::NET_CreateNetChannelSym);
@@ -3133,7 +3151,7 @@ void CGameServerModule::InitDetour(bool bPreServer)
 	Detour::Create(
 		&detour_CNetChan_SendDatagram, "CNetChan::SendDatagram",
 		engine_loader.GetModule(), Symbols::CNetChan_SendDatagramSym,
-		(void*)hook_CNetChan_SendDatagram, m_pID
+		(void*)DETOUR_THISCALL(hook_CNetChan_SendDatagram, SendDatagram), m_pID
 	);
 
 	Detour::Create(
@@ -3151,11 +3169,11 @@ void CGameServerModule::InitDetour(bool bPreServer)
 	func_NET_ReceiveStream = (Symbols::NET_ReceiveStream)Detour::GetFunction(engine_loader.GetModule(), Symbols::NET_ReceiveStreamSym);
 	Detour::CheckFunction((void*)func_NET_ReceiveStream, "NET_ReceiveStream");
 
-#if ARCHITECTURE_IS_X86
+#if defined(ARCHITECTURE_X86) && defined(SYSTEM_LINUX)
 	s_NetChannels = Detour::ResolveSymbol<CUtlVectorMT<CUtlVector<CNetChan*>>>(engine_loader, Symbols::s_NetChannelsSym);
 #else
-	s_NetChannels = Detour::ResolveSymbolFromLea<CUtlVectorMT<CUtlVector<CNetChan*>>>(engine_loader.GetModule(), Symbols::s_NetChannelsSym);
+	s_NetChannels = Detour::ResolveSymbolWithOffset<CUtlVectorMT<CUtlVector<CNetChan*>>>(engine_loader.GetModule(), Symbols::s_NetChannelsSym);
 #endif
 
-	host_timescale = g_pCVar->FindVar("host_timescale");
+	host_timescale = g_pCVar ? g_pCVar->FindVar("host_timescale") : nullptr;
 }
