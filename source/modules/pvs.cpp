@@ -56,6 +56,32 @@ static bool g_bBlockAdditionToTransmit = false;
 static bool g_bEnableLuaPreTransmitHook = false;
 static bool g_bEnableLuaPostTransmitHook = false;
 
+static std::unordered_map<GarrysMod::Lua::ILuaInterface*, Util::VisData*> g_LuaVisClusters;
+
+static inline Util::VisData* GetLuaVis(GarrysMod::Lua::ILuaInterface* L)
+{
+	auto it = g_LuaVisClusters.find(L);
+	return (it != g_LuaVisClusters.end()) ? it->second : nullptr;
+}
+
+static inline void ClearLuaVis(GarrysMod::Lua::ILuaInterface* L)
+{
+	auto it = g_LuaVisClusters.find(L);
+	if (it != g_LuaVisClusters.end())
+	{
+		delete it->second;
+		g_LuaVisClusters.erase(it);
+	}
+}
+
+static inline void SetLuaVis(GarrysMod::Lua::ILuaInterface* L, Util::VisData* data)
+{
+	ClearLuaVis(L);
+	if (data)
+		g_LuaVisClusters[L] = data;
+}
+
+
 static Detouring::Hook detour_CServerGameEnts_CheckTransmit;
 #ifndef HOLYLIB_MANUALNETWORKING
 extern bool g_pReplaceCServerGameEnts_CheckTransmit;
@@ -284,6 +310,53 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 	g_nCurrentEdicts = -1;
 }
 #endif
+
+LUA_FUNCTION_STATIC(pvs_Begin)
+{
+	Vector* orig;
+	if (LUA->IsType(1, GarrysMod::Lua::Type::Vector))
+	{
+		orig = Get_Vector(LUA, 1);
+	}
+	else
+	{
+		CBaseEntity* ent = Util::Get_Entity(LUA, 1, true);
+		orig = (Vector*)&ent->GetAbsOrigin();
+	}
+
+	Util::VisData* data = Util::CM_Vis(*orig, DVIS_PVS);
+	SetLuaVis(LUA, data);
+
+	LUA->PushBool(data != nullptr);
+	return 1;
+}
+
+LUA_FUNCTION_STATIC(pvs_Test)
+{
+	Util::VisData* data = GetLuaVis(LUA);
+	if (!data)
+		LUA->ThrowError("pvs.Test called without pvs.Begin");
+
+	Vector pos;
+	if (LUA->IsType(1, GarrysMod::Lua::Type::Vector))
+	{
+		pos = *Get_Vector(LUA, 1);
+	}
+	else
+	{
+		CBaseEntity* ent = Util::Get_Entity(LUA, 1, true);
+		pos = ent->GetAbsOrigin();
+	}
+
+	LUA->PushBool(Util::engineserver->CheckOriginInPVS(pos, data->cluster, sizeof(data->cluster)));
+	return 1;
+}
+
+LUA_FUNCTION_STATIC(pvs_End)
+{
+	ClearLuaVis(LUA);
+	return 0;
+}
 
 LUA_FUNCTION_STATIC(pvs_ResetPVS)
 {
@@ -938,14 +1011,18 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 
 	if (pLua == g_Lua)
 	{
-		// Resetting it on changelevel & such
 		g_bEnableLuaPreTransmitHook = false;
 		g_bEnableLuaPostTransmitHook = false;
+	
+		ClearLuaVis(pLua);
 	}
 
 	mapPVSSize = ceil(Util::engineserver->GetClusterCount() / 8.0f);
 
 	Util::StartTable(pLua);
+		Util::AddFunc(pLua, pvs_Begin, "Begin");
+		Util::AddFunc(pLua, pvs_Test, "Test");
+		Util::AddFunc(pLua, pvs_End, "End");
 		Util::AddFunc(pLua, pvs_ResetPVS, "ResetPVS");
 		Util::AddFunc(pLua, pvs_CheckOriginInPVS, "CheckOriginInPVS");
 		Util::AddFunc(pLua, pvs_AddOriginToPVS, "AddOriginToPVS");
@@ -983,6 +1060,7 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 
 void CPVSModule::LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua)
 {
+	ClearLuaVis(pLua);
 	Util::NukeTable(pLua, "pvs");
 }
 
