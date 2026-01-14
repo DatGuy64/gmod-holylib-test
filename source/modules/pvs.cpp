@@ -81,6 +81,19 @@ static inline void SetLuaVis(GarrysMod::Lua::ILuaInterface* L, Util::VisData* da
 		g_LuaVisClusters[L] = data;
 }
 
+struct AWHCacheEntry
+{
+	float nextCheck = 0.0f;
+	bool visible = true;
+};
+
+static std::unordered_map<uint32_t, AWHCacheEntry> g_AWHCache;
+
+static inline uint32_t AWHKey(int recipientEntIndex, int targetEntIndex)
+{
+	return (uint32_t)(recipientEntIndex * MAX_EDICTS + targetEntIndex);
+}
+
 
 static Detouring::Hook detour_CServerGameEnts_CheckTransmit;
 #ifndef HOLYLIB_MANUALNETWORKING
@@ -310,6 +323,109 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 	g_nCurrentEdicts = -1;
 }
 #endif
+
+static inline bool AWH_MultiLOS_OptionB(CBasePlayer* ply, CBaseEntity* target)
+{
+	if (ply->IsLineOfSightClear(target->WorldSpaceCenter()))
+		return true;
+
+	const Vector& mins = target->CollisionProp()->OBBMins();
+	const Vector& maxs = target->CollisionProp()->OBBMaxs();
+
+	const float zTop  = maxs.z - 2.0f;
+	const float zEdge = zTop - 10.0f;
+
+	auto L2W = [&](float x, float y, float z) -> Vector
+	{
+		return target->LocalToWorld(Vector(x, y, z));
+	};
+
+	if (ply->IsLineOfSightClear(L2W(mins.x, 0.0f, zEdge))) return true;
+	if (ply->IsLineOfSightClear(L2W(maxs.x, 0.0f, zEdge))) return true;
+	if (ply->IsLineOfSightClear(L2W(0.0f, mins.y, zEdge))) return true;
+	if (ply->IsLineOfSightClear(L2W(0.0f, maxs.y, zEdge))) return true;
+
+	if (ply->IsLineOfSightClear(L2W(mins.x, mins.y, zTop))) return true;
+	if (ply->IsLineOfSightClear(L2W(mins.x, maxs.y, zTop))) return true;
+	if (ply->IsLineOfSightClear(L2W(maxs.x, mins.y, zTop))) return true;
+	if (ply->IsLineOfSightClear(L2W(maxs.x, maxs.y, zTop))) return true;
+
+	return false;
+}
+
+LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
+{
+	if (!g_pCurrentTransmitInfo)
+		LUA->ThrowError("pvs.FilterTransmitPlayers must be called inside HolyLib:PreCheckTransmit or HolyLib:PostCheckTransmit!");
+
+	CBasePlayer* recipient = Util::Get_Player(LUA, 1, true);
+	float cacheTime = (float)LUA->CheckNumber(2);
+	if (cacheTime < 0.0f) cacheTime = 0.0f;
+
+	CBaseEntity* curClientEnt = Util::servergameents->EdictToBaseEntity(g_pCurrentTransmitInfo->m_pClientEnt);
+	if (curClientEnt != (CBaseEntity*)recipient)
+	{
+		LUA->PushBool(false);
+		return 1;
+	}
+
+	auto* transmitBits = g_pCurrentTransmitInfo->m_pTransmitEdict;
+	auto* transmitAlways = g_pCurrentTransmitInfo->m_pTransmitAlways;
+
+	const int recipientIdx = recipient->entindex();
+	const float now = gpGlobals->curtime;
+	const int maxClients = gpGlobals->maxClients;
+
+	int removed = 0;
+
+	for (int i = 1; i <= maxClients; ++i)
+	{
+		CBasePlayer* targetPly = UTIL_PlayerByIndex(i);
+		if (!targetPly)
+			continue;
+
+		if (targetPly == recipient)
+			continue;
+
+		const int targetIdx = targetPly->entindex();
+		if (!transmitBits->Get(targetIdx))
+			continue;
+
+		const uint32_t key = AWHKey(recipientIdx, targetIdx);
+
+		auto it = g_AWHCache.find(key);
+		if (it != g_AWHCache.end() && it->second.nextCheck > now)
+		{
+			if (!it->second.visible)
+			{
+				transmitBits->Clear(targetIdx);
+				if (transmitAlways && transmitAlways->Get(targetIdx))
+					transmitAlways->Clear(targetIdx);
+				removed++;
+			}
+			continue;
+		}
+
+		const bool vis = AWH_MultiLOS_OptionB(recipient, (CBaseEntity*)targetPly);
+
+		AWHCacheEntry& e = g_AWHCache[key];
+		e.visible = vis;
+		e.nextCheck = now + cacheTime;
+
+		if (!vis)
+		{
+			transmitBits->Clear(targetIdx);
+			if (transmitAlways && transmitAlways->Get(targetIdx))
+				transmitAlways->Clear(targetIdx);
+			removed++;
+		}
+	}
+
+	LUA->PushNumber(removed);
+	return 1;
+}
+
+
 
 LUA_FUNCTION_STATIC(pvs_Begin)
 {
@@ -1020,6 +1136,7 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 	mapPVSSize = ceil(Util::engineserver->GetClusterCount() / 8.0f);
 
 	Util::StartTable(pLua);
+		Util::AddFunc(pLua, pvs_FilterTransmitPlayers, "FilterTransmitPlayers");
 		Util::AddFunc(pLua, pvs_Begin, "Begin");
 		Util::AddFunc(pLua, pvs_Test, "Test");
 		Util::AddFunc(pLua, pvs_End, "End");
