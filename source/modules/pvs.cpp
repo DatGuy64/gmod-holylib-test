@@ -324,6 +324,16 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 }
 #endif
 
+static inline Vector AWH_LocalToWorld(CBaseEntity* ent, const Vector& local)
+{
+	matrix3x4_t mat;
+	ent->EntityToWorldTransform(mat);
+
+	Vector out;
+	VectorTransform(local, mat, out);
+	return out;
+}
+
 static inline bool AWH_MultiLOS_OptionB(CBasePlayer* ply, CBaseEntity* target)
 {
 	if (ply->IsLineOfSightClear(target->WorldSpaceCenter()))
@@ -337,7 +347,7 @@ static inline bool AWH_MultiLOS_OptionB(CBasePlayer* ply, CBaseEntity* target)
 
 	auto L2W = [&](float x, float y, float z) -> Vector
 	{
-		return target->LocalToWorld(Vector(x, y, z));
+		return AWH_LocalToWorld(target, Vector(x, y, z));
 	};
 
 	if (ply->IsLineOfSightClear(L2W(mins.x, 0.0f, zEdge))) return true;
