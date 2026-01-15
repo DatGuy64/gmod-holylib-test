@@ -7,6 +7,7 @@
 #include "iserver.h"
 #include "sourcesdk/baseclient.h"
 #include "vprof.h"
+#include <cstdarg>
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -93,6 +94,36 @@ static inline uint32_t AWHKey(int recipientEntIndex, int targetEntIndex)
 {
 	return (uint32_t)(recipientEntIndex * MAX_EDICTS + targetEntIndex);
 }
+
+static inline void PVS_Dbg(const char* fmt, ...)
+{
+	if (!g_pPVSModule.InDebug())
+		return;
+
+	char buf[512];
+	va_list args;
+	va_start(args, fmt);
+	vsnprintf(buf, sizeof(buf), fmt, args);
+	va_end(args);
+
+	Msg("[pvs] %s\n", buf);
+}
+
+static inline bool IsValidEdictFast(const edict_t* ed)
+{
+	if (!ed) return false;
+
+	if (ed->IsFree()) return false;
+
+	return true;
+}
+
+static inline bool IsValidPlayerFast(CBasePlayer* p)
+{
+	if (!p) return false;
+	return IsValidEdictFast(p->edict());
+}
+
 
 
 static Detouring::Hook detour_CServerGameEnts_CheckTransmit;
@@ -324,43 +355,72 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 }
 #endif
 
-static inline bool AWH_MultiLOS_OptionB(CBasePlayer* ply, CBaseEntity* target)
+static inline bool AWH_MultiLOS_OptionB_Fast(CBasePlayer* ply, CBaseEntity* target, int rid, int tid)
 {
+	if (!IsValidPlayerFast(ply))
+	{
+		PVS_Dbg("LOS abort: recipient invalid rid=%d", rid);
+		return false;
+	}
+	if (!target)
+	{
+		PVS_Dbg("LOS abort: target null rid=%d tid=%d", rid, tid);
+		return false;
+	}
+	edict_t* ted = target->edict();
+	if (!IsValidEdictFast(ted))
+	{
+		PVS_Dbg("LOS abort: target edict invalid rid=%d tid=%d", rid, tid);
+		return false;
+	}
+
+	PVS_Dbg("LOS call#1 WSC rid=%d tid=%d", rid, tid);
 	if (ply->IsLineOfSightClear(target->WorldSpaceCenter()))
 		return true;
 
-	const Vector& mins = target->CollisionProp()->OBBMins();
-	const Vector& maxs = target->CollisionProp()->OBBMaxs();
+	auto* col = target->CollisionProp();
+	if (!col)
+	{
+		PVS_Dbg("LOS abort: CollisionProp null rid=%d tid=%d", rid, tid);
+		return false;
+	}
+
+	const Vector& mins = col->OBBMins();
+	const Vector& maxs = col->OBBMaxs();
 
 	const float zTop  = maxs.z - 2.0f;
 	const float zEdge = zTop - 10.0f;
 
 	const matrix3x4_t& mat = target->EntityToWorldTransform();
-	
-	auto L2W = [&](float x, float y, float z) -> Vector
-	{
-		Vector out;
-		VectorTransform(Vector(x, y, z), mat, out);
-		return out;
-	};
 
+	Vector out;
 
+	#define L2W(x,y,z) (VectorTransform(Vector((x),(y),(z)), mat, out), out)
+
+	PVS_Dbg("LOS call#2 rid=%d tid=%d", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(mins.x, 0.0f, zEdge))) return true;
+	PVS_Dbg("LOS call#3 rid=%d tid=%d", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(maxs.x, 0.0f, zEdge))) return true;
+	PVS_Dbg("LOS call#4 rid=%d tid=%d", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(0.0f, mins.y, zEdge))) return true;
+	PVS_Dbg("LOS call#5 rid=%d tid=%d", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(0.0f, maxs.y, zEdge))) return true;
 
+	PVS_Dbg("LOS call#6 rid=%d tid=%d", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(mins.x, mins.y, zTop))) return true;
+	PVS_Dbg("LOS call#7 rid=%d tid=%d", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(mins.x, maxs.y, zTop))) return true;
+	PVS_Dbg("LOS call#8 rid=%d tid=%d", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(maxs.x, mins.y, zTop))) return true;
+	PVS_Dbg("LOS call#9 rid=%d tid=%d", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(maxs.x, maxs.y, zTop))) return true;
 
+	#undef L2W
 	return false;
 }
 
 LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 {
-	// Must be called inside CheckTransmit (Pre/Post hook)
 	if (!g_pCurrentTransmitInfo)
 		LUA->ThrowError("pvs.FilterTransmitPlayers must be called inside HolyLib:PreCheckTransmit or HolyLib:PostCheckTransmit!");
 
@@ -369,54 +429,69 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 	float cacheTime = (float)LUA->CheckNumber(2);
 	if (cacheTime < 0.0f) cacheTime = 0.0f;
 
+	if (!IsValidPlayerFast(recipient))
+	{
+		PVS_Dbg("FTP abort: recipient invalid");
+		LUA->PushNumber(0);
+		return 1;
+	}
+
 	CBaseEntity* curClientEnt = Util::servergameents->EdictToBaseEntity(g_pCurrentTransmitInfo->m_pClientEnt);
 	if (curClientEnt != (CBaseEntity*)recipient)
 	{
-		LUA->PushBool(false);
+		PVS_Dbg("FTP abort: mismatch snapshot clientEnt=%p recipient=%p", curClientEnt, recipient);
+		LUA->PushNumber(0);
 		return 1;
 	}
 
 	auto* transmitBits   = g_pCurrentTransmitInfo->m_pTransmitEdict;
 	auto* transmitAlways = g_pCurrentTransmitInfo->m_pTransmitAlways;
 
-	const int recipientIdx = recipient->entindex();
+	if (!transmitBits)
+		LUA->ThrowError("pvs.FilterTransmitPlayers: m_pTransmitEdict is NULL");
+
+	const int rid = recipient->entindex();
 	const float now = gpGlobals->curtime;
 	const int maxClients = gpGlobals->maxClients;
 
 	int removed = 0;
 
+	PVS_Dbg("FTP start rid=%d cache=%.3f", rid, cacheTime);
+
 	for (int i = 1; i <= maxClients; ++i)
 	{
 		CBasePlayer* targetPly = UTIL_PlayerByIndex(i);
-		if (!targetPly)
+		if (!IsValidPlayerFast(targetPly))
 			continue;
 
 		if (targetPly == recipient)
 			continue;
 
-		const int targetIdx = targetPly->entindex();
-		if (targetIdx <= 0 || targetIdx >= MAX_EDICTS)
+		const int tid = targetPly->entindex();
+		if ((unsigned)tid >= (unsigned)MAX_EDICTS || tid <= 0)
 			continue;
 
-		if (!transmitBits->Get(targetIdx))
+		if (!transmitBits->Get(tid))
 			continue;
 
-		const uint32_t key = AWHKey(recipientIdx, targetIdx);
+		const uint32_t key = (uint32_t)(rid * MAX_EDICTS + tid);
 
 		auto it = g_AWHCache.find(key);
 		if (it != g_AWHCache.end() && it->second.nextCheck > now)
 		{
 			if (!it->second.visible)
 			{
-				transmitBits->Clear(targetIdx);
-				if (transmitAlways && transmitAlways->Get(targetIdx))
-					transmitAlways->Clear(targetIdx);
-				removed++;
+				transmitBits->Clear(tid);
+				if (transmitAlways && transmitAlways->Get(tid))
+					transmitAlways->Clear(tid);
+				++removed;
 			}
 			continue;
 		}
 
-		const bool vis = AWH_MultiLOS_OptionB(recipient, (CBaseEntity*)targetPly);
+		PVS_Dbg("FTP pre-LOS rid=%d tid=%d", rid, tid);
+
+		const bool vis = AWH_MultiLOS_OptionB_Fast(recipient, (CBaseEntity*)targetPly, rid, tid);
 
 		AWHCacheEntry& e = g_AWHCache[key];
 		e.visible = vis;
@@ -424,17 +499,18 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 
 		if (!vis)
 		{
-			transmitBits->Clear(targetIdx);
-			if (transmitAlways && transmitAlways->Get(targetIdx))
-				transmitAlways->Clear(targetIdx);
-			removed++;
+			transmitBits->Clear(tid);
+			if (transmitAlways && transmitAlways->Get(tid))
+				transmitAlways->Clear(tid);
+			++removed;
 		}
 	}
+
+	PVS_Dbg("FTP end rid=%d removed=%d", rid, removed);
 
 	LUA->PushNumber(removed);
 	return 1;
 }
-
 
 LUA_FUNCTION_STATIC(pvs_Begin)
 {
