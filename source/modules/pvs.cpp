@@ -17,6 +17,7 @@
 class CPVSModule : public IModule
 {
 public:
+	void Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn) override;
 	void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) override;
 	void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) override;
 	void InitDetour(bool bPreServer) override;
@@ -45,6 +46,13 @@ static void hook_CGMOD_Player_SetupVisibility(void* ent, unsigned char* pvs, int
 	currentPVSSize = -1;
 }
 #endif
+
+IEngineTrace* enginetrace = nullptr;
+void CPVSModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn)
+{
+	enginetrace = (IEngineTrace*)appfn[0](INTERFACEVERSION_ENGINETRACE_SERVER, nullptr);
+	Detour::CheckValue("get interface", "enginetrace", enginetrace != nullptr);
+}
 
 static bool bWasAddedEntityUsed = false;
 static CBitVec<MAX_EDICTS> g_pAddEntityToPVS;
@@ -490,22 +498,20 @@ static inline bool AWH_LOS_LuaOrder(CBasePlayer* ply, CBaseEntity* target, int r
 {
 	Msg("[pvs] LOS enter rid=%d tid=%d ply=%p target=%p\n", rid, tid, (void*)ply, (void*)target);
 
-	// Re-check super early (évite deref vtable si pointeur foireux)
 	if (!ply || !target)
 	{
 		Msg("[pvs] LOS abort: null ply/target rid=%d tid=%d\n", rid, tid);
 		return false;
 	}
 
-	// Edict checks (peuvent sauver pas mal de cas)
-	edict_t* ped = nullptr;
-	edict_t* ted = nullptr;
+	if (!enginetrace)
+	{
+		Msg("[pvs] LOS abort: enginetrace NULL (Init missing?) rid=%d tid=%d\n", rid, tid);
+		return false;
+	}
 
-	Msg("[pvs] LOS get edicts rid=%d tid=%d\n", rid, tid);
-	ped = ply->edict();
-	ted = target->edict();
-
-	Msg("[pvs] LOS edicts rid=%d tid=%d ped=%p ted=%p\n", rid, tid, (void*)ped, (void*)ted);
+	edict_t* ped = ply->edict();
+	edict_t* ted = target->edict();
 
 	if (!IsValidEdictFast(ped))
 	{
@@ -518,73 +524,26 @@ static inline bool AWH_LOS_LuaOrder(CBasePlayer* ply, CBaseEntity* target, int r
 		return false;
 	}
 
-	// 1) center
-	Msg("[pvs] LOS#1 center (pre WorldSpaceCenter) rid=%d tid=%d\n", rid, tid);
+	// START / END
+	Vector start = ply->EyePosition();
+	Vector end   = target->WorldSpaceCenter();
 
-	// Sépare bien les 2 opérations
-	Vector c;
-	Msg("[pvs] LOS#1a calling WorldSpaceCenter rid=%d tid=%d\n", rid, tid);
-	c = target->WorldSpaceCenter();
-	Msg("[pvs] LOS#1b WorldSpaceCenter OK rid=%d tid=%d c=(%.2f %.2f %.2f)\n", rid, tid, c.x, c.y, c.z);
+	// --- TraceRay EXACTEMENT comme surffix ---
+	Ray_t ray;
+	ray.Init(start, end);
 
-	Msg("[pvs] LOS#1c calling IsLineOfSightClear rid=%d tid=%d\n", rid, tid);
-	if (ply->IsLineOfSightClear(c))
-	{
-		Msg("[pvs] LOS#1d IsLineOfSightClear TRUE rid=%d tid=%d\n", rid, tid);
-		return true;
-	}
-	Msg("[pvs] LOS#1e IsLineOfSightClear FALSE rid=%d tid=%d\n", rid, tid);
+	trace_t tr;
 
-	// collision
-	Msg("[pvs] LOS collisionprop rid=%d tid=%d\n", rid, tid);
-	auto* col = target->CollisionProp();
-	if (!col)
-	{
-		Msg("[pvs] LOS abort: CollisionProp null rid=%d tid=%d\n", rid, tid);
-		return false;
-	}
+	// Filtre simple : ignore le receveur (comme surffix ignore passedict)
+	CTraceFilterSimple traceFilter(ply, COLLISION_GROUP_NONE, nullptr);
 
-	const Vector& mins = col->OBBMins();
-	const Vector& maxs = col->OBBMaxs();
-	Msg("[pvs] LOS bounds rid=%d tid=%d mins=(%.2f %.2f %.2f) maxs=(%.2f %.2f %.2f)\n",
-		rid, tid, mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z);
+	enginetrace->TraceRay(ray, MASK_VISIBLE, &traceFilter, &tr);
 
-	const float zTop  = maxs.z - 2.0f;
-	const float zEdge = zTop - 10.0f;
+	Msg("[pvs] LOS trace rid=%d tid=%d frac=%.4f startsolid=%d allsolid=%d hit=%p\n",
+		rid, tid, tr.fraction, (int)tr.startsolid, (int)tr.allsolid, (void*)tr.m_pEnt);
 
-	const matrix3x4_t& mat = target->EntityToWorldTransform();
-	Vector out;
-
-	#define L2W(x,y,z) (VectorTransform(Vector((x),(y),(z)), mat, out), out)
-
-	Msg("[pvs] LOS#2 edge rid=%d tid=%d\n", rid, tid);
-	if (ply->IsLineOfSightClear(L2W(mins.x, 0.0f, zEdge))) return true;
-
-	Msg("[pvs] LOS#3 edge rid=%d tid=%d\n", rid, tid);
-	if (ply->IsLineOfSightClear(L2W(maxs.x, 0.0f, zEdge))) return true;
-
-	Msg("[pvs] LOS#4 edge rid=%d tid=%d\n", rid, tid);
-	if (ply->IsLineOfSightClear(L2W(0.0f, mins.y, zEdge))) return true;
-
-	Msg("[pvs] LOS#5 edge rid=%d tid=%d\n", rid, tid);
-	if (ply->IsLineOfSightClear(L2W(0.0f, maxs.y, zEdge))) return true;
-
-	Msg("[pvs] LOS#6 top rid=%d tid=%d\n", rid, tid);
-	if (ply->IsLineOfSightClear(L2W(mins.x, mins.y, zTop))) return true;
-
-	Msg("[pvs] LOS#7 top rid=%d tid=%d\n", rid, tid);
-	if (ply->IsLineOfSightClear(L2W(mins.x, maxs.y, zTop))) return true;
-
-	Msg("[pvs] LOS#8 top rid=%d tid=%d\n", rid, tid);
-	if (ply->IsLineOfSightClear(L2W(maxs.x, mins.y, zTop))) return true;
-
-	Msg("[pvs] LOS#9 top rid=%d tid=%d\n", rid, tid);
-	if (ply->IsLineOfSightClear(L2W(maxs.x, maxs.y, zTop))) return true;
-
-	#undef L2W
-
-	Msg("[pvs] LOS exit FALSE rid=%d tid=%d\n", rid, tid);
-	return false;
+	// Si ça touche quelque chose avant d'arriver : pas visible
+	return (tr.fraction >= 1.0f && !tr.startsolid && !tr.allsolid);
 }
 
 LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
@@ -604,7 +563,6 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 
 	const int rid   = recipient->entindex();
 	const float now = gpGlobals->curtime;
-	const int maxCl = gpGlobals->maxClients;
 
 	float cacheTime = (float)LUA->CheckNumber(2);
 	if (cacheTime < 0.0f) cacheTime = 0.0f;
@@ -612,9 +570,10 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 	auto* transmitBits   = g_pCurrentTransmitInfo->m_pTransmitEdict;
 	auto* transmitAlways = g_pCurrentTransmitInfo->m_pTransmitAlways;
 
-	Msg("[pvs] FTP state: rid=%d now=%.4f maxCl=%d cacheTime=%.3f bits=%p always=%p\n",
-		rid, now, maxCl, cacheTime, (void*)transmitBits, (void*)transmitAlways);
+	Msg("[pvs] FTP state: rid=%d now=%.4f cacheTime=%.3f bits=%p always=%p nEdicts=%d indices=%p\n",
+		rid, now, cacheTime, (void*)transmitBits, (void*)transmitAlways, g_nCurrentEdicts, (void*)g_pCurrentEdictIndices);
 
+	// PVS source
 	const bool hasCurrentPVS = (currentPVS && currentPVSSize > 0);
 	Msg("[pvs] FTP PVS src: hasCurrentPVS=%d currentPVS=%p currentPVSSize=%d mapPVSSize=%d\n",
 		(int)hasCurrentPVS, (void*)currentPVS, currentPVSSize, mapPVSSize);
@@ -624,7 +583,6 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 	{
 		vis = Util::CM_Vis(recipient->GetAbsOrigin(), DVIS_PVS);
 		Msg("[pvs] FTP CM_Vis rid=%d vis=%p\n", rid, (void*)vis);
-
 		if (!vis)
 		{
 			LUA->PushNumber(0);
@@ -634,32 +592,59 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 
 	int removed = 0;
 
-	// ---------------------------------------------------------
-	// PRE: calc PVS + LOS -> pending tids (NE PAS filtrer bits)
-	// POST: applique pending sur transmitBits/transmitAlways
-	// ---------------------------------------------------------
+	// --------------------------------------------------------------------
+	// PRE: scan snapshot edicts (pEdictIndices) -> if it's a player, do PVS+LOS -> store EDICT INDEX to remove
+	// POST: apply removals by clearing EXACT EDICT INDEX in m_pTransmitEdict / m_pTransmitAlways
+	// --------------------------------------------------------------------
 
 	if (g_bIsInPreCheckTransmit)
 	{
 		std::vector<int>& pending = g_PendingRemoveByRecipient[rid];
 		pending.clear();
 
-		int candidates = 0;
-		int considered = 0;
-
-		for (int i = 1; i <= maxCl; ++i)
+		if (!g_pCurrentEdictIndices || g_nCurrentEdicts <= 0)
 		{
-			CBasePlayer* target = GetPlayerByIndexSafe(i);
-			if (!target || target == recipient)
+			Msg("[pvs] FTP PRE: no snapshot indices\n");
+			if (vis) delete vis;
+			LUA->PushNumber(0);
+			return 1;
+		}
+
+		edict_t* base = Util::engineserver->PEntityOfEntIndex(0);
+		if (!base)
+		{
+			Msg("[pvs] FTP PRE: base edict NULL\n");
+			if (vis) delete vis;
+			LUA->PushNumber(0);
+			return 1;
+		}
+
+		int scanned = 0;
+		int playerCandidates = 0;
+		int inPVSCount = 0;
+
+		for (int k = 0; k < g_nCurrentEdicts; ++k)
+		{
+			const int edictIndex = (int)g_pCurrentEdictIndices[k];
+			if (edictIndex <= 0 || edictIndex >= MAX_EDICTS)
 				continue;
 
-			const int tid = target->entindex();
-			if (tid <= 0 || tid >= MAX_EDICTS)
+			edict_t* ed = &base[edictIndex];
+			if (!IsValidEdictFast(ed))
 				continue;
 
-			++candidates;
+			CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(ed);
+			if (!ent || !ent->IsPlayer())
+				continue;
 
-			// PVS check
+			CBasePlayer* target = static_cast<CBasePlayer*>(ent);
+			if (!IsValidPlayerFast(target) || target == recipient)
+				continue;
+
+			++scanned;
+			++playerCandidates;
+
+			// PVS check first
 			const Vector& tgtPos = target->GetAbsOrigin();
 			bool inPVS = false;
 
@@ -671,30 +656,35 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 			if (!inPVS)
 				continue;
 
-			++considered;
+			++inPVSCount;
 
-			// Cache LOS
+			const int tid = target->entindex(); // only for cache key/log
 			const uint32_t key = AWHKey(rid, tid);
+
 			auto it = g_AWHCache.find(key);
 			if (it != g_AWHCache.end() && it->second.nextCheck > now)
 			{
 				if (!it->second.visible)
-					pending.push_back(tid);
+				{
+					pending.push_back(edictIndex); // IMPORTANT: store EDICT INDEX, not entindex()
+				}
 				continue;
 			}
 
-			const bool visible = AWH_LOS_LuaOrder(recipient, (CBaseEntity*)target, rid, tid);
+			const bool visible = AWH_LOS_LuaOrder(recipient, target, rid, tid);
 
 			AWHCacheEntry& e = g_AWHCache[key];
 			e.visible = visible;
 			e.nextCheck = now + cacheTime;
 
 			if (!visible)
-				pending.push_back(tid);
+			{
+				pending.push_back(edictIndex); // IMPORTANT
+			}
 		}
 
-		Msg("[pvs] FTP PRE end rid=%d candidates=%d considered=%d pending=%zu\n",
-			rid, candidates, considered, pending.size());
+		Msg("[pvs] FTP PRE end rid=%d players=%d inPVS=%d pending=%zu\n",
+			rid, playerCandidates, inPVSCount, pending.size());
 
 		removed = (int)pending.size();
 	}
@@ -707,23 +697,23 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 		if (it == g_PendingRemoveByRecipient.end())
 		{
 			Msg("[pvs] FTP POST: no pending list rid=%d\n", rid);
-			LUA->PushNumber(0);
 			if (vis) delete vis;
+			LUA->PushNumber(0);
 			return 1;
 		}
 
 		const std::vector<int>& pending = it->second;
 
-		for (int tid : pending)
+		for (int edictIndex : pending)
 		{
-			const bool inBits   = (transmitBits && transmitBits->Get(tid));
-			const bool inAlways = (transmitAlways && transmitAlways->Get(tid));
+			const bool inBits   = (transmitBits && transmitBits->Get(edictIndex));
+			const bool inAlways = (transmitAlways && transmitAlways->Get(edictIndex));
 
 			if (!inBits && !inAlways)
 				continue;
 
-			if (inBits) transmitBits->Clear(tid);
-			if (inAlways) transmitAlways->Clear(tid);
+			if (inBits)   transmitBits->Clear(edictIndex);
+			if (inAlways) transmitAlways->Clear(edictIndex);
 			++removed;
 		}
 
