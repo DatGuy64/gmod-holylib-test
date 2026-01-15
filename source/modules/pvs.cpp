@@ -962,39 +962,6 @@ LUA_FUNCTION_STATIC(pvs_GetStateFlags)
 
 static bool RemoveEntityFromTransmit(GarrysMod::Lua::ILuaInterface* pLua, CBaseEntity* ent)
 {
-	edict_t* edict = ent->edict();
-	if (!edict)
-		pLua->ThrowError("Failed to get edict?");
-
-	if (!g_pCurrentTransmitInfo)
-		pLua->ThrowError("Tried to use pvs.RemoveEntityFromTransmit while not in a CheckTransmit call!");
-
-	const int idx = edict->m_EdictIndex;
-	
-	auto* bits   = g_pCurrentTransmitInfo->m_pTransmitEdict;
-	auto* always = g_pCurrentTransmitInfo->m_pTransmitAlways;
-	
-	const bool inBits   = (bits && bits->Get(idx));
-	const bool inAlways = (always && always->Get(idx));
-	
-	if (!inBits && !inAlways)
-	    return false;
-	
-	if (inBits)   bits->Clear(idx);
-	if (inAlways) always->Clear(idx);
-	
-	return true;
-
-
-	g_pCurrentTransmitInfo->m_pTransmitEdict->Clear(edict->m_EdictIndex);
-	if (g_pCurrentTransmitInfo->m_pTransmitAlways && g_pCurrentTransmitInfo->m_pTransmitAlways->Get(edict->m_EdictIndex))
-		g_pCurrentTransmitInfo->m_pTransmitAlways->Clear(edict->m_EdictIndex);
-
-	return true;
-}
-
-static bool RemoveEntityFromTransmit(GarrysMod::Lua::ILuaInterface* pLua, CBaseEntity* ent)
-{
 	edict_t* edict = ent ? ent->edict() : nullptr;
 	if (!edict)
 		pLua->ThrowError("Failed to get edict?");
@@ -1023,10 +990,49 @@ static bool RemoveEntityFromTransmit(GarrysMod::Lua::ILuaInterface* pLua, CBaseE
 	return true;
 }
 
+LUA_FUNCTION_STATIC(pvs_RemoveEntityFromTransmit)
+{
+	// table
+	if (LUA->IsType(1, GarrysMod::Lua::Type::Table))
+	{
+		LUA->Push(1);
+		LUA->PushNil();
+		while (LUA->Next(-2))
+		{
+			CBaseEntity* ent = Util::Get_Entity(LUA, -1, true);
+			RemoveEntityFromTransmit(LUA, ent);
+			LUA->Pop(1);
+		}
+		LUA->Pop(1);
+
+		LUA->PushBool(true);
+		return 1;
+	}
+
+#if MODULE_EXISTS_ENTITYLIST
+	// EntityList
+	if (Is_EntityList(LUA, 1))
+	{
+		EntityList* entList = Get_EntityList(LUA, 1, true);
+		for (CBaseEntity* ent : entList->GetEntities())
+			RemoveEntityFromTransmit(LUA, ent);
+
+		LUA->PushBool(true);
+		return 1;
+	}
+#endif
+
+	// single entity
+	CBaseEntity* ent = Util::Get_Entity(LUA, 1, true);
+	LUA->PushBool(RemoveEntityFromTransmit(LUA, ent));
+	return 1;
+}
+
+
 LUA_FUNCTION_STATIC(pvs_RemoveAllEntityFromTransmit)
 {
 	if (!g_pCurrentTransmitInfo)
-		LUA->ThrowError("Tried to use pvs.RemoveEntityFromTransmit while not in a CheckTransmit call!");
+		LUA->ThrowError("Tried to use pvs.RemoveAllEntityFromTransmit while not in a CheckTransmit call!");
 
 	g_pCurrentTransmitInfo->m_pTransmitEdict->ClearAll();
 	if (g_pCurrentTransmitInfo->m_pTransmitAlways)
