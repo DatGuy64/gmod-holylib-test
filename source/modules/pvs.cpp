@@ -7,6 +7,11 @@
 #include "iserver.h"
 #include "sourcesdk/baseclient.h"
 #include "vprof.h"
+#include <stdint.h>
+
+#include <vector>
+#include <cmath>
+#include <cstring>
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -29,6 +34,26 @@ IModule* pPVSModule = &g_pPVSModule;
 static int currentPVSSize = -1;
 static unsigned char* currentPVS = nullptr;
 static int mapPVSSize = -1;
+static bool g_bActiveCheckTransmitViewer[65] = { false };
+static uint64_t g_PlayerPVSMask[65] = { 0 };
+
+static inline int GetClientIndexFromEntity(CBaseEntity* ent)
+{
+	if (!ent)
+		return -1;
+
+	edict_t* ed = ent->edict();
+	if (!ed)
+		return -1;
+
+	return ed->m_EdictIndex;
+}
+
+static inline uint64_t BitForClient(int idx)
+{
+	return (idx >= 1 && idx <= 64) ? (1ULL << (idx - 1)) : 0ULL;
+}
+
 #ifndef HOLYLIB_MANUALNETWORKING
 static Detouring::Hook detour_CGMOD_Player_SetupVisibility;
 static void hook_CGMOD_Player_SetupVisibility(void* ent, unsigned char* pvs, int pvssize)
@@ -37,6 +62,68 @@ static void hook_CGMOD_Player_SetupVisibility(void* ent, unsigned char* pvs, int
 	currentPVSSize = pvssize;
 
 	detour_CGMOD_Player_SetupVisibility.GetTrampoline<Symbols::CGMOD_Player_SetupVisibility>()(ent, pvs, pvssize);
+
+	if (g_Lua)
+	{
+		CBaseEntity* pViewerEnt = (CBaseEntity*)ent;
+		int viewerIdx = GetClientIndexFromEntity(pViewerEnt);
+		if (viewerIdx >= 1 && viewerIdx <= gpGlobals->maxClients && viewerIdx <= 64 && g_bActiveCheckTransmitViewer[viewerIdx])
+		{
+			uint64_t oldMask = g_PlayerPVSMask[viewerIdx];
+			uint64_t newMask = 0;
+
+			for (int i = 1; i <= gpGlobals->maxClients && i <= 64; ++i)
+			{
+				if (i == viewerIdx)
+					continue;
+
+				CBasePlayer* pTarget = UTIL_PlayerByIndex(i);
+				if (!pTarget)
+					continue;
+
+				const Vector& pos = pTarget->GetAbsOrigin();
+				if (Util::engineserver->CheckOriginInPVS(pos, currentPVS, currentPVSSize))
+					newMask |= BitForClient(i);
+			}
+
+			uint64_t diff = oldMask ^ newMask;
+			if (diff != 0)
+			{
+				for (int i = 1; i <= gpGlobals->maxClients && i <= 64; ++i)
+				{
+					uint64_t bit = BitForClient(i);
+					if ((diff & bit) == 0)
+						continue;
+
+					CBasePlayer* pTarget = UTIL_PlayerByIndex(i);
+					if (!pTarget)
+						continue;
+
+					bool nowInPVS = (newMask & bit) != 0;
+					if (nowInPVS)
+					{
+						if (Lua::PushHook("HolyLib:PlayerEnterPVS"))
+						{
+							Util::Push_Entity(g_Lua, pViewerEnt);
+							Util::Push_Entity(g_Lua, pTarget);
+							g_Lua->CallFunctionProtected(3, 0, true);
+						}
+					}
+					else
+					{
+						if (Lua::PushHook("HolyLib:PlayerLeavePVS"))
+						{
+							Util::Push_Entity(g_Lua, pViewerEnt);
+							Util::Push_Entity(g_Lua, pTarget);
+							g_Lua->CallFunctionProtected(3, 0, true);
+						}
+					}
+				}
+			}
+
+			g_PlayerPVSMask[viewerIdx] = newMask;
+		}
+	}
 
 	currentPVS = nullptr;
 	currentPVSSize = -1;
@@ -92,6 +179,30 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 	g_pCurrentTransmitInfo = pInfo;
 	g_pCurrentEdictIndices = pEdictIndices;
 	g_nCurrentEdicts = nEdicts;
+
+	CBaseEntity* pViewerEnt = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
+	int viewerIdx = GetClientIndexFromEntity(pViewerEnt);
+	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > 64 || !g_bActiveCheckTransmitViewer[viewerIdx])
+	{
+#if MODULE_EXISTS_NETWORKING
+		if (g_pReplaceCServerGameEnts_CheckTransmit)
+		{
+			if (!New_CServerGameEnts_CheckTransmit(gameents, pInfo, pEdictIndices, nEdicts))
+			{
+				detour_CServerGameEnts_CheckTransmit.GetTrampoline<Symbols::CServerGameEnts_CheckTransmit>()(gameents, pInfo, pEdictIndices, nEdicts);
+			}
+		}
+		else
+#endif
+		{
+			detour_CServerGameEnts_CheckTransmit.GetTrampoline<Symbols::CServerGameEnts_CheckTransmit>()(gameents, pInfo, pEdictIndices, nEdicts);
+		}
+
+		g_pCurrentTransmitInfo = nullptr;
+		g_pCurrentEdictIndices = nullptr;
+		g_nCurrentEdicts = -1;
+		return;
+	}
 
 	if(g_bEnableLuaPreTransmitHook && Lua::PushHook("HolyLib:PreCheckTransmit"))
 	{
@@ -211,6 +322,16 @@ void PreCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned 
 	g_pCurrentEdictIndices = pEdictIndices;
 	g_nCurrentEdicts = nEdicts;
 
+	CBaseEntity* pViewerEnt = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
+	int viewerIdx = GetClientIndexFromEntity(pViewerEnt);
+	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > 64 || !g_bActiveCheckTransmitViewer[viewerIdx])
+	{
+		g_pCurrentTransmitInfo = nullptr;
+		g_pCurrentEdictIndices = nullptr;
+		g_nCurrentEdicts = -1;
+		return;
+	}
+
 	if(g_bEnableLuaPreTransmitHook && Lua::PushHook("HolyLib:PreCheckTransmit"))
 	{
 		Util::Push_Entity(g_Lua, Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt));
@@ -278,12 +399,22 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 	g_pCurrentEdictIndices = pEdictIndices;
 	g_nCurrentEdicts = nEdicts;
 
+	CBaseEntity* pViewerEnt = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
+	int viewerIdx = GetClientIndexFromEntity(pViewerEnt);
+	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > 64 || !g_bActiveCheckTransmitViewer[viewerIdx])
+	{
+		g_pCurrentTransmitInfo = nullptr;
+		g_pCurrentEdictIndices = nullptr;
+		g_nCurrentEdicts = -1;
+		return;
+	}
+
 	if(g_bEnableLuaPostTransmitHook && Lua::PushHook("HolyLib:PostCheckTransmit"))
 	{
-		g_bBlockAdditonToTransmit = true;
+		g_bBlockAdditionToTransmit = true;
 		Util::Push_Entity(g_Lua, Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt));
 		g_Lua->CallFunctionProtected(2, 0, true);
-		g_bBlockAdditonToTransmit = false;
+		g_bBlockAdditionToTransmit = false;
 	}
 
 	if (bWasOverrideStateFlagsUsed)
@@ -310,6 +441,24 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 	g_nCurrentEdicts = -1;
 }
 #endif
+
+LUA_FUNCTION_STATIC(pvs_ActiveCheckTransmit)
+{
+	CBasePlayer* ply = Util::Get_Player(LUA, 1, true);
+	bool bEnable = LUA->GetBool(2);
+
+	int idx = -1;
+	if (ply && ply->edict())
+		idx = ply->edict()->m_EdictIndex;
+
+	if (idx < 1 || idx > 64)
+		LUA->ThrowError("pvs.ActiveCheckTransmit: invalid player index");
+
+	g_bActiveCheckTransmitViewer[idx] = bEnable;
+	g_PlayerPVSMask[idx] = 0;
+
+	return 0;
+}
 
 LUA_FUNCTION_STATIC(pvs_Begin)
 {
@@ -964,7 +1113,7 @@ LUA_FUNCTION_STATIC(pvs_GetEntitiesFromTransmit)
 		int iEdict = g_pCurrentEdictIndices[i];
 		edict_t *pEdict = &pBaseEdict[iEdict];
 
-		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(i))
+		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(iEdict))
 			continue;
 
 		Util::Push_Entity(LUA, Util::servergameents->EdictToBaseEntity(pEdict));
@@ -1020,6 +1169,7 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 	mapPVSSize = ceil(Util::engineserver->GetClusterCount() / 8.0f);
 
 	Util::StartTable(pLua);
+		Util::AddFunc(pLua, pvs_ActiveCheckTransmit, "ActiveCheckTransmit");
 		Util::AddFunc(pLua, pvs_Begin, "Begin");
 		Util::AddFunc(pLua, pvs_Test, "Test");
 		Util::AddFunc(pLua, pvs_End, "End");
