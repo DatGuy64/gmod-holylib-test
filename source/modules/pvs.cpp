@@ -47,7 +47,7 @@ static void hook_CGMOD_Player_SetupVisibility(void* ent, unsigned char* pvs, int
 }
 #endif
 
-IEngineTrace* enginetrace = nullptr;
+extern IEngineTrace* enginetrace;
 void CPVSModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn)
 {
 	enginetrace = (IEngineTrace*)appfn[0](INTERFACEVERSION_ENGINETRACE_SERVER, nullptr);
