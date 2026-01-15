@@ -9,10 +9,6 @@
 #include "vprof.h"
 #include <stdint.h>
 
-#include <vector>
-#include <cmath>
-#include <cstring>
-
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
@@ -54,6 +50,72 @@ static inline uint64_t BitForClient(int idx)
 	return (idx >= 1 && idx <= 64) ? (1ULL << (idx - 1)) : 0ULL;
 }
 
+static inline void UpdatePlayerEnterLeaveMask(CBaseEntity* pViewerEnt, int viewerIdx, CCheckTransmitInfo* pInfo)
+{
+	if (!g_Lua)
+		return;
+	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > 64)
+		return;
+	if (!g_bActiveCheckTransmitViewer[viewerIdx])
+		return;
+	if (!pInfo || !pInfo->m_pTransmitEdict)
+		return;
+
+	uint64_t oldMask = g_PlayerPVSMask[viewerIdx];
+	uint64_t newMask = 0;
+
+	for (int i = 1; i <= gpGlobals->maxClients && i <= 64; ++i)
+	{
+		if (i == viewerIdx)
+			continue;
+
+		CBasePlayer* pTarget = UTIL_PlayerByIndex(i);
+		if (!pTarget || !pTarget->edict())
+			continue;
+
+		int targetEdict = pTarget->edict()->m_EdictIndex;
+		if (pInfo->m_pTransmitEdict->Get(targetEdict))
+			newMask |= BitForClient(i);
+	}
+
+	uint64_t diff = oldMask ^ newMask;
+	if (diff)
+	{
+		for (int i = 1; i <= gpGlobals->maxClients && i <= 64; ++i)
+		{
+			uint64_t bit = BitForClient(i);
+			if ((diff & bit) == 0)
+				continue;
+
+			CBasePlayer* pTarget = UTIL_PlayerByIndex(i);
+			if (!pTarget)
+				continue;
+
+			bool nowIn = (newMask & bit) != 0;
+			if (nowIn)
+			{
+				if (Lua::PushHook("HolyLib:PlayerEnterPVS"))
+				{
+					Util::Push_Entity(g_Lua, pViewerEnt);
+					Util::Push_Entity(g_Lua, pTarget);
+					g_Lua->CallFunctionProtected(3, 0, true);
+				}
+			}
+			else
+			{
+				if (Lua::PushHook("HolyLib:PlayerLeavePVS"))
+				{
+					Util::Push_Entity(g_Lua, pViewerEnt);
+					Util::Push_Entity(g_Lua, pTarget);
+					g_Lua->CallFunctionProtected(3, 0, true);
+				}
+			}
+		}
+	}
+
+	g_PlayerPVSMask[viewerIdx] = newMask;
+}
+
 #ifndef HOLYLIB_MANUALNETWORKING
 static Detouring::Hook detour_CGMOD_Player_SetupVisibility;
 static void hook_CGMOD_Player_SetupVisibility(void* ent, unsigned char* pvs, int pvssize)
@@ -62,68 +124,6 @@ static void hook_CGMOD_Player_SetupVisibility(void* ent, unsigned char* pvs, int
 	currentPVSSize = pvssize;
 
 	detour_CGMOD_Player_SetupVisibility.GetTrampoline<Symbols::CGMOD_Player_SetupVisibility>()(ent, pvs, pvssize);
-
-	if (g_Lua)
-	{
-		CBaseEntity* pViewerEnt = (CBaseEntity*)ent;
-		int viewerIdx = GetClientIndexFromEntity(pViewerEnt);
-		if (viewerIdx >= 1 && viewerIdx <= gpGlobals->maxClients && viewerIdx <= 64 && g_bActiveCheckTransmitViewer[viewerIdx])
-		{
-			uint64_t oldMask = g_PlayerPVSMask[viewerIdx];
-			uint64_t newMask = 0;
-
-			for (int i = 1; i <= gpGlobals->maxClients && i <= 64; ++i)
-			{
-				if (i == viewerIdx)
-					continue;
-
-				CBasePlayer* pTarget = UTIL_PlayerByIndex(i);
-				if (!pTarget)
-					continue;
-
-				const Vector& pos = pTarget->GetAbsOrigin();
-				if (Util::engineserver->CheckOriginInPVS(pos, currentPVS, currentPVSSize))
-					newMask |= BitForClient(i);
-			}
-
-			uint64_t diff = oldMask ^ newMask;
-			if (diff != 0)
-			{
-				for (int i = 1; i <= gpGlobals->maxClients && i <= 64; ++i)
-				{
-					uint64_t bit = BitForClient(i);
-					if ((diff & bit) == 0)
-						continue;
-
-					CBasePlayer* pTarget = UTIL_PlayerByIndex(i);
-					if (!pTarget)
-						continue;
-
-					bool nowInPVS = (newMask & bit) != 0;
-					if (nowInPVS)
-					{
-						if (Lua::PushHook("HolyLib:PlayerEnterPVS"))
-						{
-							Util::Push_Entity(g_Lua, pViewerEnt);
-							Util::Push_Entity(g_Lua, pTarget);
-							g_Lua->CallFunctionProtected(3, 0, true);
-						}
-					}
-					else
-					{
-						if (Lua::PushHook("HolyLib:PlayerLeavePVS"))
-						{
-							Util::Push_Entity(g_Lua, pViewerEnt);
-							Util::Push_Entity(g_Lua, pTarget);
-							g_Lua->CallFunctionProtected(3, 0, true);
-						}
-					}
-				}
-			}
-
-			g_PlayerPVSMask[viewerIdx] = newMask;
-		}
-	}
 
 	currentPVS = nullptr;
 	currentPVSSize = -1;
@@ -297,6 +297,8 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 		bWasAddedEntityUsed = false;
 	}
 
+	UpdatePlayerEnterLeaveMask(pViewerEnt, viewerIdx, pInfo);
+
 	g_pCurrentTransmitInfo = nullptr;
 	g_pCurrentEdictIndices = nullptr;
 	g_nCurrentEdicts = -1;
@@ -435,6 +437,8 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 		g_pAddEntityToPVS.ClearAll();
 		bWasAddedEntityUsed = false;
 	}
+
+	UpdatePlayerEnterLeaveMask(pViewerEnt, viewerIdx, pInfo);
 
 	g_pCurrentTransmitInfo = nullptr;
 	g_pCurrentEdictIndices = nullptr;
