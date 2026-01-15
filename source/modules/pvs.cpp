@@ -360,21 +360,18 @@ static inline bool AWH_MultiLOS_OptionB(CBasePlayer* ply, CBaseEntity* target)
 
 LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 {
-	// Must be called inside CheckTransmit (Pre or Post hook)
-	if (!g_pCurrentTransmitInfo || !g_pCurrentEdictIndices || g_nCurrentEdicts <= 0)
+	// Must be called inside CheckTransmit (Pre/Post hook)
+	if (!g_pCurrentTransmitInfo)
 		LUA->ThrowError("pvs.FilterTransmitPlayers must be called inside HolyLib:PreCheckTransmit or HolyLib:PostCheckTransmit!");
 
-	// Args: (recipientPlayer, cacheTime)
 	CBasePlayer* recipient = Util::Get_Player(LUA, 1, true);
 
 	float cacheTime = (float)LUA->CheckNumber(2);
 	if (cacheTime < 0.0f) cacheTime = 0.0f;
 
-	// Safety: ensure the hook recipient matches the current transmit recipient
 	CBaseEntity* curClientEnt = Util::servergameents->EdictToBaseEntity(g_pCurrentTransmitInfo->m_pClientEnt);
 	if (curClientEnt != (CBaseEntity*)recipient)
 	{
-		// return false (mismatch)
 		LUA->PushBool(false);
 		return 1;
 	}
@@ -384,85 +381,59 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 
 	const int recipientIdx = recipient->entindex();
 	const float now = gpGlobals->curtime;
-
-	// World edict base
-	edict_t* pWorld = Util::engineserver->PEntityOfEntIndex(0);
+	const int maxClients = gpGlobals->maxClients;
 
 	int removed = 0;
 
-	// Iterate the snapshot list (correct indexing for m_pTransmitEdict / m_pTransmitAlways)
-	for (int snapIdx = 0; snapIdx < g_nCurrentEdicts; ++snapIdx)
+	for (int i = 1; i <= maxClients; ++i)
 	{
-		// If already not being transmitted, nothing to do
-		if (!transmitBits->Get(snapIdx))
+		CBasePlayer* targetPly = UTIL_PlayerByIndex(i);
+		if (!targetPly)
 			continue;
 
-		const int edictIndex = g_pCurrentEdictIndices[snapIdx];
-
-		// skip invalid/world
-		if (edictIndex <= 0 || edictIndex >= MAX_EDICTS)
-			continue;
-
-		edict_t* pEdict = &pWorld[edictIndex];
-		if (!pEdict)
-			continue;
-
-		CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(pEdict);
-		if (!ent)
-			continue;
-
-		// Only filter players (fast path; avoids iterating non-players in Lua)
-		if (!ent->IsPlayer())
-			continue;
-
-		CBasePlayer* targetPly = (CBasePlayer*)ent;
-		if (!targetPly || targetPly == recipient)
+		if (targetPly == recipient)
 			continue;
 
 		const int targetIdx = targetPly->entindex();
 		if (targetIdx <= 0 || targetIdx >= MAX_EDICTS)
 			continue;
 
-		// Cache lookup
-		const uint32_t key = AWHKey(recipientIdx, targetIdx);
-		auto it = g_AWHCache.find(key);
+		if (!transmitBits->Get(targetIdx))
+			continue;
 
+		const uint32_t key = AWHKey(recipientIdx, targetIdx);
+
+		auto it = g_AWHCache.find(key);
 		if (it != g_AWHCache.end() && it->second.nextCheck > now)
 		{
-			// Cache still valid: apply cached visibility
 			if (!it->second.visible)
 			{
-				transmitBits->Clear(snapIdx);
-				if (transmitAlways && transmitAlways->Get(snapIdx))
-					transmitAlways->Clear(snapIdx);
+				transmitBits->Clear(targetIdx);
+				if (transmitAlways && transmitAlways->Get(targetIdx))
+					transmitAlways->Clear(targetIdx);
 				removed++;
 			}
 			continue;
 		}
 
-		// Compute visibility (Option B: edges then top corners)
 		const bool vis = AWH_MultiLOS_OptionB(recipient, (CBaseEntity*)targetPly);
 
-		// Update cache
 		AWHCacheEntry& e = g_AWHCache[key];
 		e.visible = vis;
 		e.nextCheck = now + cacheTime;
 
-		// Apply decision
 		if (!vis)
 		{
-			transmitBits->Clear(snapIdx);
-			if (transmitAlways && transmitAlways->Get(snapIdx))
-				transmitAlways->Clear(snapIdx);
+			transmitBits->Clear(targetIdx);
+			if (transmitAlways && transmitAlways->Get(targetIdx))
+				transmitAlways->Clear(targetIdx);
 			removed++;
 		}
 	}
 
-	// Return number of removed players for debugging/metrics
 	LUA->PushNumber(removed);
 	return 1;
 }
-
 
 
 LUA_FUNCTION_STATIC(pvs_Begin)
