@@ -1153,7 +1153,7 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 		Util::AddFunc(pLua, pvs_TestPVS, "TestPVS");
 		Util::AddFunc(pLua, pvs_ForceFullUpdate, "ForceFullUpdate");
 		Util::AddFunc(pLua, pvs_GetEntitiesFromTransmit, "GetEntitiesFromTransmit");
-		Util::AddFunc(pLua, pvs_GetPlayersFromTransmit, \"GetPlayersFromTransmit\");
+		Util::AddFunc(pLua, pvs_GetPlayersFromTransmit, "GetPlayersFromTransmit");
 		Util::AddFunc(pLua, pvs_ForceWeaponTransmit, "ForceWeaponTransmit");
 
 		// Use the functions below only inside the HolyLib:[Pre/Post]CheckTransmit hook.  
