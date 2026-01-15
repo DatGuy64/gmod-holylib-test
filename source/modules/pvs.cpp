@@ -31,8 +31,6 @@ static int currentPVSSize = -1;
 static unsigned char* currentPVS = nullptr;
 static int mapPVSSize = -1;
 static bool g_bActiveCheckTransmitViewer[65] = { false };
-static uint64_t g_PlayerPVSMask[65] = { 0 };
-
 static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 {
 	if (!ent)
@@ -48,72 +46,6 @@ static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 static inline uint64_t BitForClient(int idx)
 {
 	return (idx >= 1 && idx <= 64) ? (1ULL << (idx - 1)) : 0ULL;
-}
-
-static inline void UpdatePlayerEnterLeaveMask(CBaseEntity* pViewerEnt, int viewerIdx, CCheckTransmitInfo* pInfo)
-{
-	if (!g_Lua)
-		return;
-	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > 64)
-		return;
-	if (!g_bActiveCheckTransmitViewer[viewerIdx])
-		return;
-	if (!pInfo || !pInfo->m_pTransmitEdict)
-		return;
-
-	uint64_t oldMask = g_PlayerPVSMask[viewerIdx];
-	uint64_t newMask = 0;
-
-	for (int i = 1; i <= gpGlobals->maxClients && i <= 64; ++i)
-	{
-		if (i == viewerIdx)
-			continue;
-
-		CBasePlayer* pTarget = UTIL_PlayerByIndex(i);
-		if (!pTarget || !pTarget->edict())
-			continue;
-
-		int targetEdict = pTarget->edict()->m_EdictIndex;
-		if (pInfo->m_pTransmitEdict->Get(targetEdict))
-			newMask |= BitForClient(i);
-	}
-
-	uint64_t diff = oldMask ^ newMask;
-	if (diff)
-	{
-		for (int i = 1; i <= gpGlobals->maxClients && i <= 64; ++i)
-		{
-			uint64_t bit = BitForClient(i);
-			if ((diff & bit) == 0)
-				continue;
-
-			CBasePlayer* pTarget = UTIL_PlayerByIndex(i);
-			if (!pTarget)
-				continue;
-
-			bool nowIn = (newMask & bit) != 0;
-			if (nowIn)
-			{
-				if (Lua::PushHook("HolyLib:PlayerEnterPVS"))
-				{
-					Util::Push_Entity(g_Lua, pViewerEnt);
-					Util::Push_Entity(g_Lua, pTarget);
-					g_Lua->CallFunctionProtected(3, 0, true);
-				}
-			}
-			else
-			{
-				if (Lua::PushHook("HolyLib:PlayerLeavePVS"))
-				{
-					Util::Push_Entity(g_Lua, pViewerEnt);
-					Util::Push_Entity(g_Lua, pTarget);
-					g_Lua->CallFunctionProtected(3, 0, true);
-				}
-			}
-		}
-	}
-
-	g_PlayerPVSMask[viewerIdx] = newMask;
 }
 
 #ifndef HOLYLIB_MANUALNETWORKING
@@ -296,9 +228,6 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 		g_pAddEntityToPVS.ClearAll();
 		bWasAddedEntityUsed = false;
 	}
-
-	UpdatePlayerEnterLeaveMask(pViewerEnt, viewerIdx, pInfo);
-
 	g_pCurrentTransmitInfo = nullptr;
 	g_pCurrentEdictIndices = nullptr;
 	g_nCurrentEdicts = -1;
@@ -437,9 +366,6 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 		g_pAddEntityToPVS.ClearAll();
 		bWasAddedEntityUsed = false;
 	}
-
-	UpdatePlayerEnterLeaveMask(pViewerEnt, viewerIdx, pInfo);
-
 	g_pCurrentTransmitInfo = nullptr;
 	g_pCurrentEdictIndices = nullptr;
 	g_nCurrentEdicts = -1;
@@ -459,7 +385,6 @@ LUA_FUNCTION_STATIC(pvs_ActiveCheckTransmit)
 		LUA->ThrowError("pvs.ActiveCheckTransmit: invalid player index");
 
 	g_bActiveCheckTransmitViewer[idx] = bEnable;
-	g_PlayerPVSMask[idx] = 0;
 
 	return 0;
 }
@@ -1127,6 +1052,39 @@ LUA_FUNCTION_STATIC(pvs_GetEntitiesFromTransmit)
 	return 1;
 }
 
+
+LUA_FUNCTION_STATIC(pvs_GetPlayersFromTransmit)
+{
+	if (!g_pCurrentTransmitInfo)
+		LUA->ThrowError("Tried to use pvs.GetPlayersFromTransmit while not in a CheckTransmit call!");
+
+	LUA->PreCreateTable(gpGlobals->maxClients, 0);
+	int idx = 0;
+	edict_t* pBaseEdict = Util::engineserver->PEntityOfEntIndex(0);
+
+	for (int i = 0; i < g_nCurrentEdicts; ++i)
+	{
+		int iEdict = g_pCurrentEdictIndices[i];
+		if (iEdict < 1 || iEdict > gpGlobals->maxClients)
+			continue;
+
+		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(iEdict))
+			continue;
+
+		edict_t* pEdict = &pBaseEdict[iEdict];
+		CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(pEdict);
+		if (!ent)
+			continue;
+		if (!ent->IsPlayer())
+			continue;
+
+		Util::Push_Entity(LUA, ent);
+		Util::RawSetI(LUA, -2, ++idx);
+	}
+
+	return 1;
+}
+
 LUA_FUNCTION_STATIC(pvs_ForceWeaponTransmit)
 {
 	CBaseEntity* pWeapon = Util::Get_Entity(LUA, 1, true);
@@ -1195,6 +1153,7 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 		Util::AddFunc(pLua, pvs_TestPVS, "TestPVS");
 		Util::AddFunc(pLua, pvs_ForceFullUpdate, "ForceFullUpdate");
 		Util::AddFunc(pLua, pvs_GetEntitiesFromTransmit, "GetEntitiesFromTransmit");
+		Util::AddFunc(pLua, pvs_GetPlayersFromTransmit, \"GetPlayersFromTransmit\");
 		Util::AddFunc(pLua, pvs_ForceWeaponTransmit, "ForceWeaponTransmit");
 
 		// Use the functions below only inside the HolyLib:[Pre/Post]CheckTransmit hook.  
