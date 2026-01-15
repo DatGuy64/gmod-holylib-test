@@ -181,7 +181,12 @@ static void hook_CServerGameEnts_CheckTransmit(
 	g_pCurrentEdictIndices = pEdictIndices;
 	g_nCurrentEdicts = nEdicts;
 
-	// Prépare la pending list pour CE recipient (même logique que le mode manual)
+	// -------------------------------------------------------
+	// PRE PHASE
+	// -------------------------------------------------------
+	g_bIsInPreCheckTransmit = true;
+
+	// Prépare la pending list pour CE recipient (important)
 	CBasePlayer* recipient = GetRecipientFromTransmitInfoSafe();
 	if (recipient)
 	{
@@ -189,22 +194,19 @@ static void hook_CServerGameEnts_CheckTransmit(
 		g_PendingRemoveByRecipient[rid].clear();
 	}
 
-	// ----------------------------
-	// LUA PRE (phase = PRE)
-	// ----------------------------
-	g_bIsInPreCheckTransmit = true;
-
+	// Lua Pre hook (can cancel)
 	if (g_bEnableLuaPreTransmitHook && Lua::PushHook("HolyLib:PreCheckTransmit"))
 	{
 		Util::Push_Entity(g_Lua, Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt));
+
 		if (g_Lua->CallFunctionProtected(2, 1, true))
 		{
-			bool bCancel = g_Lua->GetBool(-1);
+			const bool bCancel = g_Lua->GetBool(-1);
 			g_Lua->Pop(1);
 
 			if (bCancel)
 			{
-				// cleanup identique à ton code
+				// cleanup identique à ton code original
 				if (bWasOverrideStateFlagsUsed)
 				{
 					memset(pOriginalFlags, 0, sizeof(pOriginalFlags));
@@ -228,10 +230,7 @@ static void hook_CServerGameEnts_CheckTransmit(
 		}
 	}
 
-	// On repasse en "POST/normal" pour le reste de la frame
-	g_bIsInPreCheckTransmit = false;
-
-	// --- Apply AddEntityToPVS safely ---
+	// Apply AddEntityToPVS
 	if (bWasAddedEntityUsed)
 	{
 		for (int i = 0; i < g_pAddEntityToPVS.GetNumBits(); ++i)
@@ -251,7 +250,7 @@ static void hook_CServerGameEnts_CheckTransmit(
 		}
 	}
 
-	// --- Apply override flags (SAVE then OVERRIDE) ---
+	// Apply override flags (SAVE then OVERRIDE)
 	if (bWasOverrideStateFlagsUsed)
 	{
 		for (int i = 0; i < MAX_EDICTS; ++i)
@@ -270,9 +269,11 @@ static void hook_CServerGameEnts_CheckTransmit(
 		}
 	}
 
-	// ----------------------------
-	// TRAMPOLINE (vrai CheckTransmit)
-	// ----------------------------
+	// -------------------------------------------------------
+	// REAL / ORIGINAL CheckTransmit
+	// -------------------------------------------------------
+	g_bIsInPreCheckTransmit = false;
+
 #if MODULE_EXISTS_NETWORKING
 	if (g_pReplaceCServerGameEnts_CheckTransmit)
 	{
@@ -289,9 +290,9 @@ static void hook_CServerGameEnts_CheckTransmit(
 			.GetTrampoline<Symbols::CServerGameEnts_CheckTransmit>()(gameents, pInfo, pEdictIndices, nEdicts);
 	}
 
-	// ----------------------------
-	// LUA POST (phase = POST)
-	// ----------------------------
+	// -------------------------------------------------------
+	// POST PHASE
+	// -------------------------------------------------------
 	if (g_bEnableLuaPostTransmitHook && Lua::PushHook("HolyLib:PostCheckTransmit"))
 	{
 		g_bBlockAdditionToTransmit = true;
@@ -300,7 +301,7 @@ static void hook_CServerGameEnts_CheckTransmit(
 		g_bBlockAdditionToTransmit = false;
 	}
 
-	// --- Restore overridden state flags safely ---
+	// Restore overridden state flags
 	if (bWasOverrideStateFlagsUsed)
 	{
 		for (int i = 0; i < MAX_EDICTS; ++i)
@@ -317,13 +318,14 @@ static void hook_CServerGameEnts_CheckTransmit(
 		bWasOverrideStateFlagsUsed = false;
 	}
 
-	// --- Reset AddEntityToPVS tracking ---
+	// Reset AddEntityToPVS tracking
 	if (bWasAddedEntityUsed)
 	{
 		g_pAddEntityToPVS.ClearAll();
 		bWasAddedEntityUsed = false;
 	}
 
+	// Clear globals
 	g_pCurrentTransmitInfo = nullptr;
 	g_pCurrentEdictIndices = nullptr;
 	g_nCurrentEdicts = -1;
@@ -589,15 +591,13 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 {
 	Msg("[pvs] FTP ENTER (phase=%s)\n", g_bIsInPreCheckTransmit ? "PRE" : "POST");
 
-	// Must be called inside CheckTransmit
 	if (!g_pCurrentTransmitInfo)
 		LUA->ThrowError("pvs.FilterTransmitPlayers must be called inside HolyLib:PreCheckTransmit or HolyLib:PostCheckTransmit!");
 
-	// Recipient safe from transmit info
 	CBasePlayer* recipient = GetRecipientFromTransmitInfoSafe();
 	if (!recipient)
 	{
-		Msg("[pvs] FTP abort: recipient invalid (transmitinfo)\n");
+		Msg("[pvs] FTP abort: recipient invalid\n");
 		LUA->PushNumber(0);
 		return 1;
 	}
@@ -615,22 +615,18 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 	Msg("[pvs] FTP state: rid=%d now=%.4f maxCl=%d cacheTime=%.3f bits=%p always=%p\n",
 		rid, now, maxCl, cacheTime, (void*)transmitBits, (void*)transmitAlways);
 
-	// Prefer current PVS from SetupVisibility if available
 	const bool hasCurrentPVS = (currentPVS && currentPVSSize > 0);
 	Msg("[pvs] FTP PVS src: hasCurrentPVS=%d currentPVS=%p currentPVSSize=%d mapPVSSize=%d\n",
 		(int)hasCurrentPVS, (void*)currentPVS, currentPVSSize, mapPVSSize);
 
-	// Build vis only when we don't have currentPVS
 	Util::VisData* vis = nullptr;
 	if (!hasCurrentPVS)
 	{
-		Msg("[pvs] FTP CM_Vis begin rid=%d\n", rid);
 		vis = Util::CM_Vis(recipient->GetAbsOrigin(), DVIS_PVS);
-		Msg("[pvs] FTP CM_Vis end rid=%d vis=%p\n", rid, (void*)vis);
+		Msg("[pvs] FTP CM_Vis rid=%d vis=%p\n", rid, (void*)vis);
 
 		if (!vis)
 		{
-			Msg("[pvs] FTP abort: CM_Vis returned NULL rid=%d\n", rid);
 			LUA->PushNumber(0);
 			return 1;
 		}
@@ -638,26 +634,18 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 
 	int removed = 0;
 
-	// -------------------------
-	// PRE: calcule PVS+LOS et stocke tids à enlever
-	// POST: applique les tids stockés (sans LOS)
-	// -------------------------
+	// ---------------------------------------------------------
+	// PRE: calc PVS + LOS -> pending tids (NE PAS filtrer bits)
+	// POST: applique pending sur transmitBits/transmitAlways
+	// ---------------------------------------------------------
 
 	if (g_bIsInPreCheckTransmit)
 	{
-		if (!transmitBits)
-		{
-			Msg("[pvs] FTP PRE ERROR: transmitBits NULL\n");
-			LUA->ThrowError("pvs.FilterTransmitPlayers: m_pTransmitEdict is NULL (PRE)");
-		}
-
 		std::vector<int>& pending = g_PendingRemoveByRecipient[rid];
 		pending.clear();
 
-		int considered = 0;
 		int candidates = 0;
-
-		Msg("[pvs] FTP PRE loop begin rid=%d\n", rid);
+		int considered = 0;
 
 		for (int i = 1; i <= maxCl; ++i)
 		{
@@ -669,23 +657,11 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 			if (tid <= 0 || tid >= MAX_EDICTS)
 				continue;
 
-			// IMPORTANT: only operate on targets actually being transmitted this snapshot
-			const bool inBits   = (transmitBits && transmitBits->Get(tid));
-			const bool inAlways = (transmitAlways && transmitAlways->Get(tid));
-			if (!inBits && !inAlways)
-				continue;
-
 			++candidates;
 
-			Msg("[pvs] PRE candidate rid=%d tid=%d inBits=%d inAlways=%d\n",
-				rid, tid, (int)inBits, (int)inAlways);
-
-			// PVS first (cheap)
+			// PVS check
 			const Vector& tgtPos = target->GetAbsOrigin();
 			bool inPVS = false;
-
-			Msg("[pvs] PRE PVS check rid=%d tid=%d hasCurrentPVS=%d curSize=%d mapPVSSize=%d\n",
-				rid, tid, (int)hasCurrentPVS, currentPVSSize, mapPVSSize);
 
 			if (hasCurrentPVS)
 				inPVS = Util::engineserver->CheckOriginInPVS(tgtPos, currentPVS, currentPVSSize);
@@ -693,10 +669,7 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 				inPVS = Util::engineserver->CheckOriginInPVS(tgtPos, vis->cluster, mapPVSSize);
 
 			if (!inPVS)
-			{
-				Msg("[pvs] PRE skip (not in PVS) rid=%d tid=%d\n", rid, tid);
 				continue;
-			}
 
 			++considered;
 
@@ -705,46 +678,30 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 			auto it = g_AWHCache.find(key);
 			if (it != g_AWHCache.end() && it->second.nextCheck > now)
 			{
-				Msg("[pvs] PRE cache hit rid=%d tid=%d visible=%d next=%.4f now=%.4f\n",
-					rid, tid, (int)it->second.visible, it->second.nextCheck, now);
-
 				if (!it->second.visible)
-				{
 					pending.push_back(tid);
-					Msg("[pvs] PRE pending (cache says hidden) rid=%d tid=%d\n", rid, tid);
-				}
 				continue;
 			}
 
-			Msg("[pvs] PRE LOS begin rid=%d tid=%d\n", rid, tid);
 			const bool visible = AWH_LOS_LuaOrder(recipient, (CBaseEntity*)target, rid, tid);
-			Msg("[pvs] PRE LOS end rid=%d tid=%d visible=%d\n", rid, tid, (int)visible);
 
 			AWHCacheEntry& e = g_AWHCache[key];
 			e.visible = visible;
 			e.nextCheck = now + cacheTime;
 
 			if (!visible)
-			{
 				pending.push_back(tid);
-				Msg("[pvs] PRE pending (LOS hidden) rid=%d tid=%d\n", rid, tid);
-			}
 		}
 
-		Msg("[pvs] FTP PRE loop end rid=%d candidates=%d considered(inPVS)=%d pending=%zu cacheSize=%zu\n",
-			rid, candidates, considered, pending.size(), g_AWHCache.size());
+		Msg("[pvs] FTP PRE end rid=%d candidates=%d considered=%d pending=%zu\n",
+			rid, candidates, considered, pending.size());
 
-		// Return how many we *plan* to remove (debug)
 		removed = (int)pending.size();
 	}
 	else
 	{
-		// POST: apply pending removes to current snapshot
 		if (!transmitBits)
-		{
-			Msg("[pvs] FTP POST ERROR: transmitBits NULL\n");
 			LUA->ThrowError("pvs.FilterTransmitPlayers: m_pTransmitEdict is NULL (POST)");
-		}
 
 		auto it = g_PendingRemoveByRecipient.find(rid);
 		if (it == g_PendingRemoveByRecipient.end())
@@ -757,16 +714,10 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 
 		const std::vector<int>& pending = it->second;
 
-		Msg("[pvs] FTP POST apply rid=%d pending=%zu bits=%p always=%p\n",
-			rid, pending.size(), (void*)transmitBits, (void*)transmitAlways);
-
 		for (int tid : pending)
 		{
 			const bool inBits   = (transmitBits && transmitBits->Get(tid));
 			const bool inAlways = (transmitAlways && transmitAlways->Get(tid));
-
-			Msg("[pvs] POST try remove rid=%d tid=%d inBits=%d inAlways=%d\n",
-				rid, tid, (int)inBits, (int)inAlways);
 
 			if (!inBits && !inAlways)
 				continue;
@@ -774,22 +725,15 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 			if (inBits) transmitBits->Clear(tid);
 			if (inAlways) transmitAlways->Clear(tid);
 			++removed;
-
-			Msg("[pvs] POST removed rid=%d tid=%d (removedCount=%d)\n", rid, tid, removed);
 		}
 
-		Msg("[pvs] FTP POST end rid=%d removed=%d\n", rid, removed);
+		Msg("[pvs] FTP POST end rid=%d removed=%d pending=%zu\n", rid, removed, pending.size());
 	}
 
 	if (vis)
-	{
-		Msg("[pvs] FTP delete vis=%p rid=%d\n", (void*)vis, rid);
 		delete vis;
-		vis = nullptr;
-	}
 
 	Msg("[pvs] FTP EXIT rid=%d removed=%d\n", rid, removed);
-
 	LUA->PushNumber(removed);
 	return 1;
 }
