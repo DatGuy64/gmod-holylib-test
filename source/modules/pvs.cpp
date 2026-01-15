@@ -324,10 +324,10 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 
 	if(g_bEnableLuaPostTransmitHook && Lua::PushHook("HolyLib:PostCheckTransmit"))
 	{
-		g_bBlockAdditonToTransmit = true;
+		g_bBlockAdditionToTransmit = true;
 		Util::Push_Entity(g_Lua, Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt));
 		g_Lua->CallFunctionProtected(2, 0, true);
-		g_bBlockAdditonToTransmit = false;
+		g_bBlockAdditionToTransmit = false;
 	}
 
 	if (bWasOverrideStateFlagsUsed)
@@ -355,7 +355,7 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 }
 #endif
 
-static inline bool AWH_MultiLOS_OptionB_Fast(CBasePlayer* ply, CBaseEntity* target, int rid, int tid)
+static inline bool AWH_LOS_LuaOrder(CBasePlayer* ply, CBaseEntity* target, int rid, int tid)
 {
 	if (!IsValidPlayerFast(ply))
 	{
@@ -374,17 +374,18 @@ static inline bool AWH_MultiLOS_OptionB_Fast(CBasePlayer* ply, CBaseEntity* targ
 		return false;
 	}
 
-	PVS_Dbg("LOS call#1 WSC rid=%d tid=%d", rid, tid);
+	// 1) center
+	PVS_Dbg("LOS#1 center rid=%d tid=%d", rid, tid);
 	if (ply->IsLineOfSightClear(target->WorldSpaceCenter()))
 		return true;
 
+	// collision
 	auto* col = target->CollisionProp();
 	if (!col)
 	{
 		PVS_Dbg("LOS abort: CollisionProp null rid=%d tid=%d", rid, tid);
 		return false;
 	}
-
 	const Vector& mins = col->OBBMins();
 	const Vector& maxs = col->OBBMaxs();
 
@@ -392,27 +393,28 @@ static inline bool AWH_MultiLOS_OptionB_Fast(CBasePlayer* ply, CBaseEntity* targ
 	const float zEdge = zTop - 10.0f;
 
 	const matrix3x4_t& mat = target->EntityToWorldTransform();
-
 	Vector out;
 
 	#define L2W(x,y,z) (VectorTransform(Vector((x),(y),(z)), mat, out), out)
 
-	PVS_Dbg("LOS call#2 rid=%d tid=%d", rid, tid);
+	// 2) edges first (Lua order)
+	PVS_Dbg("LOS#2 edge rid=%d tid=%d", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(mins.x, 0.0f, zEdge))) return true;
-	PVS_Dbg("LOS call#3 rid=%d tid=%d", rid, tid);
+	PVS_Dbg("LOS#3 edge rid=%d tid=%d", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(maxs.x, 0.0f, zEdge))) return true;
-	PVS_Dbg("LOS call#4 rid=%d tid=%d", rid, tid);
+	PVS_Dbg("LOS#4 edge rid=%d tid=%d", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(0.0f, mins.y, zEdge))) return true;
-	PVS_Dbg("LOS call#5 rid=%d tid=%d", rid, tid);
+	PVS_Dbg("LOS#5 edge rid=%d tid=%d", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(0.0f, maxs.y, zEdge))) return true;
 
-	PVS_Dbg("LOS call#6 rid=%d tid=%d", rid, tid);
+	// 3) 4 top corners (Lua order)
+	PVS_Dbg("LOS#6 top rid=%d tid=%d", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(mins.x, mins.y, zTop))) return true;
-	PVS_Dbg("LOS call#7 rid=%d tid=%d", rid, tid);
+	PVS_Dbg("LOS#7 top rid=%d tid=%d", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(mins.x, maxs.y, zTop))) return true;
-	PVS_Dbg("LOS call#8 rid=%d tid=%d", rid, tid);
+	PVS_Dbg("LOS#8 top rid=%d tid=%d", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(maxs.x, mins.y, zTop))) return true;
-	PVS_Dbg("LOS call#9 rid=%d tid=%d", rid, tid);
+	PVS_Dbg("LOS#9 top rid=%d tid=%d", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(maxs.x, maxs.y, zTop))) return true;
 
 	#undef L2W
@@ -421,6 +423,7 @@ static inline bool AWH_MultiLOS_OptionB_Fast(CBasePlayer* ply, CBaseEntity* targ
 
 LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 {
+	// Must be called inside CheckTransmit (Pre/Post hook)
 	if (!g_pCurrentTransmitInfo)
 		LUA->ThrowError("pvs.FilterTransmitPlayers must be called inside HolyLib:PreCheckTransmit or HolyLib:PostCheckTransmit!");
 
@@ -429,6 +432,7 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 	float cacheTime = (float)LUA->CheckNumber(2);
 	if (cacheTime < 0.0f) cacheTime = 0.0f;
 
+	// Fast validation (avoids zombie/dangling players)
 	if (!IsValidPlayerFast(recipient))
 	{
 		PVS_Dbg("FTP abort: recipient invalid");
@@ -436,7 +440,22 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 		return 1;
 	}
 
+	// Snapshot sanity check: make sure we're modifying the right client's transmit set
+	if (!g_pCurrentTransmitInfo->m_pClientEnt)
+	{
+		PVS_Dbg("FTP abort: m_pClientEnt NULL");
+		LUA->PushNumber(0);
+		return 1;
+	}
+
 	CBaseEntity* curClientEnt = Util::servergameents->EdictToBaseEntity(g_pCurrentTransmitInfo->m_pClientEnt);
+	if (!curClientEnt)
+	{
+		PVS_Dbg("FTP abort: EdictToBaseEntity(m_pClientEnt) NULL");
+		LUA->PushNumber(0);
+		return 1;
+	}
+
 	if (curClientEnt != (CBaseEntity*)recipient)
 	{
 		PVS_Dbg("FTP abort: mismatch snapshot clientEnt=%p recipient=%p", curClientEnt, recipient);
@@ -450,63 +469,125 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 	if (!transmitBits)
 		LUA->ThrowError("pvs.FilterTransmitPlayers: m_pTransmitEdict is NULL");
 
-	const int rid = recipient->entindex();
+	const int rid   = recipient->entindex();
 	const float now = gpGlobals->curtime;
-	const int maxClients = gpGlobals->maxClients;
+	const int maxCl = gpGlobals->maxClients;
+
+	// Prefer using current PVS from SetupVisibility (fastest).
+	// Fallback to CM_Vis cluster only if currentPVS isn't available.
+	const bool hasCurrentPVS = (currentPVS && currentPVSSize > 0);
+
+	PVS_Dbg("FTP start rid=%d now=%.3f cache=%.3f maxCl=%d hasCurrentPVS=%d pvsSize=%d bits=%p always=%p",
+		rid, now, cacheTime, maxCl, (int)hasCurrentPVS, currentPVSSize, transmitBits, transmitAlways);
+
+	Util::VisData* vis = nullptr;
+	if (!hasCurrentPVS)
+	{
+		PVS_Dbg("FTP fallback: building CM_Vis for rid=%d", rid);
+		vis = Util::CM_Vis(recipient->GetAbsOrigin(), DVIS_PVS);
+		if (!vis)
+		{
+			PVS_Dbg("FTP abort: CM_Vis returned null rid=%d", rid);
+			LUA->PushNumber(0);
+			return 1;
+		}
+	}
 
 	int removed = 0;
+	int considered = 0;
+	int skipped_notin_transmit = 0;
+	int skipped_notin_pvs = 0;
+	int cache_hits = 0;
+	int los_tests = 0;
 
-	PVS_Dbg("FTP start rid=%d cache=%.3f", rid, cacheTime);
-
-	for (int i = 1; i <= maxClients; ++i)
+	for (int i = 1; i <= maxCl; ++i)
 	{
-		CBasePlayer* targetPly = UTIL_PlayerByIndex(i);
-		if (!IsValidPlayerFast(targetPly))
+		CBasePlayer* target = UTIL_PlayerByIndex(i);
+		if (!IsValidPlayerFast(target))
 			continue;
 
-		if (targetPly == recipient)
+		if (target == recipient)
 			continue;
 
-		const int tid = targetPly->entindex();
+		const int tid = target->entindex();
 		if ((unsigned)tid >= (unsigned)MAX_EDICTS || tid <= 0)
 			continue;
 
-		if (!transmitBits->Get(tid))
+		const bool inBits   = transmitBits->Get(tid);
+		const bool inAlways = (transmitAlways && transmitAlways->Get(tid));
+		if (!inBits && !inAlways)
+		{
+			++skipped_notin_transmit;
 			continue;
+		}
+
+		++considered;
+
+		// PVS test (equivalent to Lua pvs.Begin(recipient) + pvs.Test(target))
+		const Vector& tgtPos = target->GetAbsOrigin();
+		if (hasCurrentPVS)
+		{
+			if (!Util::engineserver->CheckOriginInPVS(tgtPos, currentPVS, currentPVSSize))
+			{
+				++skipped_notin_pvs;
+				PVS_Dbg("FTP skip PVS rid=%d tid=%d (currentPVS)", rid, tid);
+				continue;
+			}
+		}
+		else
+		{
+			if (!Util::engineserver->CheckOriginInPVS(tgtPos, vis->cluster, sizeof(vis->cluster)))
+			{
+				++skipped_notin_pvs;
+				PVS_Dbg("FTP skip PVS rid=%d tid=%d (cluster)", rid, tid);
+				continue;
+			}
+		}
 
 		const uint32_t key = (uint32_t)(rid * MAX_EDICTS + tid);
 
 		auto it = g_AWHCache.find(key);
 		if (it != g_AWHCache.end() && it->second.nextCheck > now)
 		{
+			++cache_hits;
 			if (!it->second.visible)
 			{
-				transmitBits->Clear(tid);
-				if (transmitAlways && transmitAlways->Get(tid))
-					transmitAlways->Clear(tid);
+				if (inBits) transmitBits->Clear(tid);
+				if (inAlways) transmitAlways->Clear(tid);
 				++removed;
+				PVS_Dbg("FTP cache-hide rid=%d tid=%d removed=1", rid, tid);
 			}
 			continue;
 		}
 
-		PVS_Dbg("FTP pre-LOS rid=%d tid=%d", rid, tid);
+		++los_tests;
+		PVS_Dbg("FTP LOS start rid=%d tid=%d inBits=%d inAlways=%d", rid, tid, (int)inBits, (int)inAlways);
 
-		const bool vis = AWH_MultiLOS_OptionB_Fast(recipient, (CBaseEntity*)targetPly, rid, tid);
+		const bool visible = AWH_LOS_LuaOrder(recipient, (CBaseEntity*)target, rid, tid);
 
 		AWHCacheEntry& e = g_AWHCache[key];
-		e.visible = vis;
+		e.visible = visible;
 		e.nextCheck = now + cacheTime;
 
-		if (!vis)
+		PVS_Dbg("FTP LOS done rid=%d tid=%d visible=%d next=%.3f", rid, tid, (int)visible, e.nextCheck);
+
+		if (!visible)
 		{
-			transmitBits->Clear(tid);
-			if (transmitAlways && transmitAlways->Get(tid))
-				transmitAlways->Clear(tid);
+			if (inBits) transmitBits->Clear(tid);
+			if (inAlways) transmitAlways->Clear(tid);
 			++removed;
+			PVS_Dbg("FTP removed rid=%d tid=%d (not visible)", rid, tid);
 		}
 	}
 
-	PVS_Dbg("FTP end rid=%d removed=%d", rid, removed);
+	if (vis)
+	{
+		delete vis;
+		vis = nullptr;
+	}
+
+	PVS_Dbg("FTP end rid=%d considered=%d removed=%d skip_noTransmit=%d skip_noPVS=%d cacheHits=%d losTests=%d cacheSize=%zu",
+		rid, considered, removed, skipped_notin_transmit, skipped_notin_pvs, cache_hits, los_tests, g_AWHCache.size());
 
 	LUA->PushNumber(removed);
 	return 1;
@@ -888,8 +969,22 @@ static bool RemoveEntityFromTransmit(GarrysMod::Lua::ILuaInterface* pLua, CBaseE
 	if (!g_pCurrentTransmitInfo)
 		pLua->ThrowError("Tried to use pvs.RemoveEntityFromTransmit while not in a CheckTransmit call!");
 
-	if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(edict->m_EdictIndex))
-		return false;
+	const int idx = edict->m_EdictIndex;
+	
+	auto* bits   = g_pCurrentTransmitInfo->m_pTransmitEdict;
+	auto* always = g_pCurrentTransmitInfo->m_pTransmitAlways;
+	
+	const bool inBits   = (bits && bits->Get(idx));
+	const bool inAlways = (always && always->Get(idx));
+	
+	if (!inBits && !inAlways)
+	    return false;
+	
+	if (inBits)   bits->Clear(idx);
+	if (inAlways) always->Clear(idx);
+	
+	return true;
+
 
 	g_pCurrentTransmitInfo->m_pTransmitEdict->Clear(edict->m_EdictIndex);
 	if (g_pCurrentTransmitInfo->m_pTransmitAlways && g_pCurrentTransmitInfo->m_pTransmitAlways->Get(edict->m_EdictIndex))
@@ -898,36 +993,34 @@ static bool RemoveEntityFromTransmit(GarrysMod::Lua::ILuaInterface* pLua, CBaseE
 	return true;
 }
 
-LUA_FUNCTION_STATIC(pvs_RemoveEntityFromTransmit)
+static bool RemoveEntityFromTransmit(GarrysMod::Lua::ILuaInterface* pLua, CBaseEntity* ent)
 {
-	if (LUA->IsType(1, GarrysMod::Lua::Type::Table))
+	edict_t* edict = ent ? ent->edict() : nullptr;
+	if (!edict)
+		pLua->ThrowError("Failed to get edict?");
+
+	if (!g_pCurrentTransmitInfo)
+		pLua->ThrowError("Tried to use pvs.RemoveEntityFromTransmit while not in a CheckTransmit call!");
+
+	const int idx = edict->m_EdictIndex;
+
+	auto* bits   = g_pCurrentTransmitInfo->m_pTransmitEdict;
+	auto* always = g_pCurrentTransmitInfo->m_pTransmitAlways;
+
+	const bool inBits   = (bits && bits->Get(idx));
+	const bool inAlways = (always && always->Get(idx));
+
+	if (!inBits && !inAlways)
 	{
-		LUA->Push(1);
-		LUA->PushNil();
-		while (LUA->Next(-2))
-		{
-			CBaseEntity* ent = Util::Get_Entity(LUA, -1, true);
-			RemoveEntityFromTransmit(LUA, ent);
-
-			LUA->Pop(1);
-		}
-		LUA->Pop(1);
-
-		LUA->PushBool(true);
-#if MODULE_EXISTS_ENTITYLIST
-	} else if (Is_EntityList(LUA, 1)) {
-		EntityList* entList = Get_EntityList(LUA, 1, true);
-		for (CBaseEntity* ent : entList->GetEntities())
-			RemoveEntityFromTransmit(LUA, ent);
-
-		LUA->PushBool(true);
-#endif
-	} else {
-		CBaseEntity* ent = Util::Get_Entity(LUA, 1, true);
-		LUA->PushBool(RemoveEntityFromTransmit(LUA, ent));
+		PVS_Dbg("RET skip idx=%d (not in bits/always)", idx);
+		return false;
 	}
 
-	return 1;
+	if (inBits)   bits->Clear(idx);
+	if (inAlways) always->Clear(idx);
+
+	PVS_Dbg("RET cleared idx=%d bits=%d always=%d", idx, (int)inBits, (int)inAlways);
+	return true;
 }
 
 LUA_FUNCTION_STATIC(pvs_RemoveAllEntityFromTransmit)
@@ -1165,7 +1258,7 @@ LUA_FUNCTION_STATIC(pvs_GetEntitiesFromTransmit)
 		int iEdict = g_pCurrentEdictIndices[i];
 		edict_t *pEdict = &pBaseEdict[iEdict];
 
-		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(i))
+		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(iEdict))
 			continue;
 
 		Util::Push_Entity(LUA, Util::servergameents->EdictToBaseEntity(pEdict));
@@ -1264,6 +1357,7 @@ void CPVSModule::LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua)
 {
 	ClearLuaVis(pLua);
 	Util::NukeTable(pLua, "pvs");
+	g_AWHCache.clear();
 }
 
 #if SYSTEM_WINDOWS && !defined(HOLYLIB_MANUALNETWORKING)
