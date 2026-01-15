@@ -168,14 +168,33 @@ static Detouring::Hook detour_CServerGameEnts_CheckTransmit;
 #ifndef HOLYLIB_MANUALNETWORKING
 extern bool g_pReplaceCServerGameEnts_CheckTransmit;
 extern bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts);
-static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)
+static void hook_CServerGameEnts_CheckTransmit(
+	IServerGameEnts* gameents,
+	CCheckTransmitInfo* pInfo,
+	const unsigned short* pEdictIndices,
+	int nEdicts
+)
 {
 	VPROF_BUDGET("HolyLib - CServerGameEnts::CheckTransmit", VPROF_BUDGETGROUP_OTHER_NETWORKING);
+
 	g_pCurrentTransmitInfo = pInfo;
 	g_pCurrentEdictIndices = pEdictIndices;
 	g_nCurrentEdicts = nEdicts;
 
-	if(g_bEnableLuaPreTransmitHook && Lua::PushHook("HolyLib:PreCheckTransmit"))
+	// Prépare la pending list pour CE recipient (même logique que le mode manual)
+	CBasePlayer* recipient = GetRecipientFromTransmitInfoSafe();
+	if (recipient)
+	{
+		const int rid = recipient->entindex();
+		g_PendingRemoveByRecipient[rid].clear();
+	}
+
+	// ----------------------------
+	// LUA PRE (phase = PRE)
+	// ----------------------------
+	g_bIsInPreCheckTransmit = true;
+
+	if (g_bEnableLuaPreTransmitHook && Lua::PushHook("HolyLib:PreCheckTransmit"))
 	{
 		Util::Push_Entity(g_Lua, Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt));
 		if (g_Lua->CallFunctionProtected(2, 1, true))
@@ -185,6 +204,7 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 
 			if (bCancel)
 			{
+				// cleanup identique à ton code
 				if (bWasOverrideStateFlagsUsed)
 				{
 					memset(pOriginalFlags, 0, sizeof(pOriginalFlags));
@@ -198,6 +218,8 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 					bWasAddedEntityUsed = false;
 				}
 
+				g_bIsInPreCheckTransmit = false;
+
 				g_pCurrentTransmitInfo = nullptr;
 				g_pCurrentEdictIndices = nullptr;
 				g_nCurrentEdicts = -1;
@@ -206,25 +228,30 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 		}
 	}
 
+	// On repasse en "POST/normal" pour le reste de la frame
+	g_bIsInPreCheckTransmit = false;
+
+	// --- Apply AddEntityToPVS safely ---
 	if (bWasAddedEntityUsed)
 	{
 		for (int i = 0; i < g_pAddEntityToPVS.GetNumBits(); ++i)
 		{
 			if (!g_pAddEntityToPVS.IsBitSet(i))
 				continue;
-	
+
 			edict_t* ed = Util::engineserver->PEntityOfEntIndex(i);
 			if (!IsValidEdictFast(ed))
 				continue;
-	
+
 			CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(ed);
 			if (!ent)
 				continue;
-	
+
 			ent->SetTransmit(pInfo, true);
 		}
 	}
 
+	// --- Apply override flags (SAVE then OVERRIDE) ---
 	if (bWasOverrideStateFlagsUsed)
 	{
 		for (int i = 0; i < MAX_EDICTS; ++i)
@@ -232,31 +259,40 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 			edict_t* pEdict = Util::engineserver->PEntityOfEntIndex(i);
 			if (!pEdict)
 				continue;
-	
+
 			pOriginalFlags[i] = pEdict->m_fStateFlags;
-	
+
 			if (g_pPVSModule.InDebug())
 				Msg("Overriding ent(%i) flags for snapshot (%i -> %i)\n",
 					pEdict->m_EdictIndex, pEdict->m_fStateFlags, g_pOverrideStateFlag[i]);
-	
+
 			pEdict->m_fStateFlags = g_pOverrideStateFlag[i];
 		}
 	}
 
+	// ----------------------------
+	// TRAMPOLINE (vrai CheckTransmit)
+	// ----------------------------
 #if MODULE_EXISTS_NETWORKING
 	if (g_pReplaceCServerGameEnts_CheckTransmit)
 	{
 		if (!New_CServerGameEnts_CheckTransmit(gameents, pInfo, pEdictIndices, nEdicts))
 		{
-			detour_CServerGameEnts_CheckTransmit.GetTrampoline<Symbols::CServerGameEnts_CheckTransmit>()(gameents, pInfo, pEdictIndices, nEdicts);
+			detour_CServerGameEnts_CheckTransmit
+				.GetTrampoline<Symbols::CServerGameEnts_CheckTransmit>()(gameents, pInfo, pEdictIndices, nEdicts);
 		}
-	} else
+	}
+	else
 #endif
 	{
-		detour_CServerGameEnts_CheckTransmit.GetTrampoline<Symbols::CServerGameEnts_CheckTransmit>()(gameents, pInfo, pEdictIndices, nEdicts);
+		detour_CServerGameEnts_CheckTransmit
+			.GetTrampoline<Symbols::CServerGameEnts_CheckTransmit>()(gameents, pInfo, pEdictIndices, nEdicts);
 	}
 
-	if(g_bEnableLuaPostTransmitHook && Lua::PushHook("HolyLib:PostCheckTransmit"))
+	// ----------------------------
+	// LUA POST (phase = POST)
+	// ----------------------------
+	if (g_bEnableLuaPostTransmitHook && Lua::PushHook("HolyLib:PostCheckTransmit"))
 	{
 		g_bBlockAdditionToTransmit = true;
 		Util::Push_Entity(g_Lua, Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt));
@@ -264,6 +300,7 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 		g_bBlockAdditionToTransmit = false;
 	}
 
+	// --- Restore overridden state flags safely ---
 	if (bWasOverrideStateFlagsUsed)
 	{
 		for (int i = 0; i < MAX_EDICTS; ++i)
@@ -271,15 +308,16 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 			edict_t* pEdict = Util::engineserver->PEntityOfEntIndex(i);
 			if (!pEdict)
 				continue;
-	
+
 			pEdict->m_fStateFlags = pOriginalFlags[i];
 		}
-	
+
 		memset(pOriginalFlags, 0, sizeof(pOriginalFlags));
 		memset(g_pOverrideStateFlag, 0, sizeof(g_pOverrideStateFlag));
 		bWasOverrideStateFlagsUsed = false;
 	}
 
+	// --- Reset AddEntityToPVS tracking ---
 	if (bWasAddedEntityUsed)
 	{
 		g_pAddEntityToPVS.ClearAll();
