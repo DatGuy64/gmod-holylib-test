@@ -124,7 +124,41 @@ static inline bool IsValidPlayerFast(CBasePlayer* p)
 	return IsValidEdictFast(p->edict());
 }
 
+static inline CBaseEntity* EdictToBaseEntitySafe(edict_t* ed)
+{
+	if (!IsValidEdictFast(ed))
+		return nullptr;
 
+	return Util::servergameents->EdictToBaseEntity(ed);
+}
+
+static inline CBasePlayer* GetRecipientFromTransmitInfoSafe()
+{
+	if (!g_pCurrentTransmitInfo || !g_pCurrentTransmitInfo->m_pClientEnt)
+		return nullptr;
+
+	CBaseEntity* ent = EdictToBaseEntitySafe(g_pCurrentTransmitInfo->m_pClientEnt);
+	if (!ent || !ent->IsPlayer())
+		return nullptr;
+
+	return static_cast<CBasePlayer*>(ent);
+}
+
+static inline CBasePlayer* GetPlayerByIndexSafe(int idx)
+{
+	if (idx <= 0 || idx > gpGlobals->maxClients)
+		return nullptr;
+
+	edict_t* ed = Util::engineserver->PEntityOfEntIndex(idx);
+	if (!IsValidEdictFast(ed))
+		return nullptr;
+
+	CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(ed);
+	if (!ent || !ent->IsPlayer())
+		return nullptr;
+
+	return static_cast<CBasePlayer*>(ent);
+}
 
 static Detouring::Hook detour_CServerGameEnts_CheckTransmit;
 #ifndef HOLYLIB_MANUALNETWORKING
@@ -168,25 +202,39 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 		}
 	}
 
-	edict_t* pWorld = Util::engineserver->PEntityOfEntIndex(0);
 	if (bWasAddedEntityUsed)
 	{
-		for (int i=0; i<g_pAddEntityToPVS.GetNumBits(); ++i)
+		for (int i = 0; i < g_pAddEntityToPVS.GetNumBits(); ++i)
 		{
-			if (g_pAddEntityToPVS.IsBitSet(i))
-				Util::servergameents->EdictToBaseEntity(&pWorld[i])->SetTransmit(pInfo, true);
+			if (!g_pAddEntityToPVS.IsBitSet(i))
+				continue;
+	
+			edict_t* ed = Util::engineserver->PEntityOfEntIndex(i);
+			if (!IsValidEdictFast(ed))
+				continue;
+	
+			CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(ed);
+			if (!ent)
+				continue;
+	
+			ent->SetTransmit(pInfo, true);
 		}
 	}
 
 	if (bWasOverrideStateFlagsUsed)
 	{
-		for (int i=0; i<MAX_EDICTS; ++i)
+		for (int i = 0; i < MAX_EDICTS; ++i)
 		{
-			edict_t* pEdict = &pWorld[i];
+			edict_t* pEdict = Util::engineserver->PEntityOfEntIndex(i);
+			if (!pEdict)
+				continue;
+	
 			pOriginalFlags[i] = pEdict->m_fStateFlags;
+	
 			if (g_pPVSModule.InDebug())
-				Msg("Overriding ent(%i) flags for snapshot (%i -> %i)\n", pEdict->m_EdictIndex, pEdict->m_fStateFlags, g_pOverrideStateFlag[i]);
-		
+				Msg("Overriding ent(%i) flags for snapshot (%i -> %i)\n",
+					pEdict->m_EdictIndex, pEdict->m_fStateFlags, g_pOverrideStateFlag[i]);
+	
 			pEdict->m_fStateFlags = g_pOverrideStateFlag[i];
 		}
 	}
@@ -214,11 +262,15 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 
 	if (bWasOverrideStateFlagsUsed)
 	{
-		for (int i=0; i<MAX_EDICTS; ++i)
+		for (int i = 0; i < MAX_EDICTS; ++i)
 		{
-			(&pWorld[i])->m_fStateFlags = pOriginalFlags[i];
+			edict_t* pEdict = Util::engineserver->PEntityOfEntIndex(i);
+			if (!pEdict)
+				continue;
+	
+			pEdict->m_fStateFlags = pOriginalFlags[i];
 		}
-
+	
 		memset(pOriginalFlags, 0, sizeof(pOriginalFlags));
 		memset(g_pOverrideStateFlag, 0, sizeof(g_pOverrideStateFlag));
 		bWasOverrideStateFlagsUsed = false;
@@ -255,16 +307,18 @@ void PreCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned 
 	g_pCurrentEdictIndices = pEdictIndices;
 	g_nCurrentEdicts = nEdicts;
 
-	if(g_bEnableLuaPreTransmitHook && Lua::PushHook("HolyLib:PreCheckTransmit"))
+	// --- Lua Pre hook (can cancel) ---
+	if (g_bEnableLuaPreTransmitHook && Lua::PushHook("HolyLib:PreCheckTransmit"))
 	{
 		Util::Push_Entity(g_Lua, Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt));
 		if (g_Lua->CallFunctionProtected(2, 1, true))
 		{
-			bool bCancel = g_Lua->GetBool(-1);
+			const bool bCancel = g_Lua->GetBool(-1);
 			g_Lua->Pop(1);
 
 			if (bCancel)
 			{
+				// Reset pending changes (same behavior as windows detour)
 				if (bWasOverrideStateFlagsUsed)
 				{
 					memset(pOriginalFlags, 0, sizeof(pOriginalFlags));
@@ -286,32 +340,46 @@ void PreCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned 
 		}
 	}
 
-	edict_t* pWorld = Util::engineserver->PEntityOfEntIndex(0);
+	// --- Apply AddEntityToPVS safely ---
 	if (bWasAddedEntityUsed)
 	{
-		for (int i=0; i<g_pAddEntityToPVS.GetNumBits(); ++i)
+		for (int i = 0; i < g_pAddEntityToPVS.GetNumBits(); ++i)
 		{
-			if (g_pAddEntityToPVS.IsBitSet(i))
-				Util::servergameents->EdictToBaseEntity(&pWorld[i])->SetTransmit(pInfo, true);
+			if (!g_pAddEntityToPVS.IsBitSet(i))
+				continue;
+
+			edict_t* ed = Util::engineserver->PEntityOfEntIndex(i);
+			if (!IsValidEdictFast(ed))
+				continue;
+
+			CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(ed);
+			if (!ent)
+				continue;
+
+			ent->SetTransmit(pInfo, true);
 		}
 	}
 
+	// --- Apply override flags correctly (SAVE then OVERRIDE) ---
 	if (bWasOverrideStateFlagsUsed)
 	{
-		for (int i=0; i<MAX_EDICTS; ++i)
+		for (int i = 0; i < MAX_EDICTS; ++i)
 		{
-			edict_t* pEdict = &pWorld[i];
+			edict_t* pEdict = Util::engineserver->PEntityOfEntIndex(i);
+			if (!pEdict)
+				continue;
+
+			// Save original flags for PostCheckTransmit restore
 			pOriginalFlags[i] = pEdict->m_fStateFlags;
+
 			if (g_pPVSModule.InDebug())
-				Msg("Overriding ent(%i) flags for snapshot (%i -> %i)\n", pEdict->m_EdictIndex, pEdict->m_fStateFlags, g_pOverrideStateFlag[i]);
-		
+				Msg("Overriding ent(%i) flags for snapshot (%i -> %i)\n",
+					pEdict->m_EdictIndex, pEdict->m_fStateFlags, g_pOverrideStateFlag[i]);
+
+			// Override for this snapshot
 			pEdict->m_fStateFlags = g_pOverrideStateFlag[i];
 		}
 	}
-
-	g_pCurrentTransmitInfo = nullptr;
-	g_pCurrentEdictIndices = nullptr;
-	g_nCurrentEdicts = -1;
 }
 
 void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)
@@ -322,7 +390,8 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 	g_pCurrentEdictIndices = pEdictIndices;
 	g_nCurrentEdicts = nEdicts;
 
-	if(g_bEnableLuaPostTransmitHook && Lua::PushHook("HolyLib:PostCheckTransmit"))
+	// --- Lua Post hook ---
+	if (g_bEnableLuaPostTransmitHook && Lua::PushHook("HolyLib:PostCheckTransmit"))
 	{
 		g_bBlockAdditionToTransmit = true;
 		Util::Push_Entity(g_Lua, Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt));
@@ -330,12 +399,16 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 		g_bBlockAdditionToTransmit = false;
 	}
 
+	// --- Restore overridden state flags safely ---
 	if (bWasOverrideStateFlagsUsed)
 	{
-		edict_t* pWorld = Util::engineserver->PEntityOfEntIndex(0);
-		for (int i=0; i<MAX_EDICTS; ++i)
+		for (int i = 0; i < MAX_EDICTS; ++i)
 		{
-			(&pWorld[i])->m_fStateFlags = pOriginalFlags[i];
+			edict_t* pEdict = Util::engineserver->PEntityOfEntIndex(i);
+			if (!pEdict)
+				continue;
+
+			pEdict->m_fStateFlags = pOriginalFlags[i];
 		}
 
 		memset(pOriginalFlags, 0, sizeof(pOriginalFlags));
@@ -343,12 +416,14 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 		bWasOverrideStateFlagsUsed = false;
 	}
 
+	// --- Reset AddEntityToPVS tracking ---
 	if (bWasAddedEntityUsed)
 	{
 		g_pAddEntityToPVS.ClearAll();
 		bWasAddedEntityUsed = false;
 	}
 
+	// --- Clear globals ---
 	g_pCurrentTransmitInfo = nullptr;
 	g_pCurrentEdictIndices = nullptr;
 	g_nCurrentEdicts = -1;
@@ -427,41 +502,32 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 	if (!g_pCurrentTransmitInfo)
 		LUA->ThrowError("pvs.FilterTransmitPlayers must be called inside HolyLib:PreCheckTransmit or HolyLib:PostCheckTransmit!");
 
-	CBasePlayer* recipient = Util::Get_Player(LUA, 1, true);
+	// IMPORTANT:
+	// We DO NOT trust the Lua player pointer here (it can be stale).
+	// We'll only use arg#1 to ensure it's the same player as m_pClientEnt (optional sanity check).
+	CBasePlayer* recipient = GetRecipientFromTransmitInfoSafe();
+	if (!recipient)
+	{
+		PVS_Dbg("FTP abort: recipient from transmit info invalid");
+		LUA->PushNumber(0);
+		return 1;
+	}
+
+	// Optional sanity check: if arg1 is provided and is a player, ensure it matches the snapshot recipient.
+	// This avoids scripts accidentally calling it for the wrong player.
+	if (LUA->IsType(1, GarrysMod::Lua::Type::Entity))
+	{
+		CBaseEntity* luaEnt = Util::Get_Entity(LUA, 1, false);
+		if (luaEnt && luaEnt != (CBaseEntity*)recipient)
+		{
+			PVS_Dbg("FTP abort: mismatch luaEnt=%p recipient=%p", luaEnt, recipient);
+			LUA->PushNumber(0);
+			return 1;
+		}
+	}
 
 	float cacheTime = (float)LUA->CheckNumber(2);
 	if (cacheTime < 0.0f) cacheTime = 0.0f;
-
-	// Fast validation (avoids zombie/dangling players)
-	if (!IsValidPlayerFast(recipient))
-	{
-		PVS_Dbg("FTP abort: recipient invalid");
-		LUA->PushNumber(0);
-		return 1;
-	}
-
-	// Snapshot sanity check: make sure we're modifying the right client's transmit set
-	if (!g_pCurrentTransmitInfo->m_pClientEnt)
-	{
-		PVS_Dbg("FTP abort: m_pClientEnt NULL");
-		LUA->PushNumber(0);
-		return 1;
-	}
-
-	CBaseEntity* curClientEnt = Util::servergameents->EdictToBaseEntity(g_pCurrentTransmitInfo->m_pClientEnt);
-	if (!curClientEnt)
-	{
-		PVS_Dbg("FTP abort: EdictToBaseEntity(m_pClientEnt) NULL");
-		LUA->PushNumber(0);
-		return 1;
-	}
-
-	if (curClientEnt != (CBaseEntity*)recipient)
-	{
-		PVS_Dbg("FTP abort: mismatch snapshot clientEnt=%p recipient=%p", curClientEnt, recipient);
-		LUA->PushNumber(0);
-		return 1;
-	}
 
 	auto* transmitBits   = g_pCurrentTransmitInfo->m_pTransmitEdict;
 	auto* transmitAlways = g_pCurrentTransmitInfo->m_pTransmitAlways;
@@ -473,17 +539,12 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 	const float now = gpGlobals->curtime;
 	const int maxCl = gpGlobals->maxClients;
 
-	// Prefer using current PVS from SetupVisibility (fastest).
-	// Fallback to CM_Vis cluster only if currentPVS isn't available.
+	// Prefer current PVS from SetupVisibility.
 	const bool hasCurrentPVS = (currentPVS && currentPVSSize > 0);
-
-	PVS_Dbg("FTP start rid=%d now=%.3f cache=%.3f maxCl=%d hasCurrentPVS=%d pvsSize=%d bits=%p always=%p",
-		rid, now, cacheTime, maxCl, (int)hasCurrentPVS, currentPVSSize, transmitBits, transmitAlways);
 
 	Util::VisData* vis = nullptr;
 	if (!hasCurrentPVS)
 	{
-		PVS_Dbg("FTP fallback: building CM_Vis for rid=%d", rid);
 		vis = Util::CM_Vis(recipient->GetAbsOrigin(), DVIS_PVS);
 		if (!vis)
 		{
@@ -495,73 +556,53 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 
 	int removed = 0;
 	int considered = 0;
-	int skipped_notin_transmit = 0;
-	int skipped_notin_pvs = 0;
-	int cache_hits = 0;
-	int los_tests = 0;
 
 	for (int i = 1; i <= maxCl; ++i)
 	{
-		CBasePlayer* target = UTIL_PlayerByIndex(i);
-		if (!IsValidPlayerFast(target))
+		CBasePlayer* target = GetPlayerByIndexSafe(i);
+		if (!target)
 			continue;
 
 		if (target == recipient)
 			continue;
 
 		const int tid = target->entindex();
-		if ((unsigned)tid >= (unsigned)MAX_EDICTS || tid <= 0)
+		if (tid <= 0 || tid >= MAX_EDICTS)
 			continue;
 
 		const bool inBits   = transmitBits->Get(tid);
 		const bool inAlways = (transmitAlways && transmitAlways->Get(tid));
 		if (!inBits && !inAlways)
-		{
-			++skipped_notin_transmit;
 			continue;
-		}
 
 		++considered;
 
-		// PVS test (equivalent to Lua pvs.Begin(recipient) + pvs.Test(target))
+		// PVS test first
 		const Vector& tgtPos = target->GetAbsOrigin();
 		if (hasCurrentPVS)
 		{
 			if (!Util::engineserver->CheckOriginInPVS(tgtPos, currentPVS, currentPVSSize))
-			{
-				++skipped_notin_pvs;
-				PVS_Dbg("FTP skip PVS rid=%d tid=%d (currentPVS)", rid, tid);
 				continue;
-			}
 		}
 		else
 		{
 			if (!Util::engineserver->CheckOriginInPVS(tgtPos, vis->cluster, sizeof(vis->cluster)))
-			{
-				++skipped_notin_pvs;
-				PVS_Dbg("FTP skip PVS rid=%d tid=%d (cluster)", rid, tid);
 				continue;
-			}
 		}
 
-		const uint32_t key = (uint32_t)(rid * MAX_EDICTS + tid);
+		const uint32_t key = AWHKey(rid, tid);
 
 		auto it = g_AWHCache.find(key);
 		if (it != g_AWHCache.end() && it->second.nextCheck > now)
 		{
-			++cache_hits;
 			if (!it->second.visible)
 			{
 				if (inBits) transmitBits->Clear(tid);
 				if (inAlways) transmitAlways->Clear(tid);
 				++removed;
-				PVS_Dbg("FTP cache-hide rid=%d tid=%d removed=1", rid, tid);
 			}
 			continue;
 		}
-
-		++los_tests;
-		PVS_Dbg("FTP LOS start rid=%d tid=%d inBits=%d inAlways=%d", rid, tid, (int)inBits, (int)inAlways);
 
 		const bool visible = AWH_LOS_LuaOrder(recipient, (CBaseEntity*)target, rid, tid);
 
@@ -569,14 +610,11 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 		e.visible = visible;
 		e.nextCheck = now + cacheTime;
 
-		PVS_Dbg("FTP LOS done rid=%d tid=%d visible=%d next=%.3f", rid, tid, (int)visible, e.nextCheck);
-
 		if (!visible)
 		{
 			if (inBits) transmitBits->Clear(tid);
 			if (inAlways) transmitAlways->Clear(tid);
 			++removed;
-			PVS_Dbg("FTP removed rid=%d tid=%d (not visible)", rid, tid);
 		}
 	}
 
@@ -586,8 +624,8 @@ LUA_FUNCTION_STATIC(pvs_FilterTransmitPlayers)
 		vis = nullptr;
 	}
 
-	PVS_Dbg("FTP end rid=%d considered=%d removed=%d skip_noTransmit=%d skip_noPVS=%d cacheHits=%d losTests=%d cacheSize=%zu",
-		rid, considered, removed, skipped_notin_transmit, skipped_notin_pvs, cache_hits, los_tests, g_AWHCache.size());
+	PVS_Dbg("FTP end rid=%d considered=%d removed=%d cacheSize=%zu",
+		rid, considered, removed, g_AWHCache.size());
 
 	LUA->PushNumber(removed);
 	return 1;
