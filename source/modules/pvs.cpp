@@ -432,32 +432,52 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 
 static inline bool AWH_LOS_LuaOrder(CBasePlayer* ply, CBaseEntity* target, int rid, int tid)
 {
-	// Print très tôt (si crash, on saura si on est entré)
 	Msg("[pvs] LOS enter rid=%d tid=%d ply=%p target=%p\n", rid, tid, (void*)ply, (void*)target);
 
-	if (!IsValidPlayerFast(ply))
+	// Re-check super early (évite deref vtable si pointeur foireux)
+	if (!ply || !target)
 	{
-		Msg("[pvs] LOS abort: recipient invalid rid=%d tid=%d ply=%p\n", rid, tid, (void*)ply);
-		return false;
-	}
-	if (!target)
-	{
-		Msg("[pvs] LOS abort: target null rid=%d tid=%d\n", rid, tid);
+		Msg("[pvs] LOS abort: null ply/target rid=%d tid=%d\n", rid, tid);
 		return false;
 	}
 
-	edict_t* ted = target->edict();
+	// Edict checks (peuvent sauver pas mal de cas)
+	edict_t* ped = nullptr;
+	edict_t* ted = nullptr;
+
+	Msg("[pvs] LOS get edicts rid=%d tid=%d\n", rid, tid);
+	ped = ply->edict();
+	ted = target->edict();
+
+	Msg("[pvs] LOS edicts rid=%d tid=%d ped=%p ted=%p\n", rid, tid, (void*)ped, (void*)ted);
+
+	if (!IsValidEdictFast(ped))
+	{
+		Msg("[pvs] LOS abort: invalid recipient edict rid=%d tid=%d\n", rid, tid);
+		return false;
+	}
 	if (!IsValidEdictFast(ted))
 	{
-		Msg("[pvs] LOS abort: target edict invalid rid=%d tid=%d target=%p\n", rid, tid, (void*)target);
+		Msg("[pvs] LOS abort: invalid target edict rid=%d tid=%d\n", rid, tid);
 		return false;
 	}
 
 	// 1) center
-	Msg("[pvs] LOS#1 center rid=%d tid=%d\n", rid, tid);
-	const Vector c = target->WorldSpaceCenter();
+	Msg("[pvs] LOS#1 center (pre WorldSpaceCenter) rid=%d tid=%d\n", rid, tid);
+
+	// Sépare bien les 2 opérations
+	Vector c;
+	Msg("[pvs] LOS#1a calling WorldSpaceCenter rid=%d tid=%d\n", rid, tid);
+	c = target->WorldSpaceCenter();
+	Msg("[pvs] LOS#1b WorldSpaceCenter OK rid=%d tid=%d c=(%.2f %.2f %.2f)\n", rid, tid, c.x, c.y, c.z);
+
+	Msg("[pvs] LOS#1c calling IsLineOfSightClear rid=%d tid=%d\n", rid, tid);
 	if (ply->IsLineOfSightClear(c))
+	{
+		Msg("[pvs] LOS#1d IsLineOfSightClear TRUE rid=%d tid=%d\n", rid, tid);
 		return true;
+	}
+	Msg("[pvs] LOS#1e IsLineOfSightClear FALSE rid=%d tid=%d\n", rid, tid);
 
 	// collision
 	Msg("[pvs] LOS collisionprop rid=%d tid=%d\n", rid, tid);
@@ -470,8 +490,6 @@ static inline bool AWH_LOS_LuaOrder(CBasePlayer* ply, CBaseEntity* target, int r
 
 	const Vector& mins = col->OBBMins();
 	const Vector& maxs = col->OBBMaxs();
-
-	// Print des bounds (si corruption, tu verras des valeurs absurdes)
 	Msg("[pvs] LOS bounds rid=%d tid=%d mins=(%.2f %.2f %.2f) maxs=(%.2f %.2f %.2f)\n",
 		rid, tid, mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z);
 
@@ -483,23 +501,27 @@ static inline bool AWH_LOS_LuaOrder(CBasePlayer* ply, CBaseEntity* target, int r
 
 	#define L2W(x,y,z) (VectorTransform(Vector((x),(y),(z)), mat, out), out)
 
-	// 2) edges first (Lua order)
 	Msg("[pvs] LOS#2 edge rid=%d tid=%d\n", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(mins.x, 0.0f, zEdge))) return true;
+
 	Msg("[pvs] LOS#3 edge rid=%d tid=%d\n", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(maxs.x, 0.0f, zEdge))) return true;
+
 	Msg("[pvs] LOS#4 edge rid=%d tid=%d\n", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(0.0f, mins.y, zEdge))) return true;
+
 	Msg("[pvs] LOS#5 edge rid=%d tid=%d\n", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(0.0f, maxs.y, zEdge))) return true;
 
-	// 3) 4 top corners (Lua order)
 	Msg("[pvs] LOS#6 top rid=%d tid=%d\n", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(mins.x, mins.y, zTop))) return true;
+
 	Msg("[pvs] LOS#7 top rid=%d tid=%d\n", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(mins.x, maxs.y, zTop))) return true;
+
 	Msg("[pvs] LOS#8 top rid=%d tid=%d\n", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(maxs.x, mins.y, zTop))) return true;
+
 	Msg("[pvs] LOS#9 top rid=%d tid=%d\n", rid, tid);
 	if (ply->IsLineOfSightClear(L2W(maxs.x, maxs.y, zTop))) return true;
 
