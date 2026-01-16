@@ -8,9 +8,12 @@
 #include "sourcesdk/baseclient.h"
 #include "vprof.h"
 #include "mathlib/vector.h"
+#include "engine/IEngineTrace.h"
 #include <stdint.h>
 
 #include "util.h"
+
+extern IEngineTrace* enginetrace;
 
 #include "tier0/memdbgon.h"
 
@@ -49,9 +52,25 @@ static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 
 static inline bool LOS_Clear(CBaseEntity* viewer, CBaseEntity* target, const Vector& pos)
 {
+	class CTraceFilterSkipTwo : public ITraceFilter
+	{
+	public:
+		CTraceFilterSkipTwo(const IHandleEntity* a, const IHandleEntity* b) : m_a(a), m_b(b) {}
+		bool ShouldHitEntity(IHandleEntity* pHandleEntity, int) override
+		{
+			return pHandleEntity != m_a && pHandleEntity != m_b;
+		}
+		TraceType_t GetTraceType() const override { return TRACE_EVERYTHING; }
+	private:
+		const IHandleEntity* m_a;
+		const IHandleEntity* m_b;
+	};
+
 	trace_t tr;
-	CTraceFilterSkipTwoEntities filter(viewer, target, COLLISION_GROUP_NONE);
-	UTIL_TraceLine(viewer->EyePosition(), pos, MASK_OPAQUE | CONTENTS_IGNORE_NODRAW_OPAQUE, &filter, &tr);
+	Ray_t ray;
+	ray.Init(viewer->EyePosition(), pos);
+	CTraceFilterSkipTwo filter(viewer, target);
+	enginetrace->TraceRay(ray, MASK_OPAQUE | CONTENTS_IGNORE_NODRAW_OPAQUE, &filter, &tr);
 	return tr.fraction == 1.0f;
 }
 
