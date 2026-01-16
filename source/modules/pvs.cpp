@@ -38,6 +38,7 @@ static int currentPVSSize = -1;
 static unsigned char* currentPVS = nullptr;
 static int mapPVSSize = -1;
 static bool g_bActiveCheckTransmitViewer[HOLYLIB_MAX_PLAYERS + 1] = { false };
+static float g_fActiveViewerLosCache[HOLYLIB_MAX_PLAYERS + 1] = { 0.0f };
 
 struct LosCacheEntry
 {
@@ -45,12 +46,7 @@ struct LosCacheEntry
 	bool visible;
 };
 
-static std::unordered_map<uint32_t, LosCacheEntry> g_LosCache;
-
-static inline uint32_t LosCacheKey(int viewerIdx, int targetIdx)
-{
-	return ((uint32_t)viewerIdx << 16) | (uint32_t)targetIdx;
-}
+static LosCacheEntry g_LosCache[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
 static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 {
 	if (!ent)
@@ -128,14 +124,83 @@ static inline bool VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float 
 		return VisibleByLOS(viewer, target);
 
 	float now = gpGlobals ? gpGlobals->curtime : 0.0f;
-	uint32_t key = LosCacheKey(viewerIdx, targetIdx);
-	auto it = g_LosCache.find(key);
-	if (it != g_LosCache.end() && it->second.next > now)
-		return it->second.visible;
+	LosCacheEntry &e = g_LosCache[viewerIdx][targetIdx];
+	if (e.next > now)
+		return e.visible;
 
 	bool vis = VisibleByLOS(viewer, target);
-	g_LosCache[key] = { now + cacheSeconds, vis };
+	e.next = now + cacheSeconds;
+	e.visible = vis;
 	return vis;
+}
+
+static inline void RemoveEdictFromTransmit(CCheckTransmitInfo* info, int edictIdx)
+{
+	info->m_pTransmitEdict->Clear(edictIdx);
+	if (info->m_pTransmitAlways && info->m_pTransmitAlways->Get(edictIdx))
+		info->m_pTransmitAlways->Clear(edictIdx);
+}
+
+static inline void ApplyAntiWallhack(CBaseEntity* viewerEnt, int viewerIdx, CCheckTransmitInfo* pInfo, const unsigned short* pEdictIndices, int nEdicts)
+{
+	float cacheSeconds = g_fActiveViewerLosCache[viewerIdx];
+	if (cacheSeconds <= 0.0f)
+		cacheSeconds = 0.08f;
+
+	static int head[HOLYLIB_MAX_PLAYERS + 1];
+	static unsigned char usedOwner[HOLYLIB_MAX_PLAYERS + 1];
+	static int ownerList[HOLYLIB_MAX_PLAYERS + 1];
+	static int nextEdict[MAX_EDICTS];
+
+	for (int i = 1; i <= HOLYLIB_MAX_PLAYERS; ++i)
+	{
+		head[i] = -1;
+		usedOwner[i] = 0;
+	}
+
+	int ownerCount = 0;
+	edict_t* pWorld = Util::engineserver->PEntityOfEntIndex(0);
+
+	for (int i = 0; i < nEdicts; ++i)
+	{
+		int edictIdx = (int)pEdictIndices[i];
+		if (!pInfo->m_pTransmitEdict->Get(edictIdx))
+			continue;
+
+		CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(&pWorld[edictIdx]);
+		CBasePlayer* owner = ResolveOwningPlayer(ent);
+		if (!owner)
+			continue;
+
+		int ownerIdx = GetClientIndexFromEntity(owner);
+		if (ownerIdx < 1 || ownerIdx > gpGlobals->maxClients || ownerIdx > HOLYLIB_MAX_PLAYERS)
+			continue;
+		if (ownerIdx == viewerIdx)
+			continue;
+
+		if (!usedOwner[ownerIdx])
+		{
+			usedOwner[ownerIdx] = 1;
+			ownerList[ownerCount++] = ownerIdx;
+		}
+
+		nextEdict[edictIdx] = head[ownerIdx];
+		head[ownerIdx] = edictIdx;
+	}
+
+	for (int i = 0; i < ownerCount; ++i)
+	{
+		int ownerIdx = ownerList[i];
+		CBasePlayer* owner = UTIL_PlayerByIndex(ownerIdx);
+		if (!owner)
+			continue;
+
+		if (VisibleByLOS(viewerEnt, owner, cacheSeconds))
+			continue;
+
+		for (int edictIdx = head[ownerIdx]; edictIdx != -1; edictIdx = nextEdict[edictIdx])
+			RemoveEdictFromTransmit(pInfo, edictIdx);
+	}
 }
 
 static inline CBasePlayer* ResolveOwningPlayer(CBaseEntity* ent)
@@ -315,6 +380,8 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 		detour_CServerGameEnts_CheckTransmit.GetTrampoline<Symbols::CServerGameEnts_CheckTransmit>()(gameents, pInfo, pEdictIndices, nEdicts);
 	}
 
+	ApplyAntiWallhack(pViewerEnt, viewerIdx, pInfo, pEdictIndices, nEdicts);
+
 	if(g_bEnableLuaPostTransmitHook && Lua::PushHook("HolyLib:PostCheckTransmit"))
 	{
 		g_bBlockAdditionToTransmit = true;
@@ -488,6 +555,9 @@ LUA_FUNCTION_STATIC(pvs_ActiveCheckTransmit)
 {
 	CBasePlayer* ply = Util::Get_Player(LUA, 1, true);
 	bool bEnable = LUA->GetBool(2);
+	float cacheSeconds = 0.0f;
+	if (LUA->IsType(3, GarrysMod::Lua::Type::Number))
+		cacheSeconds = (float)LUA->GetNumber(3);
 
 	int idx = -1;
 	if (ply && ply->edict())
@@ -497,7 +567,15 @@ LUA_FUNCTION_STATIC(pvs_ActiveCheckTransmit)
 		LUA->ThrowError("pvs.ActiveCheckTransmit: invalid player index");
 
 	g_bActiveCheckTransmitViewer[idx] = bEnable;
-	g_LosCache.clear();
+	if (bEnable)
+		g_fActiveViewerLosCache[idx] = (cacheSeconds > 0.0f) ? cacheSeconds : 0.08f;
+	else
+		g_fActiveViewerLosCache[idx] = 0.0f;
+	for (int t = 1; t <= HOLYLIB_MAX_PLAYERS; ++t)
+	{
+		g_LosCache[idx][t].next = 0.0f;
+		g_LosCache[idx][t].visible = false;
+	}
 
 	return 0;
 }
