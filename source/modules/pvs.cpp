@@ -9,8 +9,11 @@
 #include "vprof.h"
 #include <stdint.h>
 
-// memdbgon must be the last include file in a .cpp file!!!
+#include "util.h"
+
 #include "tier0/memdbgon.h"
+
+#define HOLYLIB_MAX_PLAYERS 128
 
 class CPVSModule : public IModule
 {
@@ -30,7 +33,7 @@ IModule* pPVSModule = &g_pPVSModule;
 static int currentPVSSize = -1;
 static unsigned char* currentPVS = nullptr;
 static int mapPVSSize = -1;
-static bool g_bActiveCheckTransmitViewer[65] = { false };
+static bool g_bActiveCheckTransmitViewer[HOLYLIB_MAX_PLAYERS + 1] = { false };
 static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 {
 	if (!ent)
@@ -43,9 +46,50 @@ static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 	return ed->m_EdictIndex;
 }
 
-static inline uint64_t BitForClient(int idx)
+static inline bool LOS_Clear(CBaseEntity* viewer, CBaseEntity* target, const Vector& pos)
 {
-	return (idx >= 1 && idx <= 64) ? (1ULL << (idx - 1)) : 0ULL;
+	trace_t tr;
+	CTraceFilterSkipTwoEntities filter(viewer, target, COLLISION_GROUP_NONE);
+	UTIL_TraceLine(viewer->EyePosition(), pos, MASK_OPAQUE | CONTENTS_IGNORE_NODRAW_OPAQUE, &filter, &tr);
+	return tr.fraction == 1.0f;
+}
+
+static inline bool VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target)
+{
+	if (!viewer || !target)
+		return false;
+
+	if (LOS_Clear(viewer, target, target->WorldSpaceCenter()))
+		return true;
+
+	if (LOS_Clear(viewer, target, target->EyePosition()))
+		return true;
+
+	Vector mins, maxs;
+	target->GetCollisionBounds(mins, maxs);
+
+	const float minX = mins.x + 1.0f;
+	const float minY = mins.y + 1.0f;
+	const float maxX = maxs.x - 1.0f;
+	const float maxY = maxs.y - 1.0f;
+	const float zBottom = mins.z + 5.0f;
+	const float zTop = maxs.z - 2.0f;
+
+	Vector local;
+
+	local.z = zBottom;
+	local.x = minX; local.y = minY; if (LOS_Clear(viewer, target, target->LocalToWorld(local))) return true;
+	local.x = maxX; local.y = minY; if (LOS_Clear(viewer, target, target->LocalToWorld(local))) return true;
+	local.x = minX; local.y = maxY; if (LOS_Clear(viewer, target, target->LocalToWorld(local))) return true;
+	local.x = maxX; local.y = maxY; if (LOS_Clear(viewer, target, target->LocalToWorld(local))) return true;
+
+	local.z = zTop;
+	local.x = minX; local.y = minY; if (LOS_Clear(viewer, target, target->LocalToWorld(local))) return true;
+	local.x = maxX; local.y = minY; if (LOS_Clear(viewer, target, target->LocalToWorld(local))) return true;
+	local.x = minX; local.y = maxY; if (LOS_Clear(viewer, target, target->LocalToWorld(local))) return true;
+	local.x = maxX; local.y = maxY; if (LOS_Clear(viewer, target, target->LocalToWorld(local))) return true;
+
+	return false;
 }
 
 #ifndef HOLYLIB_MANUALNETWORKING
@@ -114,7 +158,7 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 
 	CBaseEntity* pViewerEnt = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
 	int viewerIdx = GetClientIndexFromEntity(pViewerEnt);
-	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > 64 || !g_bActiveCheckTransmitViewer[viewerIdx])
+	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > HOLYLIB_MAX_PLAYERS || !g_bActiveCheckTransmitViewer[viewerIdx])
 	{
 #if MODULE_EXISTS_NETWORKING
 		if (g_pReplaceCServerGameEnts_CheckTransmit)
@@ -255,7 +299,7 @@ void PreCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned 
 
 	CBaseEntity* pViewerEnt = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
 	int viewerIdx = GetClientIndexFromEntity(pViewerEnt);
-	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > 64 || !g_bActiveCheckTransmitViewer[viewerIdx])
+	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > HOLYLIB_MAX_PLAYERS || !g_bActiveCheckTransmitViewer[viewerIdx])
 	{
 		g_pCurrentTransmitInfo = nullptr;
 		g_pCurrentEdictIndices = nullptr;
@@ -332,7 +376,7 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 
 	CBaseEntity* pViewerEnt = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
 	int viewerIdx = GetClientIndexFromEntity(pViewerEnt);
-	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > 64 || !g_bActiveCheckTransmitViewer[viewerIdx])
+	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > HOLYLIB_MAX_PLAYERS || !g_bActiveCheckTransmitViewer[viewerIdx])
 	{
 		g_pCurrentTransmitInfo = nullptr;
 		g_pCurrentEdictIndices = nullptr;
@@ -381,7 +425,7 @@ LUA_FUNCTION_STATIC(pvs_ActiveCheckTransmit)
 	if (ply && ply->edict())
 		idx = ply->edict()->m_EdictIndex;
 
-	if (idx < 1 || idx > 64)
+	if (idx < 1 || idx > gpGlobals->maxClients || idx > HOLYLIB_MAX_PLAYERS)
 		LUA->ThrowError("pvs.ActiveCheckTransmit: invalid player index");
 
 	g_bActiveCheckTransmitViewer[idx] = bEnable;
@@ -566,10 +610,10 @@ LUA_FUNCTION_STATIC(pvs_AddEntityToPVS)
 	return 0;
 }
 
-#define LUA_FL_EDICT_DONTSEND 1 << 0 // 0
-#define LUA_FL_EDICT_ALWAYS 1 << 1 // 1
-#define LUA_FL_EDICT_PVSCHECK 1 << 2 // 2
-#define LUA_FL_EDICT_FULLCHECK 1 << 3 // 4
+#define LUA_FL_EDICT_DONTSEND 1 << 0
+#define LUA_FL_EDICT_ALWAYS 1 << 1
+#define LUA_FL_EDICT_PVSCHECK 1 << 2
+#define LUA_FL_EDICT_FULLCHECK 1 << 3
 static void SetOverrideStateFlags(GarrysMod::Lua::ILuaInterface* pLua, CBaseEntity* ent, int flags, bool force)
 {
 	edict_t* edict = ent->edict();
@@ -927,7 +971,7 @@ LUA_FUNCTION_STATIC(pvs_SetPreventTransmitBulk)
 	return 0;
 }
 
-LUA_FUNCTION_STATIC(pvs_FindInPVS) // Copy from pas.FindInPAS
+LUA_FUNCTION_STATIC(pvs_FindInPVS)
 {
 	VPROF_BUDGET("pvs.FindInPVS", VPROF_BUDGETGROUP_HOLYLIB);
 
@@ -942,7 +986,7 @@ LUA_FUNCTION_STATIC(pvs_FindInPVS) // Copy from pas.FindInPAS
 
 	Util::VisData* pVisCluster = Util::CM_Vis(*orig, DVIS_PVS);
 
-	LUA->PreCreateTable(MAX_EDICTS / 16, 0); // Should we reduce this later? (Currently: 512)
+	LUA->PreCreateTable(MAX_EDICTS / 16, 0);
 	int idx = 0;
 #if MODULE_EXISTS_ENTITYLIST
 	if (Util::pEntityList->IsEnabled())
@@ -1085,13 +1129,18 @@ LUA_FUNCTION_STATIC(pvs_GetPlayersFromTransmit)
 	return 1;
 }
 
+LUA_FUNCTION_STATIC(pvs_VisibleByLOS)
+{
+	CBaseEntity* viewer = Util::Get_Entity(LUA, 1, true);
+	CBaseEntity* target = Util::Get_Entity(LUA, 2, true);
+	LUA->PushBool(VisibleByLOS(viewer, target));
+	return 1;
+}
+
 LUA_FUNCTION_STATIC(pvs_ForceWeaponTransmit)
 {
 	CBaseEntity* pWeapon = Util::Get_Entity(LUA, 1, true);
 	bool bForceTransmit = LUA->GetBool(2);
-
-	// If it isn't a weapon - we don't care.
-	// Why? Because then it simply has no effect!
 
 #if MODULE_EXISTS_NETWORKING
 	extern void Networking_ForceWeaponTransmit(int entIndex, bool bForceTransmit);
@@ -1154,9 +1203,9 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 		Util::AddFunc(pLua, pvs_ForceFullUpdate, "ForceFullUpdate");
 		Util::AddFunc(pLua, pvs_GetEntitiesFromTransmit, "GetEntitiesFromTransmit");
 		Util::AddFunc(pLua, pvs_GetPlayersFromTransmit, "GetPlayersFromTransmit");
+		Util::AddFunc(pLua, pvs_VisibleByLOS, "VisibleByLOS");
 		Util::AddFunc(pLua, pvs_ForceWeaponTransmit, "ForceWeaponTransmit");
 
-		// Use the functions below only inside the HolyLib:[Pre/Post]CheckTransmit hook.  
 		Util::AddFunc(pLua, pvs_RemoveEntityFromTransmit, "RemoveEntityFromTransmit");
 		Util::AddFunc(pLua, pvs_RemoveAllEntityFromTransmit, "RemoveAllEntityFromTransmit");
 		Util::AddFunc(pLua, pvs_AddEntityToTransmit, "AddEntityToTransmit");
