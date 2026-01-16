@@ -105,7 +105,7 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
 	Ray_t ray;
 	ray.Init(start, end);
 	CHolyLibTraceFilterWorldOnly filter;
-	UTIL_TraceRay(ray, MASK_SOLID_BRUSHONLY | CONTENTS_IGNORE_NODRAW_OPAQUE, &filter, &tr);
+	enginetrace->TraceRay(ray, MASK_SOLID_BRUSHONLY | CONTENTS_IGNORE_NODRAW_OPAQUE, &filter, &tr);
 	return tr.fraction == 1.0f;
 }
 
