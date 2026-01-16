@@ -40,8 +40,6 @@ static int currentPVSSize = -1;
 static unsigned char* currentPVS = nullptr;
 static int mapPVSSize = -1;
 static bool g_bActiveCheckTransmitViewer[HOLYLIB_MAX_PLAYERS + 1] = { false };
-static unsigned int g_AWHHiddenStamp = 1;
-static unsigned int g_AWHHiddenMark[HOLYLIB_MAX_PLAYERS + 1] = { 0 };
 static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 {
 	if (!ent)
@@ -54,10 +52,8 @@ static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 	return ed->m_EdictIndex;
 }
 
-static int g_LOSNextTick[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
+static float g_LOSNext[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
 static unsigned char g_LOSVis[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
-
-static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target);
 
 static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target);
 
@@ -71,30 +67,19 @@ static inline bool VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float 
 	if (vIdx < 1 || vIdx > HOLYLIB_MAX_PLAYERS || tIdx < 1 || tIdx > HOLYLIB_MAX_PLAYERS)
 		return VisibleByLOS_NoCache(viewer, target);
 
-	int ttlTicks = 1;
-	if (gpGlobals && gpGlobals->interval_per_tick > 0.0f)
-	{
-		float ticks = cacheSeconds / gpGlobals->interval_per_tick;
-		if (ticks > 1.0f)
-		{
-			int it = (int)(ticks + 0.999f);
-			ttlTicks = it > 1 ? it : 1;
-		}
-	}
-
-	int nowTick = gpGlobals ? gpGlobals->tickcount : 0;
-	if (g_LOSNextTick[vIdx][tIdx] > nowTick)
+	float now = gpGlobals ? gpGlobals->curtime : 0.0f;
+	if (g_LOSNext[vIdx][tIdx] > now)
 		return g_LOSVis[vIdx][tIdx] != 0;
 
 	bool vis = VisibleByLOS_NoCache(viewer, target);
 	g_LOSVis[vIdx][tIdx] = vis ? 1 : 0;
-	g_LOSNextTick[vIdx][tIdx] = nowTick + ttlTicks;
+	g_LOSNext[vIdx][tIdx] = now + cacheSeconds;
 	return vis;
 }
 
-static inline bool LOS_Clear(const Vector& start, const Vector& end)
+static inline bool LOS_Clear(CBaseEntity* viewer, CBaseEntity* target, const Vector& pos)
 {
-	class CHolyLibTraceFilterWorldOnly : public ITraceFilter
+	class CTraceFilterWorldOnlyLocal : public ITraceFilter
 	{
 	public:
 		bool ShouldHitEntity(IHandleEntity*, int) override { return false; }
@@ -103,9 +88,11 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
 
 	trace_t tr;
 	Ray_t ray;
-	ray.Init(start, end);
-	CHolyLibTraceFilterWorldOnly filter;
-	enginetrace->TraceRay(ray, MASK_SOLID_BRUSHONLY | CONTENTS_IGNORE_NODRAW_OPAQUE, &filter, &tr);
+	ray.Init(viewer->EyePosition(), pos);
+
+	CTraceFilterWorldOnlyLocal filter;
+	enginetrace->TraceRay(ray, MASK_OPAQUE | CONTENTS_IGNORE_NODRAW_OPAQUE, &filter, &tr);
+
 	return tr.fraction == 1.0f;
 }
 
@@ -113,15 +100,6 @@ static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target
 {
 	if (!viewer || !target)
 		return false;
-
-	Vector viewerEye = viewer->EyePosition();
-	Vector targetCenter = target->WorldSpaceCenter();
-	if (LOS_Clear(viewerEye, targetCenter))
-		return true;
-
-	Vector targetEye = target->EyePosition();
-	if (LOS_Clear(viewerEye, targetEye))
-		return true;
 
 	if (!target->CollisionProp())
 		return false;
@@ -140,16 +118,16 @@ static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target
 	const matrix3x4_t& mat = target->EntityToWorldTransform();
 
 	local.z = zBottom;
-	local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-	local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-	local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-	local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+	local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, target, world)) return true;
+	local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, target, world)) return true;
+	local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, target, world)) return true;
+	local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, target, world)) return true;
 
 	local.z = zTop;
-	local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-	local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-	local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-	local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+	local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, target, world)) return true;
+	local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, target, world)) return true;
+	local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, target, world)) return true;
+	local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, target, world)) return true;
 
 	return false;
 }
@@ -1442,15 +1420,15 @@ LUA_FUNCTION_STATIC(pvs_ApplyAntiWallhack)
 	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > HOLYLIB_MAX_PLAYERS || !g_bActiveCheckTransmitViewer[viewerIdx])
 		return 0;
 
-	unsigned int stamp = ++g_AWHHiddenStamp;
-	if (stamp == 0)
-	{
-		stamp = ++g_AWHHiddenStamp;
-		memset(g_AWHHiddenMark, 0, sizeof(g_AWHHiddenMark));
-	}
+	Vector viewerEye = viewer->EyePosition();
+	Vector viewerForward;
+	AngleVectors(viewer->EyeAngles(), &viewerForward);
 
-	int hiddenCount = 0;
+	bool hiddenOwner[HOLYLIB_MAX_PLAYERS + 1];
+	memset(hiddenOwner, 0, sizeof(hiddenOwner));
+
 	edict_t* pBaseEdict = Util::engineserver->PEntityOfEntIndex(0);
+	int hiddenCount = 0;
 
 	for (int i = 0; i < g_nCurrentEdicts; ++i)
 	{
@@ -1467,9 +1445,15 @@ LUA_FUNCTION_STATIC(pvs_ApplyAntiWallhack)
 		if (!ent || ent == viewer)
 			continue;
 
-		if (!VisibleByLOS(viewer, ent, cacheSeconds))
+		Vector to = ent->WorldSpaceCenter() - viewerEye;
+		float lenSqr = to.LengthSqr();
+		if (lenSqr > 1e-6f)
+			to *= (1.0f / sqrtf(lenSqr));
+		float dot = DotProduct(viewerForward, to);
+		bool forceHide = (dot < 0.5f);
+		if (forceHide || !VisibleByLOS(viewer, ent, cacheSeconds))
 		{
-			g_AWHHiddenMark[iEdict] = stamp;
+			hiddenOwner[iEdict] = true;
 			g_pCurrentTransmitInfo->m_pTransmitEdict->Clear(iEdict);
 			if (g_pCurrentTransmitInfo->m_pTransmitAlways && g_pCurrentTransmitInfo->m_pTransmitAlways->Get(iEdict))
 				g_pCurrentTransmitInfo->m_pTransmitAlways->Clear(iEdict);
@@ -1484,7 +1468,7 @@ LUA_FUNCTION_STATIC(pvs_ApplyAntiWallhack)
 	memset(activeWep, 0, sizeof(activeWep));
 	for (int i = 1; i <= gpGlobals->maxClients && i <= HOLYLIB_MAX_PLAYERS; ++i)
 	{
-		if (g_AWHHiddenMark[i] != stamp)
+		if (!hiddenOwner[i])
 			continue;
 		CBasePlayer* ply = UTIL_PlayerByIndex(i);
 		if (!ply)
@@ -1513,7 +1497,7 @@ LUA_FUNCTION_STATIC(pvs_ApplyAntiWallhack)
 		int ownerIdx = owner->edict()->m_EdictIndex;
 		if (ownerIdx < 1 || ownerIdx > gpGlobals->maxClients || ownerIdx > HOLYLIB_MAX_PLAYERS)
 			continue;
-		if (g_AWHHiddenMark[ownerIdx] != stamp)
+		if (!hiddenOwner[ownerIdx])
 			continue;
 
 		bool remove = false;
