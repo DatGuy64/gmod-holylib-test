@@ -79,11 +79,11 @@ static inline bool VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float 
 	return vis;
 }
 
-static inline bool LOS_Clear(CBaseEntity* viewer, const Vector& pos)
+static inline bool LOS_Clear(const Vector& start, const Vector& end)
 {
 	trace_t tr;
 	Ray_t ray;
-	ray.Init(viewer->EyePosition(), pos);
+	ray.Init(start, end);
 	enginetrace->TraceRay(ray, MASK_OPAQUE | CONTENTS_IGNORE_NODRAW_OPAQUE, &g_HolyLibTraceFilterWorldOnly, &tr);
 	return tr.fraction == 1.0f;
 }
@@ -92,6 +92,8 @@ static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target
 {
 	if (!viewer || !target)
 		return false;
+
+	Vector viewerEye = viewer->EyePosition();
 
 	if (!target->CollisionProp())
 		return false;
@@ -110,16 +112,16 @@ static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target
 	const matrix3x4_t& mat = target->EntityToWorldTransform();
 
 	local.z = zBottom;
-	local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, world)) return true;
-	local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, world)) return true;
-	local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, world)) return true;
-	local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, world)) return true;
+	local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+	local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+	local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+	local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
 
 	local.z = zTop;
-	local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, world)) return true;
-	local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, world)) return true;
-	local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, world)) return true;
-	local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, world)) return true;
+	local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+	local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+	local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+	local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
 
 	return false;
 }
@@ -1500,8 +1502,6 @@ LUA_FUNCTION_STATIC(pvs_ApplyAntiWallhack)
 			CBaseEntity* parent = ent->GetMoveParent();
 			if (parent && parent->IsPlayer())
 				owner = static_cast<CBasePlayer*>(parent);
-			else
-				owner = ResolveOwningPlayer(ent);
 		}
 		if (!owner || !owner->edict())
 			continue;
