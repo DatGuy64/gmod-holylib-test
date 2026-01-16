@@ -1437,12 +1437,15 @@ LUA_FUNCTION_STATIC(pvs_ApplyAntiWallhack)
 		if (!ent || ent == viewer)
 			continue;
 
-		Vector to = ent->WorldSpaceCenter() - viewerEye;
-		float lenSqr = to.LengthSqr();
-		if (lenSqr > 1e-6f)
-			to *= (1.0f / sqrtf(lenSqr));
-		float dot = DotProduct(viewerForward, to);
-		bool forceHide = (dot < 0.5f);
+		Vector delta = ent->WorldSpaceCenter() - viewerEye;
+		float lenSqr = delta.LengthSqr();
+		float d = DotProduct(viewerForward, delta);
+		bool forceHide = (d <= 0.0f);
+		if (!forceHide && lenSqr > 1e-6f)
+		{
+			float d2 = d * d;
+			forceHide = (d2 < (0.25f * lenSqr));
+		}
 		if (forceHide || !VisibleByLOS(viewer, ent, cacheSeconds))
 		{
 			hiddenOwner[iEdict] = true;
@@ -1451,8 +1454,8 @@ LUA_FUNCTION_STATIC(pvs_ApplyAntiWallhack)
 				g_pCurrentTransmitInfo->m_pTransmitAlways->Clear(iEdict);
 			++hiddenCount;
 
-			CBasePlayer* ply = UTIL_PlayerByIndex(iEdict);
-			if (ply)
+			CBasePlayer* ply = static_cast<CBasePlayer*>(ent);
+			if (ply && ply->edict())
 			{
 				CBaseEntity* wep = GetActiveWeaponEntity(ply);
 				if (wep && wep->edict())
@@ -1485,10 +1488,21 @@ LUA_FUNCTION_STATIC(pvs_ApplyAntiWallhack)
 		if (!ent)
 			continue;
 		const char* cls = ent->GetClassname();
-		if (!cls || strcmp(cls, "cw_gear"))
+		if (!cls || cls[0] != 'c' || strcmp(cls, "cw_gear"))
 			continue;
 
-		CBasePlayer* owner = ResolveOwningPlayer(ent);
+		CBasePlayer* owner = nullptr;
+		CBaseEntity* ownerEnt = ent->GetOwnerEntity();
+		if (ownerEnt && ownerEnt->IsPlayer())
+			owner = static_cast<CBasePlayer*>(ownerEnt);
+		else
+		{
+			CBaseEntity* parent = ent->GetMoveParent();
+			if (parent && parent->IsPlayer())
+				owner = static_cast<CBasePlayer*>(parent);
+			else
+				owner = ResolveOwningPlayer(ent);
+		}
 		if (!owner || !owner->edict())
 			continue;
 		int ownerIdx = owner->edict()->m_EdictIndex;
