@@ -7,6 +7,7 @@
 #include "iserver.h"
 #include "sourcesdk/baseclient.h"
 #include "vprof.h"
+#include "mathlib/vector.h"
 #include <stdint.h>
 
 #include "util.h"
@@ -65,8 +66,10 @@ static inline bool VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target)
 	if (LOS_Clear(viewer, target, target->EyePosition()))
 		return true;
 
-	Vector mins, maxs;
-	target->GetCollisionBounds(mins, maxs);
+	if (!target->CollisionProp())
+		return false;
+	const Vector& mins = target->CollisionProp()->OBBMins();
+	const Vector& maxs = target->CollisionProp()->OBBMaxs();
 
 	const float minX = mins.x + 1.0f;
 	const float minY = mins.y + 1.0f;
@@ -76,18 +79,20 @@ static inline bool VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target)
 	const float zTop = maxs.z - 2.0f;
 
 	Vector local;
+	Vector world;
+	const matrix3x4_t& mat = target->EntityToWorldTransform();
 
 	local.z = zBottom;
-	local.x = minX; local.y = minY; if (LOS_Clear(viewer, target, target->LocalToWorld(local))) return true;
-	local.x = maxX; local.y = minY; if (LOS_Clear(viewer, target, target->LocalToWorld(local))) return true;
-	local.x = minX; local.y = maxY; if (LOS_Clear(viewer, target, target->LocalToWorld(local))) return true;
-	local.x = maxX; local.y = maxY; if (LOS_Clear(viewer, target, target->LocalToWorld(local))) return true;
+	local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, target, world)) return true;
+	local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, target, world)) return true;
+	local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, target, world)) return true;
+	local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, target, world)) return true;
 
 	local.z = zTop;
-	local.x = minX; local.y = minY; if (LOS_Clear(viewer, target, target->LocalToWorld(local))) return true;
-	local.x = maxX; local.y = minY; if (LOS_Clear(viewer, target, target->LocalToWorld(local))) return true;
-	local.x = minX; local.y = maxY; if (LOS_Clear(viewer, target, target->LocalToWorld(local))) return true;
-	local.x = maxX; local.y = maxY; if (LOS_Clear(viewer, target, target->LocalToWorld(local))) return true;
+	local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, target, world)) return true;
+	local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, target, world)) return true;
+	local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, target, world)) return true;
+	local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, target, world)) return true;
 
 	return false;
 }
