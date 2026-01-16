@@ -38,6 +38,19 @@ static int currentPVSSize = -1;
 static unsigned char* currentPVS = nullptr;
 static int mapPVSSize = -1;
 static bool g_bActiveCheckTransmitViewer[HOLYLIB_MAX_PLAYERS + 1] = { false };
+
+struct LosCacheEntry
+{
+	float next;
+	bool visible;
+};
+
+static std::unordered_map<uint32_t, LosCacheEntry> g_LosCache;
+
+static inline uint32_t LosCacheKey(int viewerIdx, int targetIdx)
+{
+	return ((uint32_t)viewerIdx << 16) | (uint32_t)targetIdx;
+}
 static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 {
 	if (!ent)
@@ -52,20 +65,25 @@ static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 
 static inline bool LOS_Clear(CBaseEntity* viewer, CBaseEntity* target, const Vector& pos)
 {
-	class CTraceFilterWorldOnly : public ITraceFilter
+	class CTraceFilterSkipTwo : public ITraceFilter
 	{
 	public:
-		bool ShouldHitEntity(IHandleEntity*, int) override { return false; }
-		TraceType_t GetTraceType() const override { return TRACE_WORLD_ONLY; }
+		CTraceFilterSkipTwo(const IHandleEntity* a, const IHandleEntity* b) : m_a(a), m_b(b) {}
+		bool ShouldHitEntity(IHandleEntity* pHandleEntity, int) override
+		{
+			return pHandleEntity != m_a && pHandleEntity != m_b;
+		}
+		TraceType_t GetTraceType() const override { return TRACE_EVERYTHING; }
+	private:
+		const IHandleEntity* m_a;
+		const IHandleEntity* m_b;
 	};
 
 	trace_t tr;
 	Ray_t ray;
 	ray.Init(viewer->EyePosition(), pos);
-
-	CTraceFilterWorldOnly filter;
+	CTraceFilterSkipTwo filter(viewer, target);
 	enginetrace->TraceRay(ray, MASK_OPAQUE | CONTENTS_IGNORE_NODRAW_OPAQUE, &filter, &tr);
-
 	return tr.fraction == 1.0f;
 }
 
@@ -109,6 +127,49 @@ static inline bool VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target)
 	local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewer, target, world)) return true;
 
 	return false;
+}
+
+static inline bool VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds)
+{
+	if (cacheSeconds <= 0.0f)
+		return VisibleByLOS(viewer, target);
+
+	int viewerIdx = GetClientIndexFromEntity(viewer);
+	int targetIdx = GetClientIndexFromEntity(target);
+	if (viewerIdx < 1 || viewerIdx > HOLYLIB_MAX_PLAYERS || targetIdx < 1 || targetIdx > HOLYLIB_MAX_PLAYERS)
+		return VisibleByLOS(viewer, target);
+
+	float now = gpGlobals ? gpGlobals->curtime : 0.0f;
+	uint32_t key = LosCacheKey(viewerIdx, targetIdx);
+	auto it = g_LosCache.find(key);
+	if (it != g_LosCache.end() && it->second.next > now)
+		return it->second.visible;
+
+	bool vis = VisibleByLOS(viewer, target);
+	g_LosCache[key] = { now + cacheSeconds, vis };
+	return vis;
+}
+
+static inline CBasePlayer* ResolveOwningPlayer(CBaseEntity* ent)
+{
+	if (!ent)
+		return nullptr;
+
+	CBaseEntity* o = ent->GetOwnerEntity();
+	if (o && o->IsPlayer())
+		return (CBasePlayer*)o;
+
+	CBaseEntity* p = ent;
+	for (int i = 0; i < 16; ++i)
+	{
+		p = p ? p->GetMoveParent() : nullptr;
+		if (!p)
+			break;
+		if (p->IsPlayer())
+			return (CBasePlayer*)p;
+	}
+
+	return nullptr;
 }
 
 #ifndef HOLYLIB_MANUALNETWORKING
@@ -448,6 +509,7 @@ LUA_FUNCTION_STATIC(pvs_ActiveCheckTransmit)
 		LUA->ThrowError("pvs.ActiveCheckTransmit: invalid player index");
 
 	g_bActiveCheckTransmitViewer[idx] = bEnable;
+	g_LosCache.clear();
 
 	return 0;
 }
@@ -1148,11 +1210,81 @@ LUA_FUNCTION_STATIC(pvs_GetPlayersFromTransmit)
 	return 1;
 }
 
+LUA_FUNCTION_STATIC(pvs_GetPlayersWithOwnedEntitiesFromTransmit)
+{
+	if (!g_pCurrentTransmitInfo)
+		LUA->ThrowError("Tried to use pvs.GetPlayersWithOwnedEntitiesFromTransmit while not in a CheckTransmit call!");
+
+	edict_t* pBaseEdict = Util::engineserver->PEntityOfEntIndex(0);
+	std::unordered_map<int, std::vector<CBaseEntity*>> byPlayer;
+	byPlayer.reserve(gpGlobals->maxClients);
+
+	for (int i = 0; i < g_nCurrentEdicts; ++i)
+	{
+		int iEdict = g_pCurrentEdictIndices[i];
+		if (iEdict < 1 || iEdict > gpGlobals->maxClients)
+			continue;
+		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(iEdict))
+			continue;
+		CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(&pBaseEdict[iEdict]);
+		if (!ent || !ent->IsPlayer())
+			continue;
+		byPlayer[iEdict].push_back(ent);
+	}
+
+	for (int i = 0; i < g_nCurrentEdicts; ++i)
+	{
+		int iEdict = g_pCurrentEdictIndices[i];
+		if (iEdict < 1 || iEdict >= MAX_EDICTS)
+			continue;
+		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(iEdict))
+			continue;
+		CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(&pBaseEdict[iEdict]);
+		if (!ent || ent->IsPlayer())
+			continue;
+		CBasePlayer* owner = ResolveOwningPlayer(ent);
+		if (!owner)
+			continue;
+		edict_t* oed = owner->edict();
+		if (!oed)
+			continue;
+		int oidx = oed->m_EdictIndex;
+		auto it = byPlayer.find(oidx);
+		if (it == byPlayer.end())
+		{
+			it = byPlayer.emplace(oidx, std::vector<CBaseEntity*>()).first;
+			it->second.push_back(owner);
+		}
+		it->second.push_back(ent);
+	}
+
+	LUA->PreCreateTable(0, (int)byPlayer.size());
+	for (auto& kv : byPlayer)
+	{
+		CBaseEntity* ply = kv.second.size() > 0 ? kv.second[0] : nullptr;
+		if (!ply)
+			continue;
+		Util::Push_Entity(LUA, ply);
+		LUA->PreCreateTable((int)kv.second.size(), 0);
+		for (int j = 0; j < (int)kv.second.size(); ++j)
+		{
+			Util::Push_Entity(LUA, kv.second[j]);
+			Util::RawSetI(LUA, -2, j + 1);
+		}
+		LUA->RawSet(-3);
+	}
+
+	return 1;
+}
+
 LUA_FUNCTION_STATIC(pvs_VisibleByLOS)
 {
 	CBaseEntity* viewer = Util::Get_Entity(LUA, 1, true);
 	CBaseEntity* target = Util::Get_Entity(LUA, 2, true);
-	LUA->PushBool(VisibleByLOS(viewer, target));
+	float cacheSeconds = 0.0f;
+	if (LUA->IsType(3, GarrysMod::Lua::Type::Number))
+		cacheSeconds = (float)LUA->GetNumber(3);
+	LUA->PushBool(VisibleByLOS(viewer, target, cacheSeconds));
 	return 1;
 }
 
@@ -1222,6 +1354,7 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 		Util::AddFunc(pLua, pvs_ForceFullUpdate, "ForceFullUpdate");
 		Util::AddFunc(pLua, pvs_GetEntitiesFromTransmit, "GetEntitiesFromTransmit");
 		Util::AddFunc(pLua, pvs_GetPlayersFromTransmit, "GetPlayersFromTransmit");
+		Util::AddFunc(pLua, pvs_GetPlayersWithOwnedEntitiesFromTransmit, "GetPlayersWithOwnedEntitiesFromTransmit");
 		Util::AddFunc(pLua, pvs_VisibleByLOS, "VisibleByLOS");
 		Util::AddFunc(pLua, pvs_ForceWeaponTransmit, "ForceWeaponTransmit");
 
