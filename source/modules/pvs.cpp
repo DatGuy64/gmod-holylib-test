@@ -65,13 +65,6 @@ static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 
 static inline bool LOS_Clear(CBaseEntity* viewer, CBaseEntity* target, const Vector& pos)
 {
-	class CTraceFilterWorldOnly : public ITraceFilter
-	{
-	public:
-		bool ShouldHitEntity(IHandleEntity*, int) override { return false; }
-		TraceType_t GetTraceType() const override { return TRACE_WORLD_ONLY; }
-	};
-
 	trace_t tr;
 	Ray_t ray;
 	ray.Init(viewer->EyePosition(), pos);
@@ -1212,13 +1205,13 @@ LUA_FUNCTION_STATIC(pvs_GetPlayersWithOwnedEntitiesFromTransmit)
 	edict_t* base = Util::engineserver->PEntityOfEntIndex(0);
 
 	LUA->PreCreateTable(gpGlobals->maxClients, 0);
-	int playersIdx = LUA->GetTop();
+	int playersIdx = LUA->Top();
 
 	LUA->CreateTable();
-	int ownedIdx = LUA->GetTop();
+	int ownedIdx = LUA->Top();
 
 	LUA->CreateTable();
-	int seenIdx = LUA->GetTop();
+	int seenIdx = LUA->Top();
 
 	int playerCount = 0;
 
@@ -1267,9 +1260,9 @@ LUA_FUNCTION_STATIC(pvs_GetPlayersWithOwnedEntitiesFromTransmit)
 		if (!owner || !owner->edict())
 			continue;
 
-		int ownerIdx = owner->edict()->m_EdictIndex;
+		int ownerEdictIdx = owner->edict()->m_EdictIndex;
 
-		LUA->PushNumber(ownerIdx);
+		LUA->PushNumber(ownerEdictIdx);
 		LUA->RawGet(seenIdx);
 
 		bool first = LUA->IsType(-1, GarrysMod::Lua::Type::Nil);
@@ -1277,7 +1270,7 @@ LUA_FUNCTION_STATIC(pvs_GetPlayersWithOwnedEntitiesFromTransmit)
 
 		if (first)
 		{
-			LUA->PushNumber(ownerIdx);
+			LUA->PushNumber(ownerEdictIdx);
 			LUA->PushBool(true);
 			LUA->RawSet(seenIdx);
 
@@ -1293,7 +1286,13 @@ LUA_FUNCTION_STATIC(pvs_GetPlayersWithOwnedEntitiesFromTransmit)
 		Util::Push_Entity(LUA, owner);
 		LUA->RawGet(ownedIdx);
 
-		int listIdx = LUA->GetTop();
+		if (!LUA->IsType(-1, GarrysMod::Lua::Type::Table))
+		{
+			LUA->Pop(1);
+			continue;
+		}
+
+		int listIdx = LUA->Top();
 		int len = (int)LUA->ObjLen(listIdx);
 
 		Util::Push_Entity(LUA, ent);
@@ -1302,7 +1301,7 @@ LUA_FUNCTION_STATIC(pvs_GetPlayersWithOwnedEntitiesFromTransmit)
 		LUA->Pop(1);
 	}
 
-	LUA->Pop(1); // seen
+	LUA->Remove(seenIdx);
 
 	return 2;
 }
