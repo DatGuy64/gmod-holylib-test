@@ -9,6 +9,8 @@
 #include "vprof.h"
 #include "mathlib/vector.h"
 #include "engine/IEngineTrace.h"
+#include "server_class.h"
+#include "basehandle.h"
 #include <stdint.h>
 
 #include "util.h"
@@ -77,7 +79,7 @@ static inline bool VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float 
 
 static inline bool LOS_Clear(CBaseEntity* viewer, CBaseEntity* target, const Vector& pos)
 {
-	class CTraceFilterWorldOnly : public ITraceFilter
+	class CTraceFilterWorldOnlyLocal : public ITraceFilter
 	{
 	public:
 		bool ShouldHitEntity(IHandleEntity*, int) override { return false; }
@@ -88,7 +90,7 @@ static inline bool LOS_Clear(CBaseEntity* viewer, CBaseEntity* target, const Vec
 	Ray_t ray;
 	ray.Init(viewer->EyePosition(), pos);
 
-	CTraceFilterWorldOnly filter;
+	CTraceFilterWorldOnlyLocal filter;
 	enginetrace->TraceRay(ray, MASK_OPAQUE | CONTENTS_IGNORE_NODRAW_OPAQUE, &filter, &tr);
 
 	return tr.fraction == 1.0f;
@@ -1269,6 +1271,75 @@ static inline bool StartsWith(const char* s, const char* p)
 	return true;
 }
 
+static bool FindSendPropOffsetRecursive(SendTable* table, const char* propName, int baseOffset, int& outOffset)
+{
+	if (!table || !propName)
+		return false;
+
+	for (int i = 0; i < table->GetNumProps(); ++i)
+	{
+		SendProp* prop = table->GetProp(i);
+		if (!prop)
+			continue;
+
+		const char* name = prop->GetName();
+		if (name && !strcmp(name, propName))
+		{
+			outOffset = baseOffset + prop->GetOffset();
+			return true;
+		}
+
+		if (prop->GetType() == DPT_DataTable)
+		{
+			SendTable* dt = prop->GetDataTable();
+			if (FindSendPropOffsetRecursive(dt, propName, baseOffset + prop->GetOffset(), outOffset))
+				return true;
+		}
+	}
+
+	return false;
+}
+
+static inline int GetSendPropOffsetCached(ServerClass* sc, const char* propName)
+{
+	static std::unordered_map<ServerClass*, int> cache;
+	if (!sc || !propName)
+		return -1;
+
+	auto it = cache.find(sc);
+	if (it != cache.end())
+		return it->second;
+
+	int offset = -1;
+	SendTable* st = sc->m_pTable;
+	if (st)
+		FindSendPropOffsetRecursive(st, propName, 0, offset);
+
+	cache.emplace(sc, offset);
+	return offset;
+}
+
+static inline CBaseEntity* GetActiveWeaponEntity(CBasePlayer* ply)
+{
+	if (!ply)
+		return nullptr;
+
+	ServerClass* sc = ply->GetServerClass();
+	int off = GetSendPropOffsetCached(sc, "m_hActiveWeapon");
+	if (off < 0)
+		return nullptr;
+
+	CBaseHandle h = *(CBaseHandle*)((char*)ply + off);
+	int idx = h.GetEntryIndex();
+	if (idx <= 0 || idx >= MAX_EDICTS)
+		return nullptr;
+
+	edict_t* ed = Util::engineserver->PEntityOfEntIndex(idx);
+	if (!ed)
+		return nullptr;
+	return Util::servergameents->EdictToBaseEntity(ed);
+}
+
 static inline bool IsFilteredOwnedEntity(CBaseEntity* ent)
 {
 	if (!ent)
@@ -1296,7 +1367,7 @@ LUA_FUNCTION_STATIC(pvs_GetOwnedEntitiesFromTransmit)
 	LUA->CreateTable();
 	int out = 0;
 
-	CBaseEntity* activeWep = target->GetActiveWeapon();
+	CBaseEntity* activeWep = GetActiveWeaponEntity(target);
 	if (activeWep && activeWep->edict())
 	{
 		int wepEdict = activeWep->edict()->m_EdictIndex;
