@@ -11,6 +11,7 @@
 #include "engine/IEngineTrace.h"
 #include "server_class.h"
 #include "basehandle.h"
+#include "dt.h"
 #include <stdint.h>
 
 #include "util.h"
@@ -35,6 +36,8 @@ public:
 
 static CPVSModule g_pPVSModule;
 IModule* pPVSModule = &g_pPVSModule;
+
+static int g_PVSModuleID = 0;
 
 static int currentPVSSize = -1;
 static unsigned char* currentPVS = nullptr;
@@ -153,29 +156,44 @@ static bool g_bBlockAdditionToTransmit = false;
 static bool g_bEnableLuaPreTransmitHook = false;
 static bool g_bEnableLuaPostTransmitHook = false;
 
-static std::unordered_map<GarrysMod::Lua::ILuaInterface*, Util::VisData*> g_LuaVisClusters;
+class LuaPVSModuleData : public Lua::ModuleData
+{
+public:
+	Util::VisData* pVis = nullptr;
+};
+
+static inline LuaPVSModuleData* GetPVSData(GarrysMod::Lua::ILuaInterface* L)
+{
+	auto* luaData = Lua::GetLuaData(L);
+	return (LuaPVSModuleData*)luaData->GetModuleData(g_PVSModuleID);
+}
 
 static inline Util::VisData* GetLuaVis(GarrysMod::Lua::ILuaInterface* L)
 {
-	auto it = g_LuaVisClusters.find(L);
-	return (it != g_LuaVisClusters.end()) ? it->second : nullptr;
+	auto* md = GetPVSData(L);
+	return md ? md->pVis : nullptr;
 }
 
 static inline void ClearLuaVis(GarrysMod::Lua::ILuaInterface* L)
 {
-	auto it = g_LuaVisClusters.find(L);
-	if (it != g_LuaVisClusters.end())
+	auto* md = GetPVSData(L);
+	if (!md)
+		return;
+	if (md->pVis)
 	{
-		delete it->second;
-		g_LuaVisClusters.erase(it);
+		delete md->pVis;
+		md->pVis = nullptr;
 	}
 }
 
 static inline void SetLuaVis(GarrysMod::Lua::ILuaInterface* L, Util::VisData* data)
 {
-	ClearLuaVis(L);
-	if (data)
-		g_LuaVisClusters[L] = data;
+	auto* md = GetPVSData(L);
+	if (!md)
+		return;
+	if (md->pVis)
+		delete md->pVis;
+	md->pVis = data;
 }
 
 
@@ -1259,69 +1277,18 @@ static inline bool StartsWith(const char* s, const char* p)
 	return true;
 }
 
-static bool FindSendPropOffsetRecursive(SendTable* table, const char* propName, int baseOffset, int& outOffset)
+static DTVarByOffset g_m_hActiveWeapon_Offset("DT_BaseCombatCharacter", "m_hActiveWeapon");
+
+static inline CBaseEntity* GetActiveWeaponEntity(const void* pPlayer)
 {
-	if (!table || !propName)
-		return false;
-
-	for (int i = 0; i < table->GetNumProps(); ++i)
-	{
-		SendProp* prop = table->GetProp(i);
-		if (!prop)
-			continue;
-
-		const char* name = prop->GetName();
-		if (name && !strcmp(name, propName))
-		{
-			outOffset = baseOffset + prop->GetOffset();
-			return true;
-		}
-
-		if (prop->GetType() == DPT_DataTable)
-		{
-			SendTable* dt = prop->GetDataTable();
-			if (FindSendPropOffsetRecursive(dt, propName, baseOffset + prop->GetOffset(), outOffset))
-				return true;
-		}
-	}
-
-	return false;
-}
-
-static inline int GetSendPropOffsetCached(ServerClass* sc, const char* propName)
-{
-	static std::unordered_map<ServerClass*, int> cache;
-	if (!sc || !propName)
-		return -1;
-
-	auto it = cache.find(sc);
-	if (it != cache.end())
-		return it->second;
-
-	int offset = -1;
-	SendTable* st = sc->m_pTable;
-	if (st)
-		FindSendPropOffsetRecursive(st, propName, 0, offset);
-
-	cache.emplace(sc, offset);
-	return offset;
-}
-
-static inline CBaseEntity* GetActiveWeaponEntity(CBasePlayer* ply)
-{
-	if (!ply)
+	if (!pPlayer)
 		return nullptr;
-
-	ServerClass* sc = ply->GetServerClass();
-	int off = GetSendPropOffsetCached(sc, "m_hActiveWeapon");
-	if (off < 0)
+	CBaseHandle* h = (CBaseHandle*)g_m_hActiveWeapon_Offset.GetPointer(pPlayer);
+	if (!h)
 		return nullptr;
-
-	CBaseHandle h = *(CBaseHandle*)((char*)ply + off);
-	int idx = h.GetEntryIndex();
+	int idx = h->GetEntryIndex();
 	if (idx <= 0 || idx >= MAX_EDICTS)
 		return nullptr;
-
 	edict_t* ed = Util::engineserver->PEntityOfEntIndex(idx);
 	if (!ed)
 		return nullptr;
@@ -1424,13 +1391,8 @@ LUA_FUNCTION_STATIC(pvs_ApplyAntiWallhack)
 	edict_t* pBaseEdict = Util::engineserver->PEntityOfEntIndex(0);
 	int hiddenCount = 0;
 
-	for (int i = 0; i < g_nCurrentEdicts; ++i)
+	for (int iEdict = 1; iEdict <= gpGlobals->maxClients && iEdict <= HOLYLIB_MAX_PLAYERS; ++iEdict)
 	{
-		int iEdict = g_pCurrentEdictIndices[i];
-		if (iEdict < 1)
-			continue;
-		if (iEdict > gpGlobals->maxClients || iEdict > HOLYLIB_MAX_PLAYERS)
-			continue;
 		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(iEdict))
 			continue;
 
@@ -1561,6 +1523,13 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 {
 	if (bServerInit)
 		return;
+
+	g_PVSModuleID = m_pID;
+	{
+		auto* luaData = Lua::GetLuaData(pLua);
+		if (luaData && !luaData->GetModuleData(g_PVSModuleID))
+			luaData->SetModuleData(g_PVSModuleID, new LuaPVSModuleData);
+	}
 
 	if (pLua == g_Lua)
 	{
