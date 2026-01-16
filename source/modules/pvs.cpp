@@ -65,25 +65,20 @@ static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 
 static inline bool LOS_Clear(CBaseEntity* viewer, CBaseEntity* target, const Vector& pos)
 {
-	class CTraceFilterSkipTwo : public ITraceFilter
+	class CTraceFilterWorldOnly : public ITraceFilter
 	{
 	public:
-		CTraceFilterSkipTwo(const IHandleEntity* a, const IHandleEntity* b) : m_a(a), m_b(b) {}
-		bool ShouldHitEntity(IHandleEntity* pHandleEntity, int) override
-		{
-			return pHandleEntity != m_a && pHandleEntity != m_b;
-		}
-		TraceType_t GetTraceType() const override { return TRACE_EVERYTHING; }
-	private:
-		const IHandleEntity* m_a;
-		const IHandleEntity* m_b;
+		bool ShouldHitEntity(IHandleEntity*, int) override { return false; }
+		TraceType_t GetTraceType() const override { return TRACE_WORLD_ONLY; }
 	};
 
 	trace_t tr;
 	Ray_t ray;
 	ray.Init(viewer->EyePosition(), pos);
-	CTraceFilterSkipTwo filter(viewer, target);
+
+	CTraceFilterWorldOnly filter;
 	enginetrace->TraceRay(ray, MASK_OPAQUE | CONTENTS_IGNORE_NODRAW_OPAQUE, &filter, &tr);
+
 	return tr.fraction == 1.0f;
 }
 
