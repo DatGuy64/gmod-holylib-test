@@ -141,6 +141,8 @@ static inline void RemoveEdictFromTransmit(CCheckTransmitInfo* info, int edictId
 		info->m_pTransmitAlways->Clear(edictIdx);
 }
 
+static inline CBasePlayer* ResolveOwningPlayer(CBaseEntity* ent);
+
 static inline void ApplyAntiWallhack(CBaseEntity* viewerEnt, int viewerIdx, CCheckTransmitInfo* pInfo, const unsigned short* pEdictIndices, int nEdicts)
 {
 	float cacheSeconds = g_fActiveViewerLosCache[viewerIdx];
