@@ -1172,7 +1172,6 @@ LUA_FUNCTION_STATIC(pvs_GetEntitiesFromTransmit)
 	return 1;
 }
 
-
 LUA_FUNCTION_STATIC(pvs_GetPlayersFromTransmit)
 {
 	if (!g_pCurrentTransmitInfo)
@@ -1208,97 +1207,91 @@ LUA_FUNCTION_STATIC(pvs_GetPlayersFromTransmit)
 LUA_FUNCTION_STATIC(pvs_GetPlayersWithOwnedEntitiesFromTransmit)
 {
 	if (!g_pCurrentTransmitInfo)
-		LUA->ThrowError("Tried to use pvs.GetPlayersWithOwnedEntitiesFromTransmit while not in a CheckTransmit call!");
+		LUA->ThrowError("pvs.GetPlayersWithOwnedEntitiesFromTransmit must be called inside CheckTransmit");
+
+	edict_t* base = Util::engineserver->PEntityOfEntIndex(0);
 
 	LUA->PreCreateTable(gpGlobals->maxClients, 0);
 	int playersIdx = LUA->GetTop();
 
-	LUA->PreCreateTable(0, 0);
+	LUA->CreateTable();
 	int ownedIdx = LUA->GetTop();
 
-	LUA->PreCreateTable(gpGlobals->maxClients, 0);
+	LUA->CreateTable();
 	int seenIdx = LUA->GetTop();
 
-	int pCount = 0;
-
-	edict_t* pBaseEdict = Util::engineserver->PEntityOfEntIndex(0);
+	int playerCount = 0;
 
 	for (int i = 0; i < g_nCurrentEdicts; ++i)
 	{
-		int edIdx = g_pCurrentEdictIndices[i];
+		int edictIdx = g_pCurrentEdictIndices[i];
 
-		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(edIdx))
+		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(edictIdx))
 			continue;
 
-		edict_t* pEdict = &pBaseEdict[edIdx];
-		CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(pEdict);
+		CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(&base[edictIdx]);
 		if (!ent)
 			continue;
 
-		CBasePlayer* ownerPly = nullptr;
+		CBasePlayer* owner = nullptr;
 
 		if (ent->IsPlayer())
 		{
-			ownerPly = (CBasePlayer*)ent;
+			owner = static_cast<CBasePlayer*>(ent);
 		}
 		else
 		{
-			CBaseEntity* owner = ent->GetOwnerEntity();
-			if (owner && owner->IsPlayer())
-				ownerPly = (CBasePlayer*)owner;
-			else
+			CBaseEntity* cur = ent;
+			for (int d = 0; d < 8 && cur; ++d)
 			{
-				CBaseEntity* cur = ent;
-				for (int depth = 0; depth < 8 && cur; ++depth)
+				CBaseEntity* o = cur->GetOwnerEntity();
+				if (o && o->IsPlayer())
 				{
-					CBaseEntity* parent = cur->GetMoveParent();
-					if (!parent)
-						break;
-
-					if (parent->IsPlayer())
-					{
-						ownerPly = (CBasePlayer*)parent;
-						break;
-					}
-					cur = parent;
+					owner = static_cast<CBasePlayer*>(o);
+					break;
 				}
+
+				CBaseEntity* p = cur->GetMoveParent();
+				if (!p)
+					break;
+
+				if (p->IsPlayer())
+				{
+					owner = static_cast<CBasePlayer*>(p);
+					break;
+				}
+				cur = p;
 			}
 		}
 
-		if (!ownerPly || !ownerPly->edict())
+		if (!owner || !owner->edict())
 			continue;
 
-		int ownerEntIndex = ownerPly->edict()->m_EdictIndex;
+		int ownerIdx = owner->edict()->m_EdictIndex;
 
-		LUA->PushNumber(ownerEntIndex);
+		LUA->PushNumber(ownerIdx);
 		LUA->RawGet(seenIdx);
 
-		bool firstTime = LUA->IsType(-1, GarrysMod::Lua::Type::Nil);
+		bool first = LUA->IsType(-1, GarrysMod::Lua::Type::Nil);
 		LUA->Pop(1);
 
-		if (firstTime)
+		if (first)
 		{
-			LUA->PushNumber(ownerEntIndex);
+			LUA->PushNumber(ownerIdx);
 			LUA->PushBool(true);
 			LUA->RawSet(seenIdx);
 
-			Util::Push_Entity(LUA, ownerPly);
-			Util::RawSetI(LUA, playersIdx, ++pCount);
+			Util::Push_Entity(LUA, owner);
+			Util::RawSetI(LUA, playersIdx, ++playerCount);
 
 			LUA->CreateTable();
-			Util::Push_Entity(LUA, ownerPly);
+			Util::Push_Entity(LUA, owner);
 			LUA->Push(-2);
 			LUA->RawSet(ownedIdx);
 		}
 
-		Util::Push_Entity(LUA, ownerPly);
+		Util::Push_Entity(LUA, owner);
 		LUA->RawGet(ownedIdx);
-
-		if (!LUA->IsType(-1, GarrysMod::Lua::Type::Table))
-		{
-			LUA->Pop(1);
-			continue;
-		}
 
 		int listIdx = LUA->GetTop();
 		int len = (int)LUA->ObjLen(listIdx);
