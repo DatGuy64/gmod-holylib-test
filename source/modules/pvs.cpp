@@ -1409,6 +1409,114 @@ LUA_FUNCTION_STATIC(pvs_GetOwnedEntitiesFromTransmit)
 	return 1;
 }
 
+LUA_FUNCTION_STATIC(pvs_ApplyAntiWallhack)
+{
+	float cacheSeconds = 0.0f;
+	if (LUA->IsType(1, GarrysMod::Lua::Type::Number))
+		cacheSeconds = (float)LUA->GetNumber(1);
+
+	if (!g_pCurrentTransmitInfo)
+		LUA->ThrowError("Tried to use pvs.ApplyAntiWallhack while not in a CheckTransmit call!");
+
+	CBaseEntity* viewer = Util::servergameents->EdictToBaseEntity(g_pCurrentTransmitInfo->m_pClientEnt);
+	if (!viewer)
+		return 0;
+
+	int viewerIdx = GetClientIndexFromEntity(viewer);
+	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > HOLYLIB_MAX_PLAYERS || !g_bActiveCheckTransmitViewer[viewerIdx])
+		return 0;
+
+	bool hiddenOwner[HOLYLIB_MAX_PLAYERS + 1];
+	memset(hiddenOwner, 0, sizeof(hiddenOwner));
+
+	edict_t* pBaseEdict = Util::engineserver->PEntityOfEntIndex(0);
+	int hiddenCount = 0;
+
+	for (int i = 0; i < g_nCurrentEdicts; ++i)
+	{
+		int iEdict = g_pCurrentEdictIndices[i];
+		if (iEdict < 1)
+			continue;
+		if (iEdict > gpGlobals->maxClients || iEdict > HOLYLIB_MAX_PLAYERS)
+			continue;
+		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(iEdict))
+			continue;
+
+		edict_t* pEdict = &pBaseEdict[iEdict];
+		CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(pEdict);
+		if (!ent || ent == viewer)
+			continue;
+
+		if (!VisibleByLOS(viewer, ent, cacheSeconds))
+		{
+			hiddenOwner[iEdict] = true;
+			g_pCurrentTransmitInfo->m_pTransmitEdict->Clear(iEdict);
+			if (g_pCurrentTransmitInfo->m_pTransmitAlways && g_pCurrentTransmitInfo->m_pTransmitAlways->Get(iEdict))
+				g_pCurrentTransmitInfo->m_pTransmitAlways->Clear(iEdict);
+			++hiddenCount;
+		}
+	}
+
+	if (hiddenCount == 0)
+		return 0;
+
+	CBaseEntity* activeWep[HOLYLIB_MAX_PLAYERS + 1];
+	memset(activeWep, 0, sizeof(activeWep));
+	for (int i = 1; i <= gpGlobals->maxClients && i <= HOLYLIB_MAX_PLAYERS; ++i)
+	{
+		if (!hiddenOwner[i])
+			continue;
+		CBasePlayer* ply = UTIL_PlayerByIndex(i);
+		if (!ply)
+			continue;
+		activeWep[i] = GetActiveWeaponEntity(ply);
+	}
+
+	for (int i = 0; i < g_nCurrentEdicts; ++i)
+	{
+		int iEdict = g_pCurrentEdictIndices[i];
+		if (iEdict < 1 || iEdict >= MAX_EDICTS)
+			continue;
+		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(iEdict))
+			continue;
+
+		edict_t* pEdict = &pBaseEdict[iEdict];
+		CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(pEdict);
+		if (!ent)
+			continue;
+		if (IsFilteredOwnedEntity(ent))
+			continue;
+
+		CBasePlayer* owner = ResolveOwningPlayer(ent);
+		if (!owner || !owner->edict())
+			continue;
+		int ownerIdx = owner->edict()->m_EdictIndex;
+		if (ownerIdx < 1 || ownerIdx > gpGlobals->maxClients || ownerIdx > HOLYLIB_MAX_PLAYERS)
+			continue;
+		if (!hiddenOwner[ownerIdx])
+			continue;
+
+		bool remove = false;
+		if (activeWep[ownerIdx] && ent == activeWep[ownerIdx])
+			remove = true;
+		else
+		{
+			const char* cls = ent->GetClassname();
+			if (cls && !strcmp(cls, "cw_gear"))
+				remove = true;
+		}
+
+		if (!remove)
+			continue;
+
+		g_pCurrentTransmitInfo->m_pTransmitEdict->Clear(iEdict);
+		if (g_pCurrentTransmitInfo->m_pTransmitAlways && g_pCurrentTransmitInfo->m_pTransmitAlways->Get(iEdict))
+			g_pCurrentTransmitInfo->m_pTransmitAlways->Clear(iEdict);
+	}
+
+	return 0;
+}
+
 LUA_FUNCTION_STATIC(pvs_VisibleByLOS)
 {
 	CBaseEntity* viewer = Util::Get_Entity(LUA, 1, true);
@@ -1485,6 +1593,7 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 		Util::AddFunc(pLua, pvs_TestPVS, "TestPVS");
 		Util::AddFunc(pLua, pvs_ForceFullUpdate, "ForceFullUpdate");
 		Util::AddFunc(pLua, pvs_GetEntitiesFromTransmit, "GetEntitiesFromTransmit");
+		Util::AddFunc(pLua, pvs_ApplyAntiWallhack, "ApplyAntiWallhack");
 		Util::AddFunc(pLua, pvs_GetPlayersFromTransmit, "GetPlayersFromTransmit");
 		Util::AddFunc(pLua, pvs_GetPlayersOwnedEntities, "GetPlayersOwnedEntities");
 		Util::AddFunc(pLua, pvs_GetOwnedEntitiesFromTransmit, "GetOwnedEntitiesFromTransmit");
