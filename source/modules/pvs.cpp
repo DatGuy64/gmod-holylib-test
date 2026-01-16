@@ -1200,108 +1200,70 @@ LUA_FUNCTION_STATIC(pvs_GetPlayersFromTransmit)
 LUA_FUNCTION_STATIC(pvs_GetPlayersWithOwnedEntitiesFromTransmit)
 {
 	if (!g_pCurrentTransmitInfo)
-		LUA->ThrowError("pvs.GetPlayersWithOwnedEntitiesFromTransmit must be called inside CheckTransmit");
+		LUA->ThrowError("Tried to use pvs.GetPlayersWithOwnedEntitiesFromTransmit while not in a CheckTransmit call!");
 
-	edict_t* base = Util::engineserver->PEntityOfEntIndex(0);
-
-	LUA->PreCreateTable(gpGlobals->maxClients, 0);
-	int playersIdx = LUA->Top();
-
-	LUA->CreateTable();
-	int ownedIdx = LUA->Top();
-
-	LUA->CreateTable();
-	int seenIdx = LUA->Top();
-
-	int playerCount = 0;
+	edict_t* pBaseEdict = Util::engineserver->PEntityOfEntIndex(0);
+	std::unordered_map<int, std::vector<CBaseEntity*>> byPlayer;
+	byPlayer.reserve(gpGlobals->maxClients);
 
 	for (int i = 0; i < g_nCurrentEdicts; ++i)
 	{
-		int edictIdx = g_pCurrentEdictIndices[i];
-
-		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(edictIdx))
+		int iEdict = g_pCurrentEdictIndices[i];
+		if (iEdict < 1 || iEdict > gpGlobals->maxClients)
 			continue;
-
-		CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(&base[edictIdx]);
-		if (!ent)
+		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(iEdict))
 			continue;
-
-		CBasePlayer* owner = nullptr;
-
-		if (ent->IsPlayer())
-		{
-			owner = static_cast<CBasePlayer*>(ent);
-		}
-		else
-		{
-			CBaseEntity* cur = ent;
-			for (int d = 0; d < 8 && cur; ++d)
-			{
-				CBaseEntity* o = cur->GetOwnerEntity();
-				if (o && o->IsPlayer())
-				{
-					owner = static_cast<CBasePlayer*>(o);
-					break;
-				}
-
-				CBaseEntity* p = cur->GetMoveParent();
-				if (!p)
-					break;
-
-				if (p->IsPlayer())
-				{
-					owner = static_cast<CBasePlayer*>(p);
-					break;
-				}
-				cur = p;
-			}
-		}
-
-		if (!owner || !owner->edict())
+		CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(&pBaseEdict[iEdict]);
+		if (!ent || !ent->IsPlayer())
 			continue;
-
-		int ownerEdictIdx = owner->edict()->m_EdictIndex;
-
-		LUA->PushNumber(ownerEdictIdx);
-		LUA->RawGet(seenIdx);
-
-		bool first = LUA->IsType(-1, GarrysMod::Lua::Type::Nil);
-		LUA->Pop(1);
-
-		if (first)
-		{
-			LUA->PushNumber(ownerEdictIdx);
-			LUA->PushBool(true);
-			LUA->RawSet(seenIdx);
-
-			Util::Push_Entity(LUA, owner);
-			Util::RawSetI(LUA, playersIdx, ++playerCount);
-
-			LUA->CreateTable();
-			Util::Push_Entity(LUA, owner);
-			LUA->Push(-2);
-			LUA->RawSet(ownedIdx);
-		}
-
-		Util::Push_Entity(LUA, owner);
-		LUA->RawGet(ownedIdx);
-
-		if (!LUA->IsType(-1, GarrysMod::Lua::Type::Table))
-		{
-			LUA->Pop(1);
-			continue;
-		}
-
-		int listIdx = LUA->Top();
-		int len = (int)LUA->ObjLen(listIdx);
-
-		Util::Push_Entity(LUA, ent);
-		Util::RawSetI(LUA, listIdx, len + 1);
-
-		LUA->Pop(1);
+		byPlayer[iEdict].push_back(ent);
 	}
 
-	LUA->Remove(seenIdx);
+	for (int i = 0; i < g_nCurrentEdicts; ++i)
+	{
+		int iEdict = g_pCurrentEdictIndices[i];
+		if (iEdict < 1 || iEdict >= MAX_EDICTS)
+			continue;
+		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(iEdict))
+			continue;
+		CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(&pBaseEdict[iEdict]);
+		if (!ent || ent->IsPlayer())
+			continue;
+		CBasePlayer* owner = ResolveOwningPlayer(ent);
+		if (!owner)
+			continue;
+		edict_t* oed = owner->edict();
+		if (!oed)
+			continue;
+		int oidx = oed->m_EdictIndex;
+		auto it = byPlayer.find(oidx);
+		if (it == byPlayer.end())
+		{
+			it = byPlayer.emplace(oidx, std::vector<CBaseEntity*>()).first;
+			it->second.push_back(owner);
+		}
+		it->second.push_back(ent);
+	}
+
+	LUA->PreCreateTable((int)byPlayer.size(), 0);
+	LUA->CreateTable();
+	int idx = 0;
+	for (auto& kv : byPlayer)
+	{
+		CBaseEntity* ply = kv.second.size() > 0 ? kv.second[0] : nullptr;
+		if (!ply)
+			continue;
+		Util::Push_Entity(LUA, ply);
+		Util::RawSetI(LUA, -3, ++idx);
+		Util::Push_Entity(LUA, ply);
+		LUA->PreCreateTable((int)kv.second.size(), 0);
+		for (int j = 0; j < (int)kv.second.size(); ++j)
+		{
+			Util::Push_Entity(LUA, kv.second[j]);
+			Util::RawSetI(LUA, -2, j + 1);
+		}
+		LUA->RawSet(-3);
+	}
 
 	return 2;
 }
