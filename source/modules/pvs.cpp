@@ -61,6 +61,13 @@ static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 
 static inline bool LOS_Clear(CBaseEntity* viewer, CBaseEntity* target, const Vector& pos)
 {
+	class CTraceFilterWorldOnly : public ITraceFilter
+	{
+	public:
+		bool ShouldHitEntity(IHandleEntity*, int) override { return false; }
+		TraceType_t GetTraceType() const override { return TRACE_WORLD_ONLY; }
+	};
+
 	trace_t tr;
 	Ray_t ray;
 	ray.Init(viewer->EyePosition(), pos);
