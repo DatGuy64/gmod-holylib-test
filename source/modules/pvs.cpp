@@ -1259,6 +1259,85 @@ LUA_FUNCTION_STATIC(pvs_GetPlayersOwnedEntities)
 	return 2;
 }
 
+static inline bool StartsWith(const char* s, const char* p)
+{
+	if (!s || !p)
+		return false;
+	for (; *p; ++p, ++s)
+		if (*s != *p)
+			return false;
+	return true;
+}
+
+static inline bool IsFilteredOwnedEntity(CBaseEntity* ent)
+{
+	if (!ent)
+		return true;
+	const char* cls = ent->GetClassname();
+	if (!cls)
+		return true;
+	if (StartsWith(cls, "predicted_viewmodel"))
+		return true;
+	if (StartsWith(cls, "manipulate_"))
+		return true;
+	if (!strcmp(cls, "gmod_hands"))
+		return true;
+	return false;
+}
+
+LUA_FUNCTION_STATIC(pvs_GetOwnedEntitiesFromTransmit)
+{
+	CBasePlayer* target = Util::Get_Player(LUA, 1, true);
+	if (!target)
+		LUA->ThrowError("pvs.GetOwnedEntitiesFromTransmit: invalid player");
+	if (!g_pCurrentTransmitInfo)
+		LUA->ThrowError("Tried to use pvs.GetOwnedEntitiesFromTransmit while not in a CheckTransmit call!");
+
+	LUA->CreateTable();
+	int out = 0;
+
+	CBaseEntity* activeWep = target->GetActiveWeapon();
+	if (activeWep && activeWep->edict())
+	{
+		int wepEdict = activeWep->edict()->m_EdictIndex;
+		if (wepEdict > 0 && wepEdict < MAX_EDICTS && g_pCurrentTransmitInfo->m_pTransmitEdict->Get(wepEdict))
+		{
+			Util::Push_Entity(LUA, activeWep);
+			Util::RawSetI(LUA, -2, ++out);
+		}
+	}
+
+	edict_t* pBaseEdict = Util::engineserver->PEntityOfEntIndex(0);
+	for (int i = 0; i < g_nCurrentEdicts; ++i)
+	{
+		int iEdict = g_pCurrentEdictIndices[i];
+		if (iEdict < 1 || iEdict >= MAX_EDICTS)
+			continue;
+		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(iEdict))
+			continue;
+
+		edict_t* pEdict = &pBaseEdict[iEdict];
+		CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(pEdict);
+		if (!ent || ent == target)
+			continue;
+		if (IsFilteredOwnedEntity(ent))
+			continue;
+
+		CBasePlayer* owner = ResolveOwningPlayer(ent);
+		if (owner != target)
+			continue;
+
+		const char* cls = ent->GetClassname();
+		if (cls && !strcmp(cls, "cw_gear"))
+		{
+			Util::Push_Entity(LUA, ent);
+			Util::RawSetI(LUA, -2, ++out);
+		}
+	}
+
+	return 1;
+}
+
 LUA_FUNCTION_STATIC(pvs_VisibleByLOS)
 {
 	CBaseEntity* viewer = Util::Get_Entity(LUA, 1, true);
@@ -1337,6 +1416,7 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 		Util::AddFunc(pLua, pvs_GetEntitiesFromTransmit, "GetEntitiesFromTransmit");
 		Util::AddFunc(pLua, pvs_GetPlayersFromTransmit, "GetPlayersFromTransmit");
 		Util::AddFunc(pLua, pvs_GetPlayersOwnedEntities, "GetPlayersOwnedEntities");
+		Util::AddFunc(pLua, pvs_GetOwnedEntitiesFromTransmit, "GetOwnedEntitiesFromTransmit");
 		Util::AddFunc(pLua, pvs_VisibleByLOS, "VisibleByLOS");
 		Util::AddFunc(pLua, pvs_ForceWeaponTransmit, "ForceWeaponTransmit");
 
