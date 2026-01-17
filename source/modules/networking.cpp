@@ -1904,7 +1904,7 @@ static inline void HolyPVS_AWHSeenSet(int viewerSlot, int targetSlot)
     g_HolyPVS_AWHSeen[viewerSlot][word] |= mask;
 }
 
-static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo, const unsigned short* pEdictIndices, int nEdicts)
+static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo, int clientArea)
 {
     if (!g_HolyPVS_AWHEnabled[viewerSlot])
         return;
@@ -1912,91 +1912,60 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
     VPROF_BUDGET("HolyLib - AntiWallhack", VPROF_BUDGETGROUP_OTHER_NETWORKING);
 
     const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
-    const float now = gpGlobals ? gpGlobals->curtime : 0.0f;
+    const float now = gpGlobals->curtime;
+    
+    const int maxClients = gpGlobals->maxClients;
 
-    const int maxClients = (gpGlobals->maxClients < HOLYLIB_MAX_PLAYERS) ? gpGlobals->maxClients : HOLYLIB_MAX_PLAYERS;
+    CBitVec<MAX_EDICTS>* pTransmitBits = pInfo->m_pTransmitEdict;
+    CBitVec<MAX_EDICTS>* pAlwaysBits = pInfo->m_pTransmitAlways;
 
-    unsigned char hidePlayer[HOLYLIB_MAX_PLAYERS + 1];
-    Plat_FastMemset(hidePlayer, 0, sizeof(unsigned char) * (maxClients + 1));
-
-    edict_t* pBaseEdict = Util::engineserver->PEntityOfEntIndex(0);
-
-    for (int i=1; i<=maxClients; ++i)
+    for (int i = 1; i <= maxClients; ++i)
     {
         if (i == viewerSlot) continue;
-        if (!pInfo->m_pTransmitEdict->Get(i)) continue;
+
+        if (!pTransmitBits->Get(i)) continue;
+
         if (g_HolyPVS_AWHTalkUntil[i] > now)
         {
             HolyPVS_AWHSeenSet(viewerSlot, i);
             continue;
         }
+
         if (!HolyPVS_AWHSeenTest(viewerSlot, i))
         {
             HolyPVS_AWHSeenSet(viewerSlot, i);
             continue;
         }
-        edict_t* ed = &pBaseEdict[i];
-        if (!ed || ed->IsFree()) continue;
-        CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(ed);
+
+        CBaseEntity* targetEnt = g_pEntityCache[i];
         if (!targetEnt) continue;
+
+        CCServerNetworkProperty* pNetProp = static_cast<CCServerNetworkProperty*>(targetEnt->NetworkProp());
+        if (pNetProp && !CheckAreasConnected(clientArea, pNetProp->AreaNum()))
+        {
+             goto CLEAR_VISIBILITY;
+        }
+
         if (!HolyPVS_VisibleByLOS(viewer, targetEnt, cacheSeconds))
         {
-            hidePlayer[i] = 1;
-            pInfo->m_pTransmitEdict->Clear(i);
-            if (pInfo->m_pTransmitAlways)
-                pInfo->m_pTransmitAlways->Clear(i);
-
-//            if (CBaseEntity* pHands = GetGMODPlayerHands(targetEnt))
-//            {
-//                if (edict_t* hEd = pHands->edict())
-//                {
-//                    const int idx = hEd->m_EdictIndex;
-//                    if (pInfo->m_pTransmitEdict->Get(idx))
-//                    {
-//                        pInfo->m_pTransmitEdict->Clear(idx);
-//                        if (pInfo->m_pTransmitAlways) pInfo->m_pTransmitAlways->Clear(idx);
-//                    }
-//                }
-//            }
-
-//            if (CBaseEntity* pWep = GetActiveWeapon(targetEnt))
-//            {
-//                if (edict_t* wEd = pWep->edict())
-//                {
-//                    const int idx = wEd->m_EdictIndex;
-//                    if (pInfo->m_pTransmitEdict->Get(idx))
-//                    {
-//                        pInfo->m_pTransmitEdict->Clear(idx);
-//                        if (pInfo->m_pTransmitAlways) pInfo->m_pTransmitAlways->Clear(idx);
-//                    }
-//                }
- //           }
-
-//            for (int vm=0; vm<MAX_VIEWMODELS; ++vm)
-//            {
-//                if (CBaseEntity* pVM = (CBaseEntity*)GetViewModel(targetEnt, vm))
-//                {
-//                    if (edict_t* vmEd = pVM->edict())
-//                    {
-//                        const int idx = vmEd->m_EdictIndex;
-//                        if (pInfo->m_pTransmitEdict->Get(idx))
-//                        {
-//                            pInfo->m_pTransmitEdict->Clear(idx);
-//                            if (pInfo->m_pTransmitAlways) pInfo->m_pTransmitAlways->Clear(idx);
-//                        }
-//                    }
-//                }
-//            }
+        CLEAR_VISIBILITY:
+            pTransmitBits->Clear(i);
+            if (pAlwaysBits) pAlwaysBits->Clear(i);
 
             for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
             {
-                edict_t* chEd = ch->edict();
+                edict_t* chEd = ch->edict(); 
                 if (!chEd) continue;
+                
                 const int idx = chEd->m_EdictIndex;
-                if (idx <= maxClients) continue;
-                if (!pInfo->m_pTransmitEdict->Get(idx)) continue;
-                pInfo->m_pTransmitEdict->Clear(idx);
-                if (pInfo->m_pTransmitAlways) pInfo->m_pTransmitAlways->Clear(idx);
+
+                if (idx <= maxClients) continue; 
+
+                if (pTransmitBits->Get(idx))
+                {
+                    pTransmitBits->Clear(idx);
+                    if (pAlwaysBits) pAlwaysBits->Clear(idx);
+                }
             }
         }
     }
@@ -2433,7 +2402,7 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 	pInfo->m_pTransmitEdict->Or(g_pGlobalTransmitTickCache.g_bWasSeenByPlayer, &g_pGlobalTransmitTickCache.g_bWasSeenByPlayer);
 //	Msg("A:%i, N:%i, F: %i, P: %i\n", always, dontSend, fullCheck, PVS );
 
-	ApplyAntiWallhackFastTransmit(pRecipientPlayer, clientIndex+1, pInfo, pEdictIndices, nEdicts);
+	ApplyAntiWallhackFastTransmit(pRecipientPlayer, clientIndex+1, pInfo, clientArea);
 		return true;
 }
 
