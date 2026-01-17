@@ -1946,47 +1946,47 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
             if (pInfo->m_pTransmitAlways)
                 pInfo->m_pTransmitAlways->Clear(i);
 
-            if (CBaseEntity* pHands = GetGMODPlayerHands(targetEnt))
-            {
-                if (edict_t* hEd = pHands->edict())
-                {
-                    const int idx = hEd->m_EdictIndex;
-                    if (pInfo->m_pTransmitEdict->Get(idx))
-                    {
-                        pInfo->m_pTransmitEdict->Clear(idx);
-                        if (pInfo->m_pTransmitAlways) pInfo->m_pTransmitAlways->Clear(idx);
-                    }
-                }
-            }
+//            if (CBaseEntity* pHands = GetGMODPlayerHands(targetEnt))
+//            {
+//                if (edict_t* hEd = pHands->edict())
+//                {
+//                    const int idx = hEd->m_EdictIndex;
+//                    if (pInfo->m_pTransmitEdict->Get(idx))
+//                    {
+//                        pInfo->m_pTransmitEdict->Clear(idx);
+//                        if (pInfo->m_pTransmitAlways) pInfo->m_pTransmitAlways->Clear(idx);
+//                    }
+//                }
+//            }
 
-            if (CBaseEntity* pWep = GetActiveWeapon(targetEnt))
-            {
-                if (edict_t* wEd = pWep->edict())
-                {
-                    const int idx = wEd->m_EdictIndex;
-                    if (pInfo->m_pTransmitEdict->Get(idx))
-                    {
-                        pInfo->m_pTransmitEdict->Clear(idx);
-                        if (pInfo->m_pTransmitAlways) pInfo->m_pTransmitAlways->Clear(idx);
-                    }
-                }
-            }
+//            if (CBaseEntity* pWep = GetActiveWeapon(targetEnt))
+//            {
+//                if (edict_t* wEd = pWep->edict())
+//                {
+//                    const int idx = wEd->m_EdictIndex;
+//                    if (pInfo->m_pTransmitEdict->Get(idx))
+//                    {
+//                        pInfo->m_pTransmitEdict->Clear(idx);
+//                        if (pInfo->m_pTransmitAlways) pInfo->m_pTransmitAlways->Clear(idx);
+//                    }
+//                }
+ //           }
 
-            for (int vm=0; vm<MAX_VIEWMODELS; ++vm)
-            {
-                if (CBaseEntity* pVM = (CBaseEntity*)GetViewModel(targetEnt, vm))
-                {
-                    if (edict_t* vmEd = pVM->edict())
-                    {
-                        const int idx = vmEd->m_EdictIndex;
-                        if (pInfo->m_pTransmitEdict->Get(idx))
-                        {
-                            pInfo->m_pTransmitEdict->Clear(idx);
-                            if (pInfo->m_pTransmitAlways) pInfo->m_pTransmitAlways->Clear(idx);
-                        }
-                    }
-                }
-            }
+//            for (int vm=0; vm<MAX_VIEWMODELS; ++vm)
+//            {
+//                if (CBaseEntity* pVM = (CBaseEntity*)GetViewModel(targetEnt, vm))
+//                {
+//                    if (edict_t* vmEd = pVM->edict())
+//                    {
+//                        const int idx = vmEd->m_EdictIndex;
+//                        if (pInfo->m_pTransmitEdict->Get(idx))
+//                        {
+//                            pInfo->m_pTransmitEdict->Clear(idx);
+//                            if (pInfo->m_pTransmitAlways) pInfo->m_pTransmitAlways->Clear(idx);
+//                        }
+//                    }
+//                }
+//            }
 
             for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
             {
