@@ -1405,7 +1405,7 @@ static void VoiceEffect(VoiceEffectJob*& pJob)
 }
 
 static bool g_bIsPlayerMuted[MAX_PLAYERS] = {0};
-extern float g_HolyPVS_AWHTalkUntil[HOLYLIB_MAX_PLAYERS + 1];
+extern float g_HolyPVS_AWHTalkUntil[VOICE_MAX_PLAYERS + 1];
 static bool g_bIsPlayerTalking[MAX_PLAYERS] = {0};
 static double g_fLastPlayerTalked[MAX_PLAYERS] = {0};
 static ConVar voicechat_stopdelay("holylib_voicechat_stopdelay", "1", FCVAR_ARCHIVE, "How many seconds before a player is marked as stopped talking");
@@ -1489,7 +1489,7 @@ static void hook_SV_BroadcastVoiceData(IClient* pClient, int nBytes, char* data,
 	CheckTalkingState(pClient->GetPlayerSlot(), true);
 
 	int __awh_slot = pClient->GetPlayerSlot() + 1;
-	if (__awh_slot >= 1 && __awh_slot <= HOLYLIB_MAX_PLAYERS)
+	if (__awh_slot >= 1 && __awh_slot <= VOICE_MAX_PLAYERS)
 		g_HolyPVS_AWHTalkUntil[__awh_slot] = gpGlobals->curtime + 0.6f;
 	if (!voicechat_hooks.GetBool())
 	{
