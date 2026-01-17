@@ -1904,6 +1904,8 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
     edict_t* pBaseEdict = Util::engineserver->PEntityOfEntIndex(0);
     const int maxClients = (gpGlobals->maxClients < HOLYLIB_MAX_PLAYERS) ? gpGlobals->maxClients : HOLYLIB_MAX_PLAYERS;
 
+    bool anyHidden = false;
+
     for (int i = 1; i <= maxClients; ++i)
     {
         if (i == viewerSlot)
@@ -1923,11 +1925,15 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
         if (!HolyPVS_VisibleByLOS(viewer, targetEnt, cacheSeconds))
         {
             s_hideStamp[i] = s_stamp;
+            anyHidden = true;
             pInfo->m_pTransmitEdict->Clear(i);
             if (pInfo->m_pTransmitAlways)
                 pInfo->m_pTransmitAlways->Clear(i);
         }
     }
+
+    if (!anyHidden)
+        return;
 
     for (int k = 0; k < nEdicts; ++k)
     {
