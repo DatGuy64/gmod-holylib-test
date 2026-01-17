@@ -1883,8 +1883,6 @@ static ConVar networking_fastpath_usecluster("holylib_networking_fastpath_useclu
 
 static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo, const unsigned short* pEdictIndices, int nEdicts)
 {
-    if (!viewer || viewerSlot < 1 || viewerSlot > HOLYLIB_MAX_PLAYERS)
-        return;
     if (!g_HolyPVS_AWHEnabled[viewerSlot])
         return;
 
