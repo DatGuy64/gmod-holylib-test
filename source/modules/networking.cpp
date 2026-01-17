@@ -1892,53 +1892,32 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 
     const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
 
-    static uint32_t s_hideStamp[HOLYLIB_MAX_PLAYERS + 1] = { 0 };
-    static uint32_t s_stamp = 0;
-    ++s_stamp;
-    if (s_stamp == 0)
-    {
-        memset(s_hideStamp, 0, sizeof(s_hideStamp));
-        s_stamp = 1;
-    }
+    unsigned char hidePlayer[HOLYLIB_MAX_PLAYERS + 1];
+    for (int i=1;i<=HOLYLIB_MAX_PLAYERS;++i) hidePlayer[i]=0;
 
     edict_t* pBaseEdict = Util::engineserver->PEntityOfEntIndex(0);
-    const int maxClients = (gpGlobals->maxClients < HOLYLIB_MAX_PLAYERS) ? gpGlobals->maxClients : HOLYLIB_MAX_PLAYERS;
 
-    bool anyHidden = false;
-
-    for (int i = 1; i <= maxClients; ++i)
+    for (int i=1; i<=gpGlobals->maxClients && i<=HOLYLIB_MAX_PLAYERS; ++i)
     {
-        if (i == viewerSlot)
-            continue;
-
-        if (!pInfo->m_pTransmitEdict->Get(i))
-            continue;
-
+        if (i == viewerSlot) continue;
         edict_t* ed = &pBaseEdict[i];
-        if (!ed || ed->IsFree())
-            continue;
-
+        if (!ed || ed->IsFree()) continue;
+        if (!pInfo->m_pTransmitEdict->Get(i)) continue;
         CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(ed);
-        if (!targetEnt)
-            continue;
-
+        if (!targetEnt) continue;
         if (!HolyPVS_VisibleByLOS(viewer, targetEnt, cacheSeconds))
         {
-            s_hideStamp[i] = s_stamp;
-            anyHidden = true;
+            hidePlayer[i] = 1;
             pInfo->m_pTransmitEdict->Clear(i);
             if (pInfo->m_pTransmitAlways)
                 pInfo->m_pTransmitAlways->Clear(i);
         }
     }
 
-    if (!anyHidden)
-        return;
-
-    for (int k = 0; k < nEdicts; ++k)
+    for (int k=0; k<nEdicts; ++k)
     {
-        const int iEdict = pEdictIndices[k];
-        if (iEdict <= maxClients || iEdict >= MAX_EDICTS)
+        int iEdict = pEdictIndices[k];
+        if (iEdict <= gpGlobals->maxClients || iEdict >= MAX_EDICTS)
             continue;
         if (!pInfo->m_pTransmitEdict->Get(iEdict))
             continue;
@@ -1955,15 +1934,11 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
         if (!owner)
             continue;
 
-        edict_t* ownerEd = owner->edict();
-        if (!ownerEd)
+        int ownerIdx = owner->edict() ? owner->edict()->m_EdictIndex : -1;
+        if (ownerIdx < 1 || ownerIdx > HOLYLIB_MAX_PLAYERS)
             continue;
 
-        const int ownerIdx = ownerEd->m_EdictIndex;
-        if (ownerIdx < 1 || ownerIdx > maxClients)
-            continue;
-
-        if (s_hideStamp[ownerIdx] != s_stamp)
+        if (!hidePlayer[ownerIdx])
             continue;
 
         pInfo->m_pTransmitEdict->Clear(iEdict);
@@ -1971,7 +1946,6 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
             pInfo->m_pTransmitAlways->Clear(iEdict);
     }
 }
-
 
 bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)
 {
