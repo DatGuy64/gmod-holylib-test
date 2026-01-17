@@ -32,7 +32,7 @@ extern bool g_HolyPVS_AWHEnabled[HOLYLIB_MAX_PLAYERS + 1];
 extern float g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1];
 extern float g_HolyPVS_AWHTalkUntil[HOLYLIB_MAX_PLAYERS + 1];
 extern bool HolyPVS_AWHSeenTest(int viewerSlot, int targetSlot);
-extern uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2];
+extern void HolyPVS_AWHSeenSet(int viewerSlot, int targetSlot);
 bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds);
 
 
@@ -1883,25 +1883,6 @@ static ConVar networking_verifyshit("holylib_networking_verifyshit", "1", 0, "Ex
 static ConVar networking_fastpath("holylib_networking_fastpath", "0", 0, "Experimental - If two players are in the same area, then it will reuse the transmit state of the first calculated player saving a lot of time");
 static ConVar networking_fastpath_usecluster("holylib_networking_fastpath_usecluster", "1", 0, "Experimental - When using the fastpatth, it will compate against clients in the same cluster instead of area");
 
-static inline bool HolyPVS_AWHSeenTest(int viewerSlot, int targetSlot)
-{
-    if (targetSlot < 1 || targetSlot > HOLYLIB_MAX_PLAYERS)
-        return true;
-    const int bit = targetSlot - 1;
-    const int word = (bit >> 6);
-    const uint64_t mask = 1ULL << (bit & 63);
-    return (g_HolyPVS_AWHSeen[viewerSlot][word] & mask) != 0ULL;
-}
-
-static inline void HolyPVS_AWHSeenSet(int viewerSlot, int targetSlot)
-{
-    if (targetSlot < 1 || targetSlot > HOLYLIB_MAX_PLAYERS)
-        return;
-    const int bit = targetSlot - 1;
-    const int word = (bit >> 6);
-    const uint64_t mask = 1ULL << (bit & 63);
-    g_HolyPVS_AWHSeen[viewerSlot][word] |= mask;
-}
 
 static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo, const unsigned short* pEdictIndices, int nEdicts)
 {
@@ -2021,8 +2002,15 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 	const bool bFirstTransmit = g_pGlobalTransmitTickCache.IsNewTick(nCurrentTick);
 	if (bFirstTransmit)
 	{
-		if (bFastPath)
-			Plat_FastMemset(g_pPlayerTransmitTickCache, 0, sizeof(g_pPlayerTransmitTickCache));
+			if (bFastPath)
+			{
+				const int maxPlayers = (gpGlobals->maxClients < MAX_PLAYERS) ? gpGlobals->maxClients : MAX_PLAYERS;
+				for (int i = 0; i < maxPlayers; ++i)
+				{
+					g_pPlayerTransmitTickCache[i].nAreaNum = 0;
+					g_pPlayerTransmitTickCache[i].pClientBitVec.ClearAll();
+				}
+			}
 
 		for (int iPlayerIndex = 1; iPlayerIndex <= gpGlobals->maxClients; ++iPlayerIndex)
 		{
