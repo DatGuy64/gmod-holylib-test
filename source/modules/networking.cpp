@@ -1914,13 +1914,16 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
     const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
     const float now = gpGlobals ? gpGlobals->curtime : 0.0f;
 
+    const int maxClients = (gpGlobals->maxClients < HOLYLIB_MAX_PLAYERS) ? gpGlobals->maxClients : HOLYLIB_MAX_PLAYERS;
+
     unsigned char hidePlayer[HOLYLIB_MAX_PLAYERS + 1];
-    for (int i=1;i<=HOLYLIB_MAX_PLAYERS;++i) hidePlayer[i]=0;
+    Plat_FastMemset(hidePlayer, 0, sizeof(unsigned char) * (maxClients + 1));
 
     edict_t* pBaseEdict = Util::engineserver->PEntityOfEntIndex(0);
 
-    for (int i=1; i<=gpGlobals->maxClients && i<=HOLYLIB_MAX_PLAYERS; ++i)
-    {        if (i == viewerSlot) continue;
+    for (int i=1; i<=maxClients; ++i)
+    {
+        if (i == viewerSlot) continue;
         if (!pInfo->m_pTransmitEdict->Get(i)) continue;
         if (g_HolyPVS_AWHTalkUntil[i] > now)
         {
@@ -1942,42 +1945,61 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
             pInfo->m_pTransmitEdict->Clear(i);
             if (pInfo->m_pTransmitAlways)
                 pInfo->m_pTransmitAlways->Clear(i);
+
+            if (CBaseEntity* pHands = GetGMODPlayerHands(targetEnt))
+            {
+                if (edict_t* hEd = pHands->edict())
+                {
+                    const int idx = hEd->m_EdictIndex;
+                    if (pInfo->m_pTransmitEdict->Get(idx))
+                    {
+                        pInfo->m_pTransmitEdict->Clear(idx);
+                        if (pInfo->m_pTransmitAlways) pInfo->m_pTransmitAlways->Clear(idx);
+                    }
+                }
+            }
+
+            if (CBaseEntity* pWep = GetActiveWeapon(targetEnt))
+            {
+                if (edict_t* wEd = pWep->edict())
+                {
+                    const int idx = wEd->m_EdictIndex;
+                    if (pInfo->m_pTransmitEdict->Get(idx))
+                    {
+                        pInfo->m_pTransmitEdict->Clear(idx);
+                        if (pInfo->m_pTransmitAlways) pInfo->m_pTransmitAlways->Clear(idx);
+                    }
+                }
+            }
+
+            for (int vm=0; vm<MAX_VIEWMODELS; ++vm)
+            {
+                if (CBaseEntity* pVM = (CBaseEntity*)GetViewModel(targetEnt, vm))
+                {
+                    if (edict_t* vmEd = pVM->edict())
+                    {
+                        const int idx = vmEd->m_EdictIndex;
+                        if (pInfo->m_pTransmitEdict->Get(idx))
+                        {
+                            pInfo->m_pTransmitEdict->Clear(idx);
+                            if (pInfo->m_pTransmitAlways) pInfo->m_pTransmitAlways->Clear(idx);
+                        }
+                    }
+                }
+            }
+
+            for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
+            {
+                edict_t* chEd = ch->edict();
+                if (!chEd) continue;
+                const int idx = chEd->m_EdictIndex;
+                if (idx <= maxClients) continue;
+                if (!pInfo->m_pTransmitEdict->Get(idx)) continue;
+                pInfo->m_pTransmitEdict->Clear(idx);
+                if (pInfo->m_pTransmitAlways) pInfo->m_pTransmitAlways->Clear(idx);
+            }
         }
     }
-
-/*
-    for (int k=0; k<nEdicts; ++k)
-    {
-        int iEdict = pEdictIndices[k];
-        if (iEdict <= gpGlobals->maxClients || iEdict >= MAX_EDICTS)
-            continue;
-        if (!pInfo->m_pTransmitEdict->Get(iEdict))
-            continue;
-
-        edict_t* ed = &pBaseEdict[iEdict];
-        if (!ed || ed->IsFree())
-            continue;
-
-        CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(ed);
-        if (!ent)
-            continue;
-
-        CBaseEntity* owner = ent->GetOwnerEntity();
-        if (!owner)
-            continue;
-
-        int ownerIdx = owner->edict() ? owner->edict()->m_EdictIndex : -1;
-        if (ownerIdx < 1 || ownerIdx > HOLYLIB_MAX_PLAYERS)
-            continue;
-
-        if (!hidePlayer[ownerIdx])
-            continue;
-
-        pInfo->m_pTransmitEdict->Clear(iEdict);
-        if (pInfo->m_pTransmitAlways)
-            pInfo->m_pTransmitAlways->Clear(iEdict);
-    }
-*/
 }
 
 bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)
