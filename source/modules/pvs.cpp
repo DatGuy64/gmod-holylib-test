@@ -42,7 +42,8 @@ static int g_PVSModuleID = 0;
 static int currentPVSSize = -1;
 static unsigned char* currentPVS = nullptr;
 static int mapPVSSize = -1;
-static bool g_bActiveCheckTransmitViewer[HOLYLIB_MAX_PLAYERS + 1] = { false };
+bool g_HolyPVS_AWHEnabled[HOLYLIB_MAX_PLAYERS + 1] = { false };
+float g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1] = { 0.0f };
 static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 {
 	if (!ent)
@@ -62,7 +63,7 @@ static CTraceFilterWorldOnly g_HolyLibTraceFilterWorldOnly;
 
 static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target);
 
-static inline bool VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds)
+bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds)
 {
 	if (cacheSeconds <= 0.0f)
 		return VisibleByLOS_NoCache(viewer, target);
@@ -210,7 +211,7 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 
 	CBaseEntity* pViewerEnt = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
 	int viewerIdx = GetClientIndexFromEntity(pViewerEnt);
-	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > HOLYLIB_MAX_PLAYERS || !g_bActiveCheckTransmitViewer[viewerIdx])
+	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > HOLYLIB_MAX_PLAYERS || !g_HolyPVS_AWHEnabled[viewerIdx])
 	{
 #if MODULE_EXISTS_NETWORKING
 		if (g_pReplaceCServerGameEnts_CheckTransmit)
@@ -351,7 +352,7 @@ void PreCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned 
 
 	CBaseEntity* pViewerEnt = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
 	int viewerIdx = GetClientIndexFromEntity(pViewerEnt);
-	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > HOLYLIB_MAX_PLAYERS || !g_bActiveCheckTransmitViewer[viewerIdx])
+	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > HOLYLIB_MAX_PLAYERS || !g_HolyPVS_AWHEnabled[viewerIdx])
 	{
 		g_pCurrentTransmitInfo = nullptr;
 		g_pCurrentEdictIndices = nullptr;
@@ -428,7 +429,7 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 
 	CBaseEntity* pViewerEnt = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
 	int viewerIdx = GetClientIndexFromEntity(pViewerEnt);
-	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > HOLYLIB_MAX_PLAYERS || !g_bActiveCheckTransmitViewer[viewerIdx])
+	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > HOLYLIB_MAX_PLAYERS || !g_HolyPVS_AWHEnabled[viewerIdx])
 	{
 		g_pCurrentTransmitInfo = nullptr;
 		g_pCurrentEdictIndices = nullptr;
@@ -470,21 +471,61 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 
 LUA_FUNCTION_STATIC(pvs_ActiveCheckTransmit)
 {
-	CBasePlayer* ply = Util::Get_Player(LUA, 1, true);
-	bool bEnable = LUA->GetBool(2);
+    CBasePlayer* ply = Util::Get_Player(LUA, 1, true);
+    bool bEnable = LUA->GetBool(2);
+    float cacheSeconds = 0.0f;
+    if (LUA->Top() >= 3 && LUA->IsType(3, GarrysMod::Lua::Type::Number))
+        cacheSeconds = (float)LUA->GetNumber(3);
 
-	int idx = -1;
-	if (ply && ply->edict())
-		idx = ply->edict()->m_EdictIndex;
+    int idx = -1;
+    if (ply && ply->edict())
+        idx = ply->edict()->m_EdictIndex;
 
-	if (idx < 1 || idx > gpGlobals->maxClients || idx > HOLYLIB_MAX_PLAYERS)
-		LUA->ThrowError("pvs.ActiveCheckTransmit: invalid player index");
+    if (idx < 1 || idx > HOLYLIB_MAX_PLAYERS)
+        LUA->ThrowError("pvs.ActiveCheckTransmit: invalid player index");
 
-	g_bActiveCheckTransmitViewer[idx] = bEnable;
+    g_HolyPVS_AWHEnabled[idx] = bEnable;
+    g_HolyPVS_AWHCacheSeconds[idx] = cacheSeconds;
+    if (!bEnable)
+    {
+        for (int i=1;i<=HOLYLIB_MAX_PLAYERS;++i)
+        {
+            g_LOSNext[idx][i] = 0.0f;
+            g_LOSVis[idx][i] = 0;
+        }
+    }
 
-	return 0;
+    return 0;
 }
 
+
+
+LUA_FUNCTION_STATIC(pvs_SetAntiWallhack)
+{
+    CBasePlayer* ply = Util::Get_Player(LUA, 1, true);
+    bool bEnable = LUA->GetBool(2);
+    float cacheSeconds = (float)LUA->CheckNumber(3);
+
+    int idx = -1;
+    if (ply && ply->edict())
+        idx = ply->edict()->m_EdictIndex;
+
+    if (idx < 1 || idx > HOLYLIB_MAX_PLAYERS)
+        LUA->ThrowError("pvs.SetAntiWallhack: invalid player index");
+
+    g_HolyPVS_AWHEnabled[idx] = bEnable;
+    g_HolyPVS_AWHCacheSeconds[idx] = cacheSeconds;
+    if (!bEnable)
+    {
+        for (int i=1;i<=HOLYLIB_MAX_PLAYERS;++i)
+        {
+            g_LOSNext[idx][i] = 0.0f;
+            g_LOSVis[idx][i] = 0;
+        }
+    }
+
+    return 0;
+}
 LUA_FUNCTION_STATIC(pvs_Begin)
 {
 	Vector* orig;
@@ -1378,7 +1419,7 @@ LUA_FUNCTION_STATIC(pvs_ApplyAntiWallhack)
 		return 0;
 
 	int viewerIdx = GetClientIndexFromEntity(viewer);
-	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > HOLYLIB_MAX_PLAYERS || !g_bActiveCheckTransmitViewer[viewerIdx])
+	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > HOLYLIB_MAX_PLAYERS || !g_HolyPVS_AWHEnabled[viewerIdx])
 		return 0;
 
 	Vector viewerEye = viewer->EyePosition();
@@ -1410,7 +1451,7 @@ LUA_FUNCTION_STATIC(pvs_ApplyAntiWallhack)
 			float d2 = d * d;
 			forceHide = (d2 < (0.25f * lenSqr));
 		}
-		if (forceHide || !VisibleByLOS(viewer, ent, cacheSeconds))
+		if (forceHide || !HolyPVS_VisibleByLOS(viewer, ent, cacheSeconds))
 		{
 			hiddenOwner[iEdict] = true;
 			g_pCurrentTransmitInfo->m_pTransmitEdict->Clear(iEdict);
@@ -1488,7 +1529,7 @@ LUA_FUNCTION_STATIC(pvs_VisibleByLOS)
 	float cacheSeconds = 0.0f;
 	if (LUA->IsType(3, GarrysMod::Lua::Type::Number))
 		cacheSeconds = (float)LUA->GetNumber(3);
-	LUA->PushBool(VisibleByLOS(viewer, target, cacheSeconds));
+	LUA->PushBool(HolyPVS_VisibleByLOS(viewer, target, cacheSeconds));
 	return 1;
 }
 
@@ -1543,6 +1584,7 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 
 	Util::StartTable(pLua);
 		Util::AddFunc(pLua, pvs_ActiveCheckTransmit, "ActiveCheckTransmit");
+		Util::AddFunc(pLua, pvs_SetAntiWallhack, "SetAntiWallhack");
 		Util::AddFunc(pLua, pvs_Begin, "Begin");
 		Util::AddFunc(pLua, pvs_Test, "Test");
 		Util::AddFunc(pLua, pvs_End, "End");
