@@ -1904,7 +1904,7 @@ static inline void HolyPVS_AWHSeenSet(int viewerSlot, int targetSlot)
     g_HolyPVS_AWHSeen[viewerSlot][word] |= mask;
 }
 
-static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo, int clientArea)
+static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo)
 {
     if (!g_HolyPVS_AWHEnabled[viewerSlot])
         return;
@@ -1913,7 +1913,6 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 
     const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
     const float now = gpGlobals->curtime;
-    
     const int maxClients = gpGlobals->maxClients;
 
     CBitVec<MAX_EDICTS>* pTransmitBits = pInfo->m_pTransmitEdict;
@@ -1938,18 +1937,13 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
         }
 
         CBaseEntity* targetEnt = g_pEntityCache[i];
-        if (!targetEnt) continue;
 
-        CCServerNetworkProperty* pNetProp = static_cast<CCServerNetworkProperty*>(targetEnt->NetworkProp());
-        if (pNetProp && !CheckAreasConnected(clientArea, pNetProp->AreaNum()))
-        {
-             goto CLEAR_VISIBILITY;
-        }
+        if (!targetEnt) continue; 
 
         if (!HolyPVS_VisibleByLOS(viewer, targetEnt, cacheSeconds))
         {
-        CLEAR_VISIBILITY:
             pTransmitBits->Clear(i);
+
             if (pAlwaysBits) pAlwaysBits->Clear(i);
 
             for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
@@ -1958,7 +1952,7 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
                 if (!chEd) continue;
                 
                 const int idx = chEd->m_EdictIndex;
-
+                
                 if (idx <= maxClients) continue; 
 
                 if (pTransmitBits->Get(idx))
@@ -1969,7 +1963,7 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
             }
         }
     }
-}
+
 
 bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)
 {
@@ -2402,7 +2396,7 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 	pInfo->m_pTransmitEdict->Or(g_pGlobalTransmitTickCache.g_bWasSeenByPlayer, &g_pGlobalTransmitTickCache.g_bWasSeenByPlayer);
 //	Msg("A:%i, N:%i, F: %i, P: %i\n", always, dontSend, fullCheck, PVS );
 
-	ApplyAntiWallhackFastTransmit(pRecipientPlayer, clientIndex+1, pInfo, clientArea);
+	ApplyAntiWallhackFastTransmit(pRecipientPlayer, clientIndex+1, pInfo);
 		return true;
 }
 
