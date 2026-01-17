@@ -26,6 +26,13 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
+#define HOLYLIB_MAX_PLAYERS 128
+
+extern bool g_HolyPVS_AWHEnabled[HOLYLIB_MAX_PLAYERS + 1];
+extern float g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1];
+bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds);
+
+
 class CNetworkingModule : public IModule
 {
 public:
@@ -1872,6 +1879,74 @@ static Detouring::Hook detour_CServerGameEnts_CheckTransmit;
 static ConVar networking_verifyshit("holylib_networking_verifyshit", "1", 0, "Experimental");
 static ConVar networking_fastpath("holylib_networking_fastpath", "0", 0, "Experimental - If two players are in the same area, then it will reuse the transmit state of the first calculated player saving a lot of time");
 static ConVar networking_fastpath_usecluster("holylib_networking_fastpath_usecluster", "1", 0, "Experimental - When using the fastpatth, it will compate against clients in the same cluster instead of area");
+
+
+static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo, const unsigned short* pEdictIndices, int nEdicts)
+{
+    if (!viewer || viewerSlot < 1 || viewerSlot > HOLYLIB_MAX_PLAYERS)
+        return;
+    if (!g_HolyPVS_AWHEnabled[viewerSlot])
+        return;
+
+    VPROF_BUDGET("HolyLib - AntiWallhack", VPROF_BUDGETGROUP_OTHER_NETWORKING);
+
+    const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
+
+    unsigned char hidePlayer[HOLYLIB_MAX_PLAYERS + 1];
+    for (int i=1;i<=HOLYLIB_MAX_PLAYERS;++i) hidePlayer[i]=0;
+
+    edict_t* pBaseEdict = Util::engineserver->PEntityOfEntIndex(0);
+
+    for (int i=1; i<=gpGlobals->maxClients && i<=HOLYLIB_MAX_PLAYERS; ++i)
+    {
+        if (i == viewerSlot) continue;
+        edict_t* ed = &pBaseEdict[i];
+        if (!ed || ed->IsFree()) continue;
+        if (!pInfo->m_pTransmitEdict->Get(i)) continue;
+        CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(ed);
+        if (!targetEnt) continue;
+        if (!HolyPVS_VisibleByLOS(viewer, targetEnt, cacheSeconds))
+        {
+            hidePlayer[i] = 1;
+            pInfo->m_pTransmitEdict->Clear(i);
+            if (pInfo->m_pTransmitAlways)
+                pInfo->m_pTransmitAlways->Clear(i);
+        }
+    }
+
+    for (int k=0; k<nEdicts; ++k)
+    {
+        int iEdict = pEdictIndices[k];
+        if (iEdict <= gpGlobals->maxClients || iEdict >= MAX_EDICTS)
+            continue;
+        if (!pInfo->m_pTransmitEdict->Get(iEdict))
+            continue;
+
+        edict_t* ed = &pBaseEdict[iEdict];
+        if (!ed || ed->IsFree())
+            continue;
+
+        CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(ed);
+        if (!ent)
+            continue;
+
+        CBaseEntity* owner = ent->GetOwnerEntity();
+        if (!owner)
+            continue;
+
+        int ownerIdx = owner->edict() ? owner->edict()->m_EdictIndex : -1;
+        if (ownerIdx < 1 || ownerIdx > HOLYLIB_MAX_PLAYERS)
+            continue;
+
+        if (!hidePlayer[ownerIdx])
+            continue;
+
+        pInfo->m_pTransmitEdict->Clear(iEdict);
+        if (pInfo->m_pTransmitAlways)
+            pInfo->m_pTransmitAlways->Clear(iEdict);
+    }
+}
+
 bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)
 {
 	if (!networking_fasttransmit.GetBool() || !gpGlobals || !engine || !mdlcache || !func_CBaseAnimating_SetTransmit)
@@ -1934,7 +2009,7 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 		// if (bIsHLTV)
 		//	g_pGlobalTransmitTickCache.g_pAlwaysTransmitCacheBitVec.CopyTo(pInfo->m_pTransmitAlways);
 
-		if (bFastPath)
+		if (bFastPath && !(g_HolyPVS_AWHEnabled[clientIndex+1]))
 		{
 			for (int iOtherClient = 0; iOtherClient<MAX_PLAYERS; ++iOtherClient)
 			{
@@ -2302,7 +2377,8 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 	pInfo->m_pTransmitEdict->Or(g_pGlobalTransmitTickCache.g_bWasSeenByPlayer, &g_pGlobalTransmitTickCache.g_bWasSeenByPlayer);
 //	Msg("A:%i, N:%i, F: %i, P: %i\n", always, dontSend, fullCheck, PVS );
 
-	return true;
+	ApplyAntiWallhackFastTransmit(pRecipientPlayer, clientIndex+1, pInfo, pEdictIndices, nEdicts);
+		return true;
 }
 
 void SV_FillHLTVData( CFrameSnapshot *pSnapshot, edict_t *edict, int iValidEdict )
