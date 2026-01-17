@@ -30,6 +30,9 @@
 
 extern bool g_HolyPVS_AWHEnabled[HOLYLIB_MAX_PLAYERS + 1];
 extern float g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1];
+extern float g_HolyPVS_AWHTalkUntil[HOLYLIB_MAX_PLAYERS + 1];
+extern uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2];
+
 bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds);
 
 
@@ -1881,6 +1884,26 @@ static ConVar networking_fastpath("holylib_networking_fastpath", "0", 0, "Experi
 static ConVar networking_fastpath_usecluster("holylib_networking_fastpath_usecluster", "1", 0, "Experimental - When using the fastpatth, it will compate against clients in the same cluster instead of area");
 
 
+static inline bool HolyPVS_AWHSeenTest(int viewerSlot, int targetSlot)
+{
+    if (targetSlot < 1 || targetSlot > HOLYLIB_MAX_PLAYERS)
+        return true;
+    const int bit = targetSlot - 1;
+    const int word = (bit >> 6);
+    const uint64_t mask = 1ULL << (bit & 63);
+    return (g_HolyPVS_AWHSeen[viewerSlot][word] & mask) != 0ULL;
+}
+
+static inline void HolyPVS_AWHSeenSet(int viewerSlot, int targetSlot)
+{
+    if (targetSlot < 1 || targetSlot > HOLYLIB_MAX_PLAYERS)
+        return;
+    const int bit = targetSlot - 1;
+    const int word = (bit >> 6);
+    const uint64_t mask = 1ULL << (bit & 63);
+    g_HolyPVS_AWHSeen[viewerSlot][word] |= mask;
+}
+
 static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo, const unsigned short* pEdictIndices, int nEdicts)
 {
     if (!g_HolyPVS_AWHEnabled[viewerSlot])
@@ -1889,6 +1912,7 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
     //VPROF_BUDGET("HolyLib - AntiWallhack", VPROF_BUDGETGROUP_OTHER_NETWORKING);
 
     const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
+    const float now = gpGlobals ? gpGlobals->curtime : 0.0f;
 
     unsigned char hidePlayer[HOLYLIB_MAX_PLAYERS + 1];
     for (int i=1;i<=HOLYLIB_MAX_PLAYERS;++i) hidePlayer[i]=0;
@@ -1896,11 +1920,20 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
     edict_t* pBaseEdict = Util::engineserver->PEntityOfEntIndex(0);
 
     for (int i=1; i<=gpGlobals->maxClients && i<=HOLYLIB_MAX_PLAYERS; ++i)
-    {
-        if (i == viewerSlot) continue;
+    {        if (i == viewerSlot) continue;
+        if (!pInfo->m_pTransmitEdict->Get(i)) continue;
+        if (g_HolyPVS_AWHTalkUntil[i] > now)
+        {
+            HolyPVS_AWHSeenSet(viewerSlot, i);
+            continue;
+        }
+        if (!HolyPVS_AWHSeenTest(viewerSlot, i))
+        {
+            HolyPVS_AWHSeenSet(viewerSlot, i);
+            continue;
+        }
         edict_t* ed = &pBaseEdict[i];
         if (!ed || ed->IsFree()) continue;
-        if (!pInfo->m_pTransmitEdict->Get(i)) continue;
         CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(ed);
         if (!targetEnt) continue;
         if (!HolyPVS_VisibleByLOS(viewer, targetEnt, cacheSeconds))

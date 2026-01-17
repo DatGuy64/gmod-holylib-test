@@ -44,6 +44,8 @@ static unsigned char* currentPVS = nullptr;
 static int mapPVSSize = -1;
 bool g_HolyPVS_AWHEnabled[HOLYLIB_MAX_PLAYERS + 1] = { false };
 float g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1] = { 0.0f };
+float g_HolyPVS_AWHTalkUntil[HOLYLIB_MAX_PLAYERS + 1] = { 0.0f };
+uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2] = { {0,0} };
 static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 {
 	if (!ent)
