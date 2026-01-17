@@ -28,10 +28,10 @@
 
 #define HOLYLIB_MAX_PLAYERS 128
 
-bool g_HolyPVS_AWHEnabled[HOLYLIB_MAX_PLAYERS + 1] = { false };
-float g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1] = { 0.0f };
-float g_HolyPVS_AWHTalkUntil[HOLYLIB_MAX_PLAYERS + 1] = { 0.0f };
-uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2] = { { 0, 0 } };
+extern bool g_HolyPVS_AWHEnabled[HOLYLIB_MAX_PLAYERS + 1];
+extern float g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1];
+extern float g_HolyPVS_AWHTalkUntil[HOLYLIB_MAX_PLAYERS + 1];
+extern uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2];
 
 bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds);
 
