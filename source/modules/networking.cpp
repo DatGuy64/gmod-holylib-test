@@ -1886,8 +1886,6 @@ static ConVar networking_fastpath_usecluster("holylib_networking_fastpath_useclu
 
 static inline bool HolyPVS_AWHSeenTest(int viewerSlot, int targetSlot)
 {
-    if (targetSlot < 1 || targetSlot > HOLYLIB_MAX_PLAYERS)
-        return true;
     const int bit = targetSlot - 1;
     const int word = (bit >> 6);
     const uint64_t mask = 1ULL << (bit & 63);
@@ -1896,8 +1894,6 @@ static inline bool HolyPVS_AWHSeenTest(int viewerSlot, int targetSlot)
 
 static inline void HolyPVS_AWHSeenSet(int viewerSlot, int targetSlot)
 {
-    if (targetSlot < 1 || targetSlot > HOLYLIB_MAX_PLAYERS)
-        return;
     const int bit = targetSlot - 1;
     const int word = (bit >> 6);
     const uint64_t mask = 1ULL << (bit & 63);
