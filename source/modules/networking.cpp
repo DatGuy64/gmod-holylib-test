@@ -1883,17 +1883,24 @@ static ConVar networking_verifyshit("holylib_networking_verifyshit", "1", 0, "Ex
 static ConVar networking_fastpath("holylib_networking_fastpath", "0", 0, "Experimental - If two players are in the same area, then it will reuse the transmit state of the first calculated player saving a lot of time");
 static ConVar networking_fastpath_usecluster("holylib_networking_fastpath_usecluster", "1", 0, "Experimental - When using the fastpatth, it will compate against clients in the same cluster instead of area");
 
-
-static inline bool AWHSeenTest(int viewerSlot, int targetSlot)
+static inline bool HolyPVS_AWHSeenTest(int viewerSlot, int targetSlot)
 {
+    if (targetSlot < 1 || targetSlot > HOLYLIB_MAX_PLAYERS)
+        return true;
     const int bit = targetSlot - 1;
-    return (g_HolyPVS_AWHSeen[viewerSlot][bit >> 6] & (1ULL << (bit & 63))) != 0ULL;
+    const int word = (bit >> 6);
+    const uint64_t mask = 1ULL << (bit & 63);
+    return (g_HolyPVS_AWHSeen[viewerSlot][word] & mask) != 0ULL;
 }
 
-static inline void AWHSeenSet(int viewerSlot, int targetSlot)
+static inline void HolyPVS_AWHSeenSet(int viewerSlot, int targetSlot)
 {
+    if (targetSlot < 1 || targetSlot > HOLYLIB_MAX_PLAYERS)
+        return;
     const int bit = targetSlot - 1;
-    g_HolyPVS_AWHSeen[viewerSlot][bit >> 6] |= (1ULL << (bit & 63));
+    const int word = (bit >> 6);
+    const uint64_t mask = 1ULL << (bit & 63);
+    g_HolyPVS_AWHSeen[viewerSlot][word] |= mask;
 }
 
 static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo)
@@ -1918,13 +1925,13 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 
         if (g_HolyPVS_AWHTalkUntil[i] > now)
         {
-            AWHSeenSet(viewerSlot, i);
+            HolyPVS_AWHSeenSet(viewerSlot, i);
             continue;
         }
 
-        if (!AWHSeenTest(viewerSlot, i))
+        if (!HolyPVS_AWHSeenTest(viewerSlot, i))
         {
-            AWHSeenSet(viewerSlot, i);
+            HolyPVS_AWHSeenSet(viewerSlot, i);
             continue;
         }
 
