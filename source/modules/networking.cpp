@@ -1884,20 +1884,16 @@ static ConVar networking_fastpath("holylib_networking_fastpath", "0", 0, "Experi
 static ConVar networking_fastpath_usecluster("holylib_networking_fastpath_usecluster", "1", 0, "Experimental - When using the fastpatth, it will compate against clients in the same cluster instead of area");
 
 
-static inline bool HolyPVS_AWHSeenTest(int viewerSlot, int targetSlot)
+static inline bool AWHSeenTestUnsafe(int viewerSlot, int targetSlot)
 {
     const int bit = targetSlot - 1;
-    const int word = (bit >> 6);
-    const uint64_t mask = 1ULL << (bit & 63);
-    return (g_HolyPVS_AWHSeen[viewerSlot][word] & mask) != 0ULL;
+    return (g_HolyPVS_AWHSeen[viewerSlot][bit >> 6] & (1ULL << (bit & 63))) != 0ULL;
 }
 
-static inline void HolyPVS_AWHSeenSet(int viewerSlot, int targetSlot)
+static inline void AWHSeenSetUnsafe(int viewerSlot, int targetSlot)
 {
     const int bit = targetSlot - 1;
-    const int word = (bit >> 6);
-    const uint64_t mask = 1ULL << (bit & 63);
-    g_HolyPVS_AWHSeen[viewerSlot][word] |= mask;
+    g_HolyPVS_AWHSeen[viewerSlot][bit >> 6] |= (1ULL << (bit & 63));
 }
 
 static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo)
