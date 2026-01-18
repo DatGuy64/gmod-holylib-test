@@ -1884,13 +1884,13 @@ static ConVar networking_fastpath("holylib_networking_fastpath", "0", 0, "Experi
 static ConVar networking_fastpath_usecluster("holylib_networking_fastpath_usecluster", "1", 0, "Experimental - When using the fastpatth, it will compate against clients in the same cluster instead of area");
 
 
-static inline bool AWHSeenTestUnsafe(int viewerSlot, int targetSlot)
+static inline bool AWHSeenTest(int viewerSlot, int targetSlot)
 {
     const int bit = targetSlot - 1;
     return (g_HolyPVS_AWHSeen[viewerSlot][bit >> 6] & (1ULL << (bit & 63))) != 0ULL;
 }
 
-static inline void AWHSeenSetUnsafe(int viewerSlot, int targetSlot)
+static inline void AWHSeenSet(int viewerSlot, int targetSlot)
 {
     const int bit = targetSlot - 1;
     g_HolyPVS_AWHSeen[viewerSlot][bit >> 6] |= (1ULL << (bit & 63));
