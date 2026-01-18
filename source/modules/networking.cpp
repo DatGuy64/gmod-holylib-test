@@ -1904,58 +1904,53 @@ static inline void HolyPVS_AWHSeenSet(int viewerSlot, int targetSlot)
 
 static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo)
 {
-    if (!g_HolyPVS_AWHEnabled[viewerSlot])
-        return;
+	if (!g_HolyPVS_AWHEnabled[viewerSlot])
+		return;
 
-    VPROF_BUDGET("HolyLib - AntiWallhack", VPROF_BUDGETGROUP_OTHER_NETWORKING);
+	VPROF_BUDGET("HolyLib - AntiWallhack", VPROF_BUDGETGROUP_OTHER_NETWORKING);
 
-    const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
-    const int maxClients = gpGlobals->maxClients;
+	const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
+	const int maxClients = gpGlobals->maxClients;
 
-    CBitVec<MAX_EDICTS>* pTransmitBits = pInfo->m_pTransmitEdict;
-    CBitVec<MAX_EDICTS>* pAlwaysBits = pInfo->m_pTransmitAlways;
+	CBitVec<MAX_EDICTS>* pTransmitBits = pInfo->m_pTransmitEdict;
+	CBitVec<MAX_EDICTS>* pAlwaysBits = pInfo->m_pTransmitAlways;
 
-    for (int i = 1; i <= maxClients; ++i)
-    {
-        if (i == viewerSlot) continue;
+	for (int i = 1; i <= maxClients; ++i)
+	{
+		if (i == viewerSlot) continue;
+		if (!pTransmitBits->Get(i)) continue;
 
-        if (!pTransmitBits->Get(i)) continue;
+		CBaseEntity* targetEnt = g_pEntityCache[i];
+		if (!targetEnt) continue;
 
-        if (!HolyPVS_AWHSeenTest(viewerSlot, i))
-        {
-            HolyPVS_AWHSeenSet(viewerSlot, i);
-            continue;
-        }
+		if (!HolyPVS_AWHSeenTest(viewerSlot, i))
+		{
+			HolyPVS_AWHSeenSet(viewerSlot, i);
+			continue;
+		}
 
-        CBaseEntity* targetEnt = g_pEntityCache[i];
+		if (!HolyPVS_VisibleByLOS(viewer, targetEnt, cacheSeconds))
+		{
+			pTransmitBits->Clear(i);
+			if (pAlwaysBits) pAlwaysBits->Clear(i);
 
-        if (!targetEnt) continue; 
+			for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
+			{
+				edict_t* chEd = ch->edict();
+				if (!chEd) continue;
 
-        if (!HolyPVS_VisibleByLOS(viewer, targetEnt, cacheSeconds))
-        {
-            pTransmitBits->Clear(i);
+				const int idx = chEd->m_EdictIndex;
+				if (idx <= maxClients) continue;
 
-            if (pAlwaysBits) pAlwaysBits->Clear(i);
-
-            for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
-            {
-                edict_t* chEd = ch->edict(); 
-                if (!chEd) continue;
-                
-                const int idx = chEd->m_EdictIndex;
-                
-                if (idx <= maxClients) continue; 
-
-                if (pTransmitBits->Get(idx))
-                {
-                    pTransmitBits->Clear(idx);
-                    if (pAlwaysBits) pAlwaysBits->Clear(idx);
-                }
-            }
-        }
-    }
+				if (pTransmitBits->Get(idx))
+				{
+					pTransmitBits->Clear(idx);
+					if (pAlwaysBits) pAlwaysBits->Clear(idx);
+				}
+			}
+		}
+	}
 }
-
 
 bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)
 {

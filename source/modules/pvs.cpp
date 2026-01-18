@@ -69,16 +69,17 @@ bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheS
 	if (cacheSeconds <= 0.0f)
 		return VisibleByLOS_NoCache(viewer, target);
 
-	int vIdx = GetClientIndexFromEntity(viewer);
-	int tIdx = GetClientIndexFromEntity(target);
+	const int vIdx = GetClientIndexFromEntity(viewer);
+	const int tIdx = GetClientIndexFromEntity(target);
 	if (vIdx < 1 || vIdx > HOLYLIB_MAX_PLAYERS || tIdx < 1 || tIdx > HOLYLIB_MAX_PLAYERS)
 		return VisibleByLOS_NoCache(viewer, target);
 
-	float now = gpGlobals ? gpGlobals->curtime : 0.0f;
+	const float now = gpGlobals->curtime;
+
 	if (g_LOSNext[vIdx][tIdx] > now)
 		return g_LOSVis[vIdx][tIdx] != 0;
 
-	bool vis = VisibleByLOS_NoCache(viewer, target);
+	const bool vis = VisibleByLOS_NoCache(viewer, target);
 	g_LOSVis[vIdx][tIdx] = vis ? 1 : 0;
 	g_LOSNext[vIdx][tIdx] = now + cacheSeconds;
 	return vis;
@@ -98,12 +99,14 @@ static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target
 	if (!viewer || !target)
 		return false;
 
-	Vector viewerEye = viewer->EyePosition();
+	const Vector viewerEye = viewer->EyePosition();
 
-	if (!target->CollisionProp())
+	auto* col = target->CollisionProp();
+	if (!col)
 		return false;
-	const Vector& mins = target->CollisionProp()->OBBMins();
-	const Vector& maxs = target->CollisionProp()->OBBMaxs();
+
+	const Vector& mins = col->OBBMins();
+	const Vector& maxs = col->OBBMaxs();
 
 	const float minX = mins.x + 1.0f;
 	const float minY = mins.y + 1.0f;
