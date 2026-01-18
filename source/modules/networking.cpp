@@ -1918,13 +1918,13 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 
         if (g_HolyPVS_AWHTalkUntil[i] > now)
         {
-            HolyPVS_AWHSeenSet(viewerSlot, i);
+            AWHSeenSet(viewerSlot, i);
             continue;
         }
 
-        if (!HolyPVS_AWHSeenTest(viewerSlot, i))
+        if (!AWHSeenTest(viewerSlot, i))
         {
-            HolyPVS_AWHSeenSet(viewerSlot, i);
+            AWHSeenSet(viewerSlot, i);
             continue;
         }
 
