@@ -30,7 +30,6 @@
 
 extern bool g_HolyPVS_AWHEnabled[HOLYLIB_MAX_PLAYERS + 1];
 extern float g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1];
-extern float g_HolyPVS_AWHTalkUntil[HOLYLIB_MAX_PLAYERS + 1];
 extern uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2];
 
 bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds);
@@ -1908,10 +1907,9 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
     if (!g_HolyPVS_AWHEnabled[viewerSlot])
         return;
 
-    //VPROF_BUDGET("HolyLib - AntiWallhack", VPROF_BUDGETGROUP_OTHER_NETWORKING);
+    VPROF_BUDGET("HolyLib - AntiWallhack", VPROF_BUDGETGROUP_OTHER_NETWORKING);
 
     const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
-    const float now = gpGlobals->curtime;
     const int maxClients = gpGlobals->maxClients;
 
     CBitVec<MAX_EDICTS>* pTransmitBits = pInfo->m_pTransmitEdict;
@@ -1922,12 +1920,6 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
         if (i == viewerSlot) continue;
 
         if (!pTransmitBits->Get(i)) continue;
-
-        if (g_HolyPVS_AWHTalkUntil[i] > now)
-        {
-            HolyPVS_AWHSeenSet(viewerSlot, i);
-            continue;
-        }
 
         if (!HolyPVS_AWHSeenTest(viewerSlot, i))
         {

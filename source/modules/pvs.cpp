@@ -44,7 +44,6 @@ static unsigned char* currentPVS = nullptr;
 static int mapPVSSize = -1;
 bool g_HolyPVS_AWHEnabled[HOLYLIB_MAX_PLAYERS + 1] = { false };
 float g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1] = { 0.0f };
-float g_HolyPVS_AWHTalkUntil[HOLYLIB_MAX_PLAYERS + 1] = { 0.0f };
 uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2] = { {0,0} };
 static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 {
@@ -211,30 +210,6 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 	g_pCurrentEdictIndices = pEdictIndices;
 	g_nCurrentEdicts = nEdicts;
 
-	CBaseEntity* pViewerEnt = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
-	int viewerIdx = GetClientIndexFromEntity(pViewerEnt);
-	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > HOLYLIB_MAX_PLAYERS || !g_HolyPVS_AWHEnabled[viewerIdx])
-	{
-#if MODULE_EXISTS_NETWORKING
-		if (g_pReplaceCServerGameEnts_CheckTransmit)
-		{
-			if (!New_CServerGameEnts_CheckTransmit(gameents, pInfo, pEdictIndices, nEdicts))
-			{
-				detour_CServerGameEnts_CheckTransmit.GetTrampoline<Symbols::CServerGameEnts_CheckTransmit>()(gameents, pInfo, pEdictIndices, nEdicts);
-			}
-		}
-		else
-#endif
-		{
-			detour_CServerGameEnts_CheckTransmit.GetTrampoline<Symbols::CServerGameEnts_CheckTransmit>()(gameents, pInfo, pEdictIndices, nEdicts);
-		}
-
-		g_pCurrentTransmitInfo = nullptr;
-		g_pCurrentEdictIndices = nullptr;
-		g_nCurrentEdicts = -1;
-		return;
-	}
-
 	if(g_bEnableLuaPreTransmitHook && Lua::PushHook("HolyLib:PreCheckTransmit"))
 	{
 		Util::Push_Entity(g_Lua, Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt));
@@ -327,6 +302,7 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 		g_pAddEntityToPVS.ClearAll();
 		bWasAddedEntityUsed = false;
 	}
+
 	g_pCurrentTransmitInfo = nullptr;
 	g_pCurrentEdictIndices = nullptr;
 	g_nCurrentEdicts = -1;
@@ -351,16 +327,6 @@ void PreCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned 
 	g_pCurrentTransmitInfo = pInfo;
 	g_pCurrentEdictIndices = pEdictIndices;
 	g_nCurrentEdicts = nEdicts;
-
-	CBaseEntity* pViewerEnt = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
-	int viewerIdx = GetClientIndexFromEntity(pViewerEnt);
-	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > HOLYLIB_MAX_PLAYERS || !g_HolyPVS_AWHEnabled[viewerIdx])
-	{
-		g_pCurrentTransmitInfo = nullptr;
-		g_pCurrentEdictIndices = nullptr;
-		g_nCurrentEdicts = -1;
-		return;
-	}
 
 	if(g_bEnableLuaPreTransmitHook && Lua::PushHook("HolyLib:PreCheckTransmit"))
 	{
@@ -429,16 +395,6 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 	g_pCurrentEdictIndices = pEdictIndices;
 	g_nCurrentEdicts = nEdicts;
 
-	CBaseEntity* pViewerEnt = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
-	int viewerIdx = GetClientIndexFromEntity(pViewerEnt);
-	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > HOLYLIB_MAX_PLAYERS || !g_HolyPVS_AWHEnabled[viewerIdx])
-	{
-		g_pCurrentTransmitInfo = nullptr;
-		g_pCurrentEdictIndices = nullptr;
-		g_nCurrentEdicts = -1;
-		return;
-	}
-
 	if(g_bEnableLuaPostTransmitHook && Lua::PushHook("HolyLib:PostCheckTransmit"))
 	{
 		g_bBlockAdditionToTransmit = true;
@@ -465,42 +421,12 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 		g_pAddEntityToPVS.ClearAll();
 		bWasAddedEntityUsed = false;
 	}
+
 	g_pCurrentTransmitInfo = nullptr;
 	g_pCurrentEdictIndices = nullptr;
 	g_nCurrentEdicts = -1;
 }
 #endif
-
-LUA_FUNCTION_STATIC(pvs_ActiveCheckTransmit)
-{
-    CBasePlayer* ply = Util::Get_Player(LUA, 1, true);
-    bool bEnable = LUA->GetBool(2);
-    float cacheSeconds = 0.0f;
-    if (LUA->Top() >= 3 && LUA->IsType(3, GarrysMod::Lua::Type::Number))
-        cacheSeconds = (float)LUA->GetNumber(3);
-
-    int idx = -1;
-    if (ply && ply->edict())
-        idx = ply->edict()->m_EdictIndex;
-
-    if (idx < 1 || idx > HOLYLIB_MAX_PLAYERS)
-        LUA->ThrowError("pvs.ActiveCheckTransmit: invalid player index");
-
-    g_HolyPVS_AWHEnabled[idx] = bEnable;
-    g_HolyPVS_AWHCacheSeconds[idx] = cacheSeconds;
-    if (!bEnable)
-    {
-        for (int i=1;i<=HOLYLIB_MAX_PLAYERS;++i)
-        {
-            g_LOSNext[idx][i] = 0.0f;
-            g_LOSVis[idx][i] = 0;
-        }
-    }
-
-    return 0;
-}
-
-
 
 LUA_FUNCTION_STATIC(pvs_SetAntiWallhack)
 {
@@ -527,52 +453,6 @@ LUA_FUNCTION_STATIC(pvs_SetAntiWallhack)
     }
 
     return 0;
-}
-LUA_FUNCTION_STATIC(pvs_Begin)
-{
-	Vector* orig;
-	if (LUA->IsType(1, GarrysMod::Lua::Type::Vector))
-	{
-		orig = Get_Vector(LUA, 1);
-	}
-	else
-	{
-		CBaseEntity* ent = Util::Get_Entity(LUA, 1, true);
-		orig = (Vector*)&ent->GetAbsOrigin();
-	}
-
-	Util::VisData* data = Util::CM_Vis(*orig, DVIS_PVS);
-	SetLuaVis(LUA, data);
-
-	LUA->PushBool(data != nullptr);
-	return 1;
-}
-
-LUA_FUNCTION_STATIC(pvs_Test)
-{
-	Util::VisData* data = GetLuaVis(LUA);
-	if (!data)
-		LUA->ThrowError("pvs.Test called without pvs.Begin");
-
-	Vector pos;
-	if (LUA->IsType(1, GarrysMod::Lua::Type::Vector))
-	{
-		pos = *Get_Vector(LUA, 1);
-	}
-	else
-	{
-		CBaseEntity* ent = Util::Get_Entity(LUA, 1, true);
-		pos = ent->GetAbsOrigin();
-	}
-
-	LUA->PushBool(Util::engineserver->CheckOriginInPVS(pos, data->cluster, sizeof(data->cluster)));
-	return 1;
-}
-
-LUA_FUNCTION_STATIC(pvs_End)
-{
-	ClearLuaVis(LUA);
-	return 0;
 }
 
 LUA_FUNCTION_STATIC(pvs_ResetPVS)
@@ -1407,123 +1287,6 @@ LUA_FUNCTION_STATIC(pvs_GetOwnedEntitiesFromTransmit)
 	return 1;
 }
 
-LUA_FUNCTION_STATIC(pvs_ApplyAntiWallhack)
-{
-	float cacheSeconds = 0.0f;
-	if (LUA->IsType(1, GarrysMod::Lua::Type::Number))
-		cacheSeconds = (float)LUA->GetNumber(1);
-
-	if (!g_pCurrentTransmitInfo)
-		LUA->ThrowError("Tried to use pvs.ApplyAntiWallhack while not in a CheckTransmit call!");
-
-	CBaseEntity* viewer = Util::servergameents->EdictToBaseEntity(g_pCurrentTransmitInfo->m_pClientEnt);
-	if (!viewer)
-		return 0;
-
-	int viewerIdx = GetClientIndexFromEntity(viewer);
-	if (viewerIdx < 1 || viewerIdx > gpGlobals->maxClients || viewerIdx > HOLYLIB_MAX_PLAYERS || !g_HolyPVS_AWHEnabled[viewerIdx])
-		return 0;
-
-	Vector viewerEye = viewer->EyePosition();
-	Vector viewerForward;
-	AngleVectors(viewer->EyeAngles(), &viewerForward);
-
-	bool hiddenOwner[HOLYLIB_MAX_PLAYERS + 1];
-	memset(hiddenOwner, 0, sizeof(hiddenOwner));
-
-	edict_t* pBaseEdict = Util::engineserver->PEntityOfEntIndex(0);
-	int hiddenCount = 0;
-
-	for (int iEdict = 1; iEdict <= gpGlobals->maxClients && iEdict <= HOLYLIB_MAX_PLAYERS; ++iEdict)
-	{
-		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(iEdict))
-			continue;
-
-		edict_t* pEdict = &pBaseEdict[iEdict];
-		CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(pEdict);
-		if (!ent || ent == viewer)
-			continue;
-
-		Vector delta = ent->WorldSpaceCenter() - viewerEye;
-		float lenSqr = delta.LengthSqr();
-		float d = DotProduct(viewerForward, delta);
-		bool forceHide = (d <= 0.0f);
-		if (!forceHide && lenSqr > 1e-6f)
-		{
-			float d2 = d * d;
-			forceHide = (d2 < (0.25f * lenSqr));
-		}
-		if (forceHide || !HolyPVS_VisibleByLOS(viewer, ent, cacheSeconds))
-		{
-			hiddenOwner[iEdict] = true;
-			g_pCurrentTransmitInfo->m_pTransmitEdict->Clear(iEdict);
-			if (g_pCurrentTransmitInfo->m_pTransmitAlways && g_pCurrentTransmitInfo->m_pTransmitAlways->Get(iEdict))
-				g_pCurrentTransmitInfo->m_pTransmitAlways->Clear(iEdict);
-			++hiddenCount;
-
-			CBasePlayer* ply = static_cast<CBasePlayer*>(ent);
-			if (ply && ply->edict())
-			{
-				CBaseEntity* wep = GetActiveWeaponEntity(ply);
-				if (wep && wep->edict())
-				{
-					int wepEdict = wep->edict()->m_EdictIndex;
-					if (wepEdict > 0 && wepEdict < MAX_EDICTS && g_pCurrentTransmitInfo->m_pTransmitEdict->Get(wepEdict))
-					{
-						g_pCurrentTransmitInfo->m_pTransmitEdict->Clear(wepEdict);
-						if (g_pCurrentTransmitInfo->m_pTransmitAlways && g_pCurrentTransmitInfo->m_pTransmitAlways->Get(wepEdict))
-							g_pCurrentTransmitInfo->m_pTransmitAlways->Clear(wepEdict);
-					}
-				}
-			}
-		}
-	}
-
-	if (hiddenCount == 0)
-		return 0;
-
-	for (int i = 0; i < g_nCurrentEdicts; ++i)
-	{
-		int iEdict = g_pCurrentEdictIndices[i];
-		if (iEdict < 1 || iEdict >= MAX_EDICTS)
-			continue;
-		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(iEdict))
-			continue;
-
-		edict_t* pEdict = &pBaseEdict[iEdict];
-		CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(pEdict);
-		if (!ent)
-			continue;
-		const char* cls = ent->GetClassname();
-		if (!cls || cls[0] != 'c' || strcmp(cls, "cw_gear"))
-			continue;
-
-		CBasePlayer* owner = nullptr;
-		CBaseEntity* ownerEnt = ent->GetOwnerEntity();
-		if (ownerEnt && ownerEnt->IsPlayer())
-			owner = static_cast<CBasePlayer*>(ownerEnt);
-		else
-		{
-			CBaseEntity* parent = ent->GetMoveParent();
-			if (parent && parent->IsPlayer())
-				owner = static_cast<CBasePlayer*>(parent);
-		}
-		if (!owner || !owner->edict())
-			continue;
-		int ownerIdx = owner->edict()->m_EdictIndex;
-		if (ownerIdx < 1 || ownerIdx > gpGlobals->maxClients || ownerIdx > HOLYLIB_MAX_PLAYERS)
-			continue;
-		if (!hiddenOwner[ownerIdx])
-			continue;
-
-		g_pCurrentTransmitInfo->m_pTransmitEdict->Clear(iEdict);
-		if (g_pCurrentTransmitInfo->m_pTransmitAlways && g_pCurrentTransmitInfo->m_pTransmitAlways->Get(iEdict))
-			g_pCurrentTransmitInfo->m_pTransmitAlways->Clear(iEdict);
-	}
-
-	return 0;
-}
-
 LUA_FUNCTION_STATIC(pvs_VisibleByLOS)
 {
 	CBaseEntity* viewer = Util::Get_Entity(LUA, 1, true);
@@ -1585,11 +1348,7 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 	mapPVSSize = ceil(Util::engineserver->GetClusterCount() / 8.0f);
 
 	Util::StartTable(pLua);
-		Util::AddFunc(pLua, pvs_ActiveCheckTransmit, "ActiveCheckTransmit");
 		Util::AddFunc(pLua, pvs_SetAntiWallhack, "SetAntiWallhack");
-		Util::AddFunc(pLua, pvs_Begin, "Begin");
-		Util::AddFunc(pLua, pvs_Test, "Test");
-		Util::AddFunc(pLua, pvs_End, "End");
 		Util::AddFunc(pLua, pvs_ResetPVS, "ResetPVS");
 		Util::AddFunc(pLua, pvs_CheckOriginInPVS, "CheckOriginInPVS");
 		Util::AddFunc(pLua, pvs_AddOriginToPVS, "AddOriginToPVS");
@@ -1608,7 +1367,6 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 		Util::AddFunc(pLua, pvs_TestPVS, "TestPVS");
 		Util::AddFunc(pLua, pvs_ForceFullUpdate, "ForceFullUpdate");
 		Util::AddFunc(pLua, pvs_GetEntitiesFromTransmit, "GetEntitiesFromTransmit");
-		Util::AddFunc(pLua, pvs_ApplyAntiWallhack, "ApplyAntiWallhack");
 		Util::AddFunc(pLua, pvs_GetPlayersFromTransmit, "GetPlayersFromTransmit");
 		Util::AddFunc(pLua, pvs_GetPlayersOwnedEntities, "GetPlayersOwnedEntities");
 		Util::AddFunc(pLua, pvs_GetOwnedEntitiesFromTransmit, "GetOwnedEntitiesFromTransmit");
