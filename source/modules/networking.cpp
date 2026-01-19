@@ -1902,6 +1902,8 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 {
     if (!g_HolyPVS_AWHEnabled[viewerSlot])
         return;
+	
+	VPROF_BUDGET("HolyLib - AntiWallhack", VPROF_BUDGETGROUP_OTHER_NETWORKING);
 
     const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
     const int maxClients = gpGlobals->maxClients;
