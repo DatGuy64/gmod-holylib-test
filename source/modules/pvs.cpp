@@ -96,43 +96,44 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
 
 static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
 {
-	if (!viewer || !target)
-		return false;
+    if (!viewer || !target)
+        return false;
 
-	const Vector viewerEye = viewer->EyePosition();
+    Vector viewerEye = viewer->EyePosition();
 
-	auto* col = target->CollisionProp();
-	if (!col)
-		return false;
+    auto* col = target->CollisionProp();
+    if (!col)
+        return false;
 
-	const Vector& mins = col->OBBMins();
-	const Vector& maxs = col->OBBMaxs();
+    const Vector mins = col->OBBMins();
+    const Vector maxs = col->OBBMaxs();
 
-	const float minX = mins.x + 1.0f;
-	const float minY = mins.y + 1.0f;
-	const float maxX = maxs.x - 1.0f;
-	const float maxY = maxs.y - 1.0f;
-	const float zBottom = mins.z + 5.0f;
-	const float zTop = maxs.z - 2.0f;
+    const float minX = mins.x + 1.0f;
+    const float minY = mins.y + 1.0f;
+    const float maxX = maxs.x - 1.0f;
+    const float maxY = maxs.y - 1.0f;
+    const float zBottom = mins.z + 5.0f;
+    const float zTop = maxs.z - 2.0f;
 
-	Vector local;
-	Vector world;
-	const matrix3x4_t& mat = target->EntityToWorldTransform();
+    Vector local;
+    Vector world;
+    const matrix3x4_t& mat = target->EntityToWorldTransform();
 
-	local.z = zBottom;
-	local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-	local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-	local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-	local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+    local.z = zBottom;
+    local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+    local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+    local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+    local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
 
-	local.z = zTop;
-	local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-	local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-	local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-	local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+    local.z = zTop;
+    local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+    local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+    local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+    local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
 
-	return false;
+    return false;
 }
+
 
 #ifndef HOLYLIB_MANUALNETWORKING
 static Detouring::Hook detour_CGMOD_Player_SetupVisibility;
