@@ -555,6 +555,26 @@ static void HolyPVS_AWHWhitelistApplyTable(GarrysMod::Lua::ILuaInterface* LUA, i
 	LUA->Pop(1);
 }
 
+LUA_FUNCTION_STATIC(pvs_IsAntiWallhackEnabled)
+{
+	CBasePlayer* ply = Util::Get_Player(LUA, 1, true);
+	if (!ply || !ply->edict())
+	{
+		LUA->PushBool(false);
+		return 1;
+	}
+
+	int idx = ply->edict()->m_EdictIndex;
+	if (idx < 1 || idx > HOLYLIB_MAX_PLAYERS)
+	{
+		LUA->PushBool(false);
+		return 1;
+	}
+
+	LUA->PushBool(g_HolyPVS_AWHEnabled[idx]);
+	return 1;
+}
+
 LUA_FUNCTION_STATIC(pvs_AWHWhitelistAdd)
 {
 	const int viewerSlot = HolyPVS_GetPlayerSlot(LUA, 1);
@@ -1543,6 +1563,7 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 		Util::AddFunc(pLua, pvs_AWHWhitelistAdd, "AWHWhitelistAdd");
 		Util::AddFunc(pLua, pvs_AWHWhitelistRemove, "AWHWhitelistRemove");
 		Util::AddFunc(pLua, pvs_AWHWhitelistClear, "AWHWhitelistClear");
+		Util::AddFunc(pLua, pvs_IsAntiWallhackEnabled, "IsAntiWallhackEnabled");
 
 		Util::AddFunc(pLua, pvs_EnablePreTransmitHook, "EnablePreTransmitHook");
 		Util::AddFunc(pLua, pvs_EnablePostTransmitHook, "EnablePostTransmitHook");
