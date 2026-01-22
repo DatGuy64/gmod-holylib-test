@@ -29,6 +29,7 @@
 #define HOLYLIB_MAX_PLAYERS 128
 
 extern bool g_HolyPVS_AWHEnabled[HOLYLIB_MAX_PLAYERS + 1];
+extern bool g_HolyPVS_AWHJustEnabled[HOLYLIB_MAX_PLAYERS + 1];
 extern float g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1];
 extern uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2];
 extern uint64_t g_HolyPVS_AWHWhitelist[HOLYLIB_MAX_PLAYERS + 1][2];
@@ -1914,6 +1915,7 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 		return;
 
 	//VPROF_BUDGET("HolyLib - AntiWallhack", VPROF_BUDGETGROUP_OTHER_NETWORKING);
+	const bool forceBurst = g_HolyPVS_AWHJustEnabled[viewerSlot];
 
 	const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
 	const int maxClients = gpGlobals->maxClients;
@@ -1924,12 +1926,24 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 	for (int i = 1; i <= maxClients; ++i)
 	{
 		if (i == viewerSlot) continue;
-		if (!pTransmitBits->Get(i)) continue;
 
 		CBaseEntity* targetEnt = g_pEntityCache[i];
 		if (!targetEnt) continue;
 		if (HolyPVS_AWHWhitelistTest(viewerSlot, i))
-			continue; 
+			continue;
+
+		if (forceBurst)
+		{
+			HolyPVS_AWHSeenSet(viewerSlot, i);
+			if (!pTransmitBits->Get(i))
+			{
+				pTransmitBits->Set(i);
+				if (pAlwaysBits) pAlwaysBits->Set(i);
+			}
+			continue;
+		}
+
+		if (!pTransmitBits->Get(i)) continue;
 
 		if (!HolyPVS_AWHSeenTest(viewerSlot, i))
 		{
@@ -1958,6 +1972,9 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 			}
 		}
 	}
+
+	if (forceBurst)
+		g_HolyPVS_AWHJustEnabled[viewerSlot] = false;
 }
 
 bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)

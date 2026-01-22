@@ -16,6 +16,8 @@
 
 #include "util.h"
 
+bool g_HolyPVS_AWHJustEnabled[HOLYLIB_MAX_PLAYERS + 1];
+
 extern IEngineTrace* enginetrace;
 
 #include "tier0/memdbgon.h"
@@ -51,6 +53,7 @@ static unsigned char g_LOSVis[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
 
 void HolyPVS_ResetAWHSlot(int idx)
 {
+    g_HolyPVS_AWHJustEnabled[idx] = false;
 	if (idx < 1 || idx > HOLYLIB_MAX_PLAYERS)
 		return;
 
@@ -68,7 +71,21 @@ void HolyPVS_ResetAWHSlot(int idx)
 		g_LOSNext[idx][i] = 0.0f;
 		g_LOSVis[idx][i] = 0;
 	}
+
+
+    const int bit = idx - 1;
+    const int word = bit >> 6;
+    const uint64_t mask = ~(1ULL << (bit & 63));
+
+    for (int viewer = 1; viewer <= HOLYLIB_MAX_PLAYERS; ++viewer)
+    {
+        g_HolyPVS_AWHSeen[viewer][word] &= mask;
+        g_HolyPVS_AWHWhitelist[viewer][word] &= mask;
+        g_LOSNext[viewer][idx] = 0.0f;
+        g_LOSVis[viewer][idx] = false;
+    }
 }
+
 
 static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 {
