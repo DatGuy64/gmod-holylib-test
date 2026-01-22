@@ -1878,7 +1878,7 @@ static inline void DoTransmitPVSCheck(edict_t* pEdict, CBaseEntity* pEnt, const 
 }
 
 static Detouring::Hook detour_CServerGameEnts_CheckTransmit;
-static ConVar networking_verifyshit("holylib_networking_verifyshit", "1", 0, "Experimental");
+static ConVar networking_verifyshit("holylib_networking_verifyshit", "0", 0, "Experimental");
 static ConVar networking_fastpath("holylib_networking_fastpath", "0", 0, "Experimental - If two players are in the same area, then it will reuse the transmit state of the first calculated player saving a lot of time");
 static ConVar networking_fastpath_usecluster("holylib_networking_fastpath_usecluster", "1", 0, "Experimental - When using the fastpatth, it will compate against clients in the same cluster instead of area");
 
@@ -2545,9 +2545,19 @@ void CNetworkingModule::OnEntityCreated(CBaseEntity* pEntity)
 		g_pEntityCache[pEdict->m_EdictIndex] = pEntity;
 }
 
+#if MODULE_EXISTS_PVS
+extern void HolyPVS_ResetAWHSlot(int idx);
+#endif
+
 void CNetworkingModule::ClientDisconnect(edict_t* pPlayer)
 {
-	g_pPlayerTransmitCache[pPlayer->m_EdictIndex-1].Reset();
+	g_pPlayerTransmitCache[pPlayer->m_EdictIndex - 1].Reset();
+
+#if MODULE_EXISTS_PVS
+	// Reset AWH state for this slot so the next player reusing the slot doesn't inherit it.
+	if (pPlayer)
+		HolyPVS_ResetAWHSlot(pPlayer->m_EdictIndex);
+#endif
 }
 
 #if MODULE_EXISTS_PVS

@@ -45,6 +45,27 @@ static int mapPVSSize = -1;
 bool g_HolyPVS_AWHEnabled[HOLYLIB_MAX_PLAYERS + 1] = { false };
 float g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1] = { 0.0f };
 uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2] = { {0,0} };
+static float g_LOSNext[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
+static unsigned char g_LOSVis[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
+
+void HolyPVS_ResetAWHSlot(int idx)
+{
+	if (idx < 1 || idx > HOLYLIB_MAX_PLAYERS)
+		return;
+
+	g_HolyPVS_AWHEnabled[idx] = false;
+	g_HolyPVS_AWHCacheSeconds[idx] = 0.0f;
+
+	g_HolyPVS_AWHSeen[idx][0] = 0;
+	g_HolyPVS_AWHSeen[idx][1] = 0;
+
+	for (int i = 1; i <= HOLYLIB_MAX_PLAYERS; ++i)
+	{
+		g_LOSNext[idx][i] = 0.0f;
+		g_LOSVis[idx][i] = 0;
+	}
+}
+
 static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 {
 	if (!ent)
@@ -56,9 +77,6 @@ static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 
 	return ed->m_EdictIndex;
 }
-
-static float g_LOSNext[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
-static unsigned char g_LOSVis[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
 
 static CTraceFilterWorldOnly g_HolyLibTraceFilterWorldOnly;
 
@@ -434,30 +452,32 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 
 LUA_FUNCTION_STATIC(pvs_SetAntiWallhack)
 {
-    CBasePlayer* ply = Util::Get_Player(LUA, 1, true);
-    bool bEnable = LUA->GetBool(2);
-    float cacheSeconds = (float)LUA->CheckNumber(3);
+	CBasePlayer* ply = Util::Get_Player(LUA, 1, true);
+	bool bEnable = LUA->GetBool(2);
+	float cacheSeconds = (float)LUA->CheckNumber(3);
 
-    int idx = -1;
-    if (ply && ply->edict())
-        idx = ply->edict()->m_EdictIndex;
+	int idx = -1;
+	if (ply && ply->edict())
+		idx = ply->edict()->m_EdictIndex;
 
-    if (idx < 1 || idx > HOLYLIB_MAX_PLAYERS)
-        LUA->ThrowError("pvs.SetAntiWallhack: invalid player index");
+	if (idx < 1 || idx > HOLYLIB_MAX_PLAYERS)
+		LUA->ThrowError("pvs.SetAntiWallhack: invalid player index");
 
-    g_HolyPVS_AWHEnabled[idx] = bEnable;
-    g_HolyPVS_AWHCacheSeconds[idx] = cacheSeconds;
-    if (!bEnable)
-    {
-        for (int i=1;i<=HOLYLIB_MAX_PLAYERS;++i)
-        {
-            g_LOSNext[idx][i] = 0.0f;
-            g_LOSVis[idx][i] = 0;
-        }
-    }
+	g_HolyPVS_AWHSeen[idx][0] = 0;
+	g_HolyPVS_AWHSeen[idx][1] = 0;
 
-    return 0;
+	for (int i = 1; i <= HOLYLIB_MAX_PLAYERS; ++i)
+	{
+		g_LOSNext[idx][i] = 0.0f;
+		g_LOSVis[idx][i] = 0;
+	}
+
+	g_HolyPVS_AWHEnabled[idx] = bEnable;
+	g_HolyPVS_AWHCacheSeconds[idx] = cacheSeconds;
+
+	return 0;
 }
+
 
 LUA_FUNCTION_STATIC(pvs_ResetPVS)
 {
