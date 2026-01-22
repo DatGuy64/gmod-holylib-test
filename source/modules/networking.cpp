@@ -31,6 +31,7 @@
 extern bool g_HolyPVS_AWHEnabled[HOLYLIB_MAX_PLAYERS + 1];
 extern float g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1];
 extern uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2];
+extern uint64_t g_HolyPVS_AWHWhitelist[HOLYLIB_MAX_PLAYERS + 1][2];
 
 bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds);
 
@@ -1898,6 +1899,15 @@ static inline void HolyPVS_AWHSeenSet(int viewerSlot, int targetSlot)
     g_HolyPVS_AWHSeen[viewerSlot][word] |= mask;
 }
 
+static inline bool HolyPVS_AWHWhitelistTest(int viewerSlot, int targetSlot)
+{
+	const int bit = targetSlot - 1;
+	const int word = (bit >> 6);
+	const uint64_t mask = 1ULL << (bit & 63);
+	return (g_HolyPVS_AWHWhitelist[viewerSlot][word] & mask) != 0ULL;
+}
+
+
 static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo)
 {
 	if (!g_HolyPVS_AWHEnabled[viewerSlot])
@@ -1918,6 +1928,8 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 
 		CBaseEntity* targetEnt = g_pEntityCache[i];
 		if (!targetEnt) continue;
+		if (HolyPVS_AWHWhitelistTest(viewerSlot, i))
+			continue; 
 
 		if (!HolyPVS_AWHSeenTest(viewerSlot, i))
 		{
@@ -2555,7 +2567,6 @@ void CNetworkingModule::ClientDisconnect(edict_t* pPlayer)
 
 #if MODULE_EXISTS_PVS
 	// Reset AWH state for this slot so the next player reusing the slot doesn't inherit it.
-	if (pPlayer)
 		HolyPVS_ResetAWHSlot(pPlayer->m_EdictIndex);
 #endif
 }

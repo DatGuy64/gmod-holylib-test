@@ -45,6 +45,7 @@ static int mapPVSSize = -1;
 bool g_HolyPVS_AWHEnabled[HOLYLIB_MAX_PLAYERS + 1] = { false };
 float g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1] = { 0.0f };
 uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2] = { {0,0} };
+uint64_t g_HolyPVS_AWHWhitelist[HOLYLIB_MAX_PLAYERS + 1][2] = { {0,0} };
 static float g_LOSNext[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
 static unsigned char g_LOSVis[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
 
@@ -59,6 +60,9 @@ void HolyPVS_ResetAWHSlot(int idx)
 	g_HolyPVS_AWHSeen[idx][0] = 0;
 	g_HolyPVS_AWHSeen[idx][1] = 0;
 
+
+	g_HolyPVS_AWHWhitelist[idx][0] = 0;
+	g_HolyPVS_AWHWhitelist[idx][1] = 0;
 	for (int i = 1; i <= HOLYLIB_MAX_PLAYERS; ++i)
 	{
 		g_LOSNext[idx][i] = 0.0f;
@@ -475,8 +479,143 @@ LUA_FUNCTION_STATIC(pvs_SetAntiWallhack)
 	g_HolyPVS_AWHEnabled[idx] = bEnable;
 	g_HolyPVS_AWHCacheSeconds[idx] = cacheSeconds;
 
+	if (!bEnable)
+	{
+		g_HolyPVS_AWHWhitelist[idx][0] = 0;
+		g_HolyPVS_AWHWhitelist[idx][1] = 0;
+	}
+
 	return 0;
 }
+
+static inline void HolyPVS_AWHWhitelistSetBit(int viewerSlot, int targetSlot)
+{
+	const int bit = targetSlot - 1;
+	const int word = (bit >> 6);
+	const uint64_t mask = 1ULL << (bit & 63);
+	g_HolyPVS_AWHWhitelist[viewerSlot][word] |= mask;
+}
+
+static inline void HolyPVS_AWHWhitelistClearBit(int viewerSlot, int targetSlot)
+{
+	const int bit = targetSlot - 1;
+	const int word = (bit >> 6);
+	const uint64_t mask = 1ULL << (bit & 63);
+	g_HolyPVS_AWHWhitelist[viewerSlot][word] &= ~mask;
+}
+
+static inline void HolyPVS_AWHWhitelistClearAll(int viewerSlot)
+{
+	g_HolyPVS_AWHWhitelist[viewerSlot][0] = 0;
+	g_HolyPVS_AWHWhitelist[viewerSlot][1] = 0;
+}
+
+static inline int HolyPVS_GetPlayerSlot(GarrysMod::Lua::ILuaInterface* LUA, int arg)
+{
+	CBasePlayer* ply = Util::Get_Player(LUA, arg, true);
+	edict_t* ed = ply ? ply->edict() : nullptr;
+	int idx = ed ? ed->m_EdictIndex : -1;
+	if (idx < 1 || idx > HOLYLIB_MAX_PLAYERS)
+		LUA->ThrowError("pvs.AWHWhitelist*: invalid viewer player index");
+	return idx;
+}
+
+static inline int HolyPVS_GetTargetSlot(GarrysMod::Lua::ILuaInterface* LUA, int arg)
+{
+	CBaseEntity* ent = Util::Get_Entity(LUA, arg, true);
+	if (!ent || !ent->IsPlayer())
+		LUA->ThrowError("pvs.AWHWhitelist*: target must be a Player entity");
+	edict_t* ed = ent->edict();
+	int idx = ed ? ed->m_EdictIndex : -1;
+	if (idx < 1 || idx > HOLYLIB_MAX_PLAYERS)
+		LUA->ThrowError("pvs.AWHWhitelist*: invalid target player index");
+	return idx;
+}
+
+static void HolyPVS_AWHWhitelistApplyTable(GarrysMod::Lua::ILuaInterface* LUA, int tableArg, int viewerSlot, bool bAdd)
+{
+	LUA->Push(tableArg);
+	LUA->PushNil();
+	while (LUA->Next(-2))
+	{
+		// value is at -1
+		CBaseEntity* ent = Util::Get_Entity(LUA, -1, true);
+		if (ent && ent->IsPlayer())
+		{
+			edict_t* ed = ent->edict();
+			int targetSlot = ed ? ed->m_EdictIndex : -1;
+			if (targetSlot >= 1 && targetSlot <= HOLYLIB_MAX_PLAYERS)
+			{
+				if (bAdd) HolyPVS_AWHWhitelistSetBit(viewerSlot, targetSlot);
+				else HolyPVS_AWHWhitelistClearBit(viewerSlot, targetSlot);
+			}
+		}
+		LUA->Pop(1);
+	}
+	LUA->Pop(1);
+}
+
+LUA_FUNCTION_STATIC(pvs_AWHWhitelistAdd)
+{
+	const int viewerSlot = HolyPVS_GetPlayerSlot(LUA, 1);
+
+	if (LUA->IsType(2, GarrysMod::Lua::Type::Table))
+	{
+		HolyPVS_AWHWhitelistApplyTable(LUA, 2, viewerSlot, true);
+#if MODULE_EXISTS_ENTITYLIST
+	} else if (Is_EntityList(LUA, 2)) {
+		EntityList* entList = Get_EntityList(LUA, 2, true);
+		for (CBaseEntity* ent : entList->GetEntities())
+		{
+			if (!ent || !ent->IsPlayer()) continue;
+			edict_t* ed = ent->edict();
+			int targetSlot = ed ? ed->m_EdictIndex : -1;
+			if (targetSlot >= 1 && targetSlot <= HOLYLIB_MAX_PLAYERS)
+				HolyPVS_AWHWhitelistSetBit(viewerSlot, targetSlot);
+		}
+#endif
+	} else {
+		const int targetSlot = HolyPVS_GetTargetSlot(LUA, 2);
+		HolyPVS_AWHWhitelistSetBit(viewerSlot, targetSlot);
+	}
+
+	return 0;
+}
+
+LUA_FUNCTION_STATIC(pvs_AWHWhitelistRemove)
+{
+	const int viewerSlot = HolyPVS_GetPlayerSlot(LUA, 1);
+
+	if (LUA->IsType(2, GarrysMod::Lua::Type::Table))
+	{
+		HolyPVS_AWHWhitelistApplyTable(LUA, 2, viewerSlot, false);
+#if MODULE_EXISTS_ENTITYLIST
+	} else if (Is_EntityList(LUA, 2)) {
+		EntityList* entList = Get_EntityList(LUA, 2, true);
+		for (CBaseEntity* ent : entList->GetEntities())
+		{
+			if (!ent || !ent->IsPlayer()) continue;
+			edict_t* ed = ent->edict();
+			int targetSlot = ed ? ed->m_EdictIndex : -1;
+			if (targetSlot >= 1 && targetSlot <= HOLYLIB_MAX_PLAYERS)
+				HolyPVS_AWHWhitelistClearBit(viewerSlot, targetSlot);
+		}
+#endif
+	} else {
+		const int targetSlot = HolyPVS_GetTargetSlot(LUA, 2);
+		HolyPVS_AWHWhitelistClearBit(viewerSlot, targetSlot);
+	}
+
+	return 0;
+}
+
+LUA_FUNCTION_STATIC(pvs_AWHWhitelistClear)
+{
+	const int viewerSlot = HolyPVS_GetPlayerSlot(LUA, 1);
+	HolyPVS_AWHWhitelistClearAll(viewerSlot);
+	return 0;
+}
+
 
 
 LUA_FUNCTION_STATIC(pvs_ResetPVS)
