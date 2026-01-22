@@ -1540,6 +1540,10 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 		Util::AddFunc(pLua, pvs_RemoveAllEntityFromTransmit, "RemoveAllEntityFromTransmit");
 		Util::AddFunc(pLua, pvs_AddEntityToTransmit, "AddEntityToTransmit");
 
+		Util::AddFunc(pLua, pvs_AWHWhitelistAdd, "AWHWhitelistAdd");
+		Util::AddFunc(pLua, pvs_AWHWhitelistRemove, "AWHWhitelistRemove");
+		Util::AddFunc(pLua, pvs_AWHWhitelistClear, "AWHWhitelistClear");
+
 		Util::AddFunc(pLua, pvs_EnablePreTransmitHook, "EnablePreTransmitHook");
 		Util::AddFunc(pLua, pvs_EnablePostTransmitHook, "EnablePostTransmitHook");
 
