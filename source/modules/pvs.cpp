@@ -136,8 +136,8 @@ static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target
     if (!viewer || !target)
         return false;
 
-    CBasePlayer* ply = Util::Get_Player(LUA, 1, true);
-	Vector viewerEye = ply->GetAbsOrigin() + ply->GetViewOffset();
+    CBasePlayer* pl = static_cast<CBasePlayer*>(viewer);
+	Vector viewerEye = pl->GetAbsOrigin() + pl->GetViewOffset();
 
     auto* col = target->CollisionProp();
     if (!col)
