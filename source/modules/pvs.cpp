@@ -128,16 +128,16 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
 	Ray_t ray;
 	ray.Init(start, end);
 	enginetrace->TraceRay(ray, MASK_OPAQUE | CONTENTS_IGNORE_NODRAW_OPAQUE, &g_HolyLibTraceFilterWorldOnly, &tr);
-	return tr.fraction == 1.0f;
+	return tr.fraction > 0.97f;
 }
 
 static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
 {
     if (!viewer || !target)
         return false;
-
-    CBasePlayer* pl = static_cast<CBasePlayer*>(viewer);
-	Vector viewerEye = pl->GetAbsOrigin() + pl->GetViewOffset();
+	
+	Vector viewerEye = pl->EyePosition();
+	viewerEye -= f * 16.0f;
 
     auto* col = target->CollisionProp();
     if (!col)
