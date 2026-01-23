@@ -136,7 +136,7 @@ static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target
     if (!viewer || !target)
         return false;
 
-    Vector viewerEye = viewer->GetShootPos();
+    Vector viewerEye = viewer->GetAbsOrigin();
 
     auto* col = target->CollisionProp();
     if (!col)
@@ -506,17 +506,17 @@ LUA_FUNCTION_STATIC(pvs_SetAntiWallhack)
 static inline void HolyPVS_AWHWhitelistSetBit(int viewerSlot, int targetSlot)
 {
 	const int bit = targetSlot - 1;
-	const int word = (bit >> 6);
+	const int wordIdx = (bit >> 6);
 	const uint64_t mask = 1ULL << (bit & 63);
-	g_HolyPVS_AWHWhitelist[viewerSlot][word] |= mask;
+	g_HolyPVS_AWHWhitelist[viewerSlot][wordIdx] |= mask;
 }
 
 static inline void HolyPVS_AWHWhitelistClearBit(int viewerSlot, int targetSlot)
 {
 	const int bit = targetSlot - 1;
-	const int word = (bit >> 6);
+	const int wordIdx = (bit >> 6);
 	const uint64_t mask = 1ULL << (bit & 63);
-	g_HolyPVS_AWHWhitelist[viewerSlot][word] &= ~mask;
+	g_HolyPVS_AWHWhitelist[viewerSlot][wordIdx] &= ~mask;
 }
 
 static inline void HolyPVS_AWHWhitelistClearAll(int viewerSlot)
