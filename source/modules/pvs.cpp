@@ -138,12 +138,6 @@ static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target
 
     Vector viewerEye = viewer->EyePosition();
 
-    QAngle ang = viewer->EyeAngles();
-    Vector f;
-    AngleVectors(ang, &f);
-
-    viewerEye -= f * 16.0f;
-
     auto* col = target->CollisionProp();
     if (!col)
         return false;
