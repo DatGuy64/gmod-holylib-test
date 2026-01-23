@@ -136,7 +136,7 @@ static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target
     if (!viewer || !target)
         return false;
 
-    Vector viewerEye = viewer->EyePosition();
+    Vector viewerEye = viewer->GetShootPos();
 
     auto* col = target->CollisionProp();
     if (!col)
