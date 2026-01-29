@@ -739,6 +739,11 @@ namespace Symbols
 		Symbol::FromSignature("\x55\x48\x89\xE5\x41\x57\x49\x89\xF7\x41\x56\x45\x31\xF6")//55 48 89 E5 41 57 49 89 F7 41 56 45 31 F6
 	};
 
+	const std::vector<Symbol> CVoiceGameMgrHelper_CanPlayerHearPlayerSym = { // Good luck.
+		Symbol::FromName("_ZN19CVoiceGameMgrHelper19CanPlayerHearPlayerEP11CBasePlayerS1_Rb"),
+		// Needs all other platforms.
+	};
+
 	const std::vector<Symbol> IVP_Mindist_simulate_time_eventSym = {
 		Symbol::FromName("_ZN11IVP_Mindist19simulate_time_eventEP15IVP_Environment"),
 	};
