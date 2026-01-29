@@ -194,7 +194,7 @@ static void hook_luaL_openlibs(lua_State* L)
 }
 
 /*
-ToDo: Redo this entire class and move all LuaJIT specific stuff from lua.cpp into here to seperate shit from CORE code!
+ToDo: Redo this entire class and move all LuaJIT specific stuff from lua.cpp into here to separate shit from CORE code!
 class CLuaInterfaceProxy : public Detouring::ClassProxy<GarrysMod::Lua::ILuaInterface, CLuaInterfaceProxy> {
 public:
 	CLuaInterfaceProxy(GarrysMod::Lua::ILuaInterface* env) {
@@ -431,7 +431,9 @@ void CLuaJITModule::InitDetour(bool bPreServer)
 	Override(lua_rawseti);
 	Override(lua_remove);
 	Override(lua_replace);
+#ifdef ARCHITECTURE_X86
 	Override(lua_resume);
+#endif
 	Override(lua_setallocf);
 	Override(lua_setfenv);
 	Override(lua_setfield);
@@ -472,10 +474,12 @@ void CLuaJITModule::InitDetour(bool bPreServer)
 	Util::func_lua_setfenv = &lua_setfenv;
 	Util::func_lua_touserdata = &lua_touserdata;
 	Util::func_lua_type = &lua_type;
+	Util::func_lua_gc = &lua_gc;
 	Util::func_luaL_checklstring = &luaL_checklstring;
 	Util::func_lua_pcall = &lua_pcall;
 	Util::func_lua_insert = &lua_insert;
 	Util::func_lua_toboolean = &lua_toboolean;
+	Util::func_lua_setallocf = &lua_setallocf;
 	Util::func_lj_gc_barrierf = (Symbols::lj_gc_barrierf)&lj_gc_barrierf;
 	Util::func_lj_tab_get = (Symbols::lj_tab_get)&lj_tab_get;
 

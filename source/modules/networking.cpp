@@ -26,6 +26,17 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
+#define HOLYLIB_MAX_PLAYERS 128
+
+extern bool g_HolyPVS_AWHEnabled[HOLYLIB_MAX_PLAYERS + 1];
+extern bool g_HolyPVS_AWHJustEnabled[HOLYLIB_MAX_PLAYERS + 1];
+extern float g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1];
+extern uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2];
+extern uint64_t g_HolyPVS_AWHWhitelist[HOLYLIB_MAX_PLAYERS + 1][2];
+
+bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds);
+
+
 class CNetworkingModule : public IModule
 {
 public:
@@ -186,7 +197,7 @@ static bool hook_CBaseEntity_GMOD_ShouldPreventTransmitToPlayer(CBaseEntity* ent
 	return g_pShouldPrevent[pPlayerEdict->m_EdictIndex-1].IsBitSet(pEdict->m_EdictIndex);
 }
 
-static void CleaupSetPreventTransmit(const CBaseEntity* ent)
+static void CleanupSetPreventTransmit(const CBaseEntity* ent)
 {
 	const edict_t* pEdict = ent->edict();
 	if (!pEdict)
@@ -229,7 +240,7 @@ static void hook_CBaseEntity_GMOD_SetShouldPreventTransmitToPlayer(CBaseEntity* 
 // HolyLib part
 
 static Detouring::Hook detour_CGMOD_Player_CreateViewModel;
-static ConVar networking_maxviewmodels("holylib_networking_maxviewmodels", "3", 0, "Determins how many view models each player gets.", true, 0, true, 3);
+static ConVar networking_maxviewmodels("holylib_networking_maxviewmodels", "3", 0, "Determines how many view models each player gets.", true, 0, true, 3);
 static void hook_CGMOD_Player_CreateViewModel(CBasePlayer* pPlayer, int viewmodelindex)
 {
 	if (viewmodelindex >= networking_maxviewmodels.GetInt())
@@ -838,7 +849,7 @@ static inline void CBitVec_AndNot(CBitVec<MAX_EDICTS>* a, const CBitVec<MAX_EDIC
 
 /*
  * For now this is called from the pvs module meaning we RELY on it.
- * What did we change? basicly nothing yet. I'm just testing around.
+ * What did we change? basically nothing yet. I'm just testing around.
  * 
  * NOTE: It's shit & somehow were loosing performance to something. Probably us detouring it is causing our performance loss.
  */
@@ -847,7 +858,7 @@ static CBaseEntity* g_pEntityCache[MAX_EDICTS] = {nullptr};
 bool g_pReplaceCServerGameEnts_CheckTransmit = false;
 static edict_t* world_edict = nullptr;
 
-// Offset & helper functins
+// Offset & helper functions
 
 static DTVarByOffset m_Local_Offset("DT_LocalPlayerExclusive", "m_Local");
 static DTVarByOffset m_SkyBox3DArea_Offset("DT_Local", "m_skybox3d.area");
@@ -1055,7 +1066,7 @@ struct EntityTransmitCache // Well.... Still kinda acts as a tick-based cache, t
 			if (pEnt)
 			{
 				if (pEnt->edict() != pEdict)
-					Warning(PROJECT_NAME " - networking: Entity chache is unreliable! We are cooked!\n");
+					Warning(PROJECT_NAME " - networking: Entity cache is unreliable! We are cooked!\n");
 
 				if (nFlags == FL_EDICT_FULLCHECK)
 				{
@@ -1337,7 +1348,7 @@ struct PlayerTransmitCache
 				nLastAcknowledgedTick = pClient->GetMaxAckTickCount(); // pClient->m_nDeltaTick;
 				// Verify: GetMaxAckTickCount may be inaccurate for our use case since we need m_nDeltaTick?
 				// if (pClient->m_nDeltaTick != pClient->GetMaxAckTickCount())
-				// 	DevMsg(PROJECT_NAME " - networking: Interresting... for client %i (ent index) the delta tick %i differs from the MaxAckTick %i (%i)\n", pPlayer->edict()->m_EdictIndex, pClient->m_nDeltaTick, pClient->GetMaxAckTickCount(), nFullUpdateTick);
+				// 	DevMsg(PROJECT_NAME " - networking: Interesting... for client %i (ent index) the delta tick %i differs from the MaxAckTick %i (%i)\n", pPlayer->edict()->m_EdictIndex, pClient->m_nDeltaTick, pClient->GetMaxAckTickCount(), nFullUpdateTick);
 				if (pClient->IsFakeClient() && sv_stressbots && !sv_stressbots->GetBool())
 					nLastAcknowledgedTick = gpGlobals->tickcount;
 			} else {
@@ -1586,7 +1597,7 @@ static void hook_CBaseCombatCharacter_SetTransmit(CBaseCombatCharacter* pCharact
 			NETWORKING_SETSTATE(pActiveWeapon->edict()->m_EdictIndex, pOKPlayerTransmit)
 		}
 
-#if !NETWORKING_USE_ENTITYCACHE // Our cache already removes them from transmit by default and expects us here to decide whos are networked.
+#if !NETWORKING_USE_ENTITYCACHE // Our cache already removes them from transmit by default and expects us here to decide whose are networked.
 		int nEdictIndex = pCharacterEdict->m_EdictIndex-1;
 		if (!g_bFilledDontTransmitWeaponCache[nEdictIndex])
 		{
@@ -1699,7 +1710,7 @@ static void TransmitFastPathPlayer(CBasePlayer* pRecipientPlayer, int clientInde
 	if (pInfo->m_pTransmitAlways)
 		nOtherCache.pClientBitVec.CopyTo(pInfo->m_pTransmitAlways);
 
-	// g_pPlayerTransmitCacheBitVec won't contain any information about the client the cache was build upon, so we need to call SetTransmit ourselfs.
+	// g_pPlayerTransmitCacheBitVec won't contain any information about the client the cache was build upon, so we need to call SetTransmit ourselves.
 	// & yes, using the g_pEntityCache like this is safe, even if it doesn't look save - Time to see how long it'll take until I regret writing this
 	g_pEntityCache[iOtherClient+1]->SetTransmit(pInfo, true);
 	pRecipientPlayer->SetTransmit(pInfo, true);
@@ -1869,9 +1880,103 @@ static inline void DoTransmitPVSCheck(edict_t* pEdict, CBaseEntity* pEnt, const 
 }
 
 static Detouring::Hook detour_CServerGameEnts_CheckTransmit;
-static ConVar networking_verifyshit("holylib_networking_verifyshit", "1", 0, "Experimental");
+static ConVar networking_verifyshit("holylib_networking_verifyshit", "0", 0, "Experimental");
 static ConVar networking_fastpath("holylib_networking_fastpath", "0", 0, "Experimental - If two players are in the same area, then it will reuse the transmit state of the first calculated player saving a lot of time");
 static ConVar networking_fastpath_usecluster("holylib_networking_fastpath_usecluster", "1", 0, "Experimental - When using the fastpatth, it will compate against clients in the same cluster instead of area");
+
+static inline bool HolyPVS_AWHSeenTest(int viewerSlot, int targetSlot)
+{
+    const int bit = targetSlot - 1;
+    const int word = (bit >> 6);
+    const uint64_t mask = 1ULL << (bit & 63);
+    return (g_HolyPVS_AWHSeen[viewerSlot][word] & mask) != 0ULL;
+}
+
+static inline void HolyPVS_AWHSeenSet(int viewerSlot, int targetSlot)
+{
+    const int bit = targetSlot - 1;
+    const int word = (bit >> 6);
+    const uint64_t mask = 1ULL << (bit & 63);
+    g_HolyPVS_AWHSeen[viewerSlot][word] |= mask;
+}
+
+static inline bool HolyPVS_AWHWhitelistTest(int viewerSlot, int targetSlot)
+{
+	const int bit = targetSlot - 1;
+	const int word = (bit >> 6);
+	const uint64_t mask = 1ULL << (bit & 63);
+	return (g_HolyPVS_AWHWhitelist[viewerSlot][word] & mask) != 0ULL;
+}
+
+
+static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo)
+{
+	if (!g_HolyPVS_AWHEnabled[viewerSlot])
+		return;
+
+	//VPROF_BUDGET("HolyLib - AntiWallhack", VPROF_BUDGETGROUP_OTHER_NETWORKING);
+	const bool forceBurst = g_HolyPVS_AWHJustEnabled[viewerSlot];
+
+	const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
+	const int maxClients = gpGlobals->maxClients;
+
+	CBitVec<MAX_EDICTS>* pTransmitBits = pInfo->m_pTransmitEdict;
+	CBitVec<MAX_EDICTS>* pAlwaysBits = pInfo->m_pTransmitAlways;
+
+	for (int i = 1; i <= maxClients; ++i)
+	{
+		if (i == viewerSlot) continue;
+
+		CBaseEntity* targetEnt = g_pEntityCache[i];
+		if (!targetEnt) continue;
+		if (HolyPVS_AWHWhitelistTest(viewerSlot, i))
+			continue;
+
+		if (forceBurst)
+		{
+			HolyPVS_AWHSeenSet(viewerSlot, i);
+			if (!pTransmitBits->Get(i))
+			{
+				pTransmitBits->Set(i);
+				if (pAlwaysBits) pAlwaysBits->Set(i);
+			}
+			continue;
+		}
+
+		if (!pTransmitBits->Get(i)) continue;
+
+		if (!HolyPVS_AWHSeenTest(viewerSlot, i))
+		{
+			HolyPVS_AWHSeenSet(viewerSlot, i);
+			continue;
+		}
+
+		if (!HolyPVS_VisibleByLOS(viewer, targetEnt, cacheSeconds))
+		{
+			pTransmitBits->Clear(i);
+			if (pAlwaysBits) pAlwaysBits->Clear(i);
+
+			for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
+			{
+				edict_t* chEd = ch->edict();
+				if (!chEd) continue;
+
+				const int idx = chEd->m_EdictIndex;
+				if (idx <= maxClients) continue;
+
+				if (pTransmitBits->Get(idx))
+				{
+					pTransmitBits->Clear(idx);
+					if (pAlwaysBits) pAlwaysBits->Clear(idx);
+				}
+			}
+		}
+	}
+
+	if (forceBurst)
+		g_HolyPVS_AWHJustEnabled[viewerSlot] = false;
+}
+
 bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)
 {
 	if (!networking_fasttransmit.GetBool() || !gpGlobals || !engine || !mdlcache || !func_CBaseAnimating_SetTransmit)
@@ -1895,7 +2000,7 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 	const Vector& clientPosition = (pRecipientPlayer->GetViewEntity() != nullptr) ? pRecipientPlayer->GetViewEntity()->EyePosition() : pRecipientPlayer->EyePosition();
 	const int clientArea = networking_fastpath_usecluster.GetBool() ? Util::engineserver->GetClusterForOrigin(clientPosition) : Util::engineserver->GetArea(clientPosition);
 
-	// NOTE: We intentionally use GetArea and not GetCluster, since a Area is far bigger than a cluster & it should work good enouth.
+	// NOTE: We intentionally use GetArea and not GetCluster, since a Area is far bigger than a cluster & it should work good enough.
 	// Possible BUG: The PVS might hate us for doing such a cruel thing to it. Anyways >:3
 
 	// ToDo: Bring over's CS:GO code for InitialSpawnTime
@@ -1909,7 +2014,8 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 	if (bFirstTransmit)
 	{
 		if (bFastPath)
-			Plat_FastMemset(g_pPlayerTransmitTickCache, 0, sizeof(g_pPlayerTransmitTickCache));
+			for (int __i = 0; __i < (int)(sizeof(g_pPlayerTransmitTickCache) / sizeof(g_pPlayerTransmitTickCache[0])); ++__i)
+				g_pPlayerTransmitTickCache[__i] = PlayerTransmitTickCache();
 
 		for (int iPlayerIndex = 1; iPlayerIndex <= gpGlobals->maxClients; ++iPlayerIndex)
 		{
@@ -1934,7 +2040,7 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 		// if (bIsHLTV)
 		//	g_pGlobalTransmitTickCache.g_pAlwaysTransmitCacheBitVec.CopyTo(pInfo->m_pTransmitAlways);
 
-		if (bFastPath)
+		if (bFastPath && !(g_HolyPVS_AWHEnabled[clientIndex+1]))
 		{
 			for (int iOtherClient = 0; iOtherClient<MAX_PLAYERS; ++iOtherClient)
 			{
@@ -2013,7 +2119,7 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 			if (pArea.nCount == 0)
 				continue;
 
-			// +1 since we shifted everythign by 1 to remove Area0 saving some KB
+			// +1 since we shifted everything by 1 to remove Area0 saving some KB
 			if (!Util::engineserver->CheckAreasConnected(nClientArea, nArea+1))
 				continue;
 
@@ -2074,7 +2180,7 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 			}
 		} else if (networking_transmit_onfullupdate_networktoothers.GetBool()) {
 			// In this case, if any other player is having a full update, we network them to all others
-			// simply because this ensures every player knows of every other players existance
+			// simply because this ensures every player knows of every other players existence
 			int nLastAcknowledgedTick = g_pPlayerTransmitCache[clientIndex].nLastAcknowledgedTick;
 			for (int iPlayerIndex = 1; iPlayerIndex <= gpGlobals->maxClients; ++iPlayerIndex)
 			{
@@ -2293,7 +2399,7 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 	if (bFastPath && !bIsHLTV && !(pRecipientPlayer->GetObserverMode() == OBS_MODE_IN_EYE && pRecipientPlayer->GetObserverTarget()))
 	{
 		PlayerTransmitTickCache& nTransmitCache = g_pPlayerTransmitTickCache[clientIndex];
-		// Remove player's viewmodels from the cache since thoes are supposed to only be networked to the recipient player
+		// Remove player's viewmodels from the cache since those are supposed to only be networked to the recipient player
 
 		pInfo->m_pTransmitEdict->CopyTo(&nTransmitCache.pClientBitVec);
 		CBitVec_AndNot(&nTransmitCache.pClientBitVec, &pClientCache);
@@ -2302,7 +2408,8 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 	pInfo->m_pTransmitEdict->Or(g_pGlobalTransmitTickCache.g_bWasSeenByPlayer, &g_pGlobalTransmitTickCache.g_bWasSeenByPlayer);
 //	Msg("A:%i, N:%i, F: %i, P: %i\n", always, dontSend, fullCheck, PVS );
 
-	return true;
+	ApplyAntiWallhackFastTransmit(pRecipientPlayer, clientIndex+1, pInfo);
+		return true;
 }
 
 void SV_FillHLTVData( CFrameSnapshot *pSnapshot, edict_t *edict, int iValidEdict )
@@ -2455,7 +2562,7 @@ void CNetworkingModule::OnEntityDeleted(CBaseEntity* pEntity)
 		return;
 
 	g_nEntityTransmitCache.EntityRemoved(pEntity, pEdict);
-	CleaupSetPreventTransmit(pEntity);
+	CleanupSetPreventTransmit(pEntity);
 	g_pEntityCache[pEdict->m_EdictIndex] = nullptr;
 	g_pForceWeaponTransmitIndexes.Clear(pEdict->m_EdictIndex);
 }
@@ -2467,9 +2574,18 @@ void CNetworkingModule::OnEntityCreated(CBaseEntity* pEntity)
 		g_pEntityCache[pEdict->m_EdictIndex] = pEntity;
 }
 
+#if MODULE_EXISTS_PVS
+extern void HolyPVS_ResetAWHSlot(int idx);
+#endif
+
 void CNetworkingModule::ClientDisconnect(edict_t* pPlayer)
 {
-	g_pPlayerTransmitCache[pPlayer->m_EdictIndex-1].Reset();
+	g_pPlayerTransmitCache[pPlayer->m_EdictIndex - 1].Reset();
+
+#if MODULE_EXISTS_PVS
+	// Reset AWH state for this slot so the next player reusing the slot doesn't inherit it.
+		HolyPVS_ResetAWHSlot(pPlayer->m_EdictIndex);
+#endif
 }
 
 #if MODULE_EXISTS_PVS
@@ -2952,9 +3068,9 @@ void WriteSendProp(SendProp* pProp, int nIndex, int nIndent, FileHandle_t pHandl
 	}
 	WriteString(pType, nIndent, pHandle);
 
-	std::string pElemets = "NumElement: ";
-	pElemets.append(std::to_string(pProp->GetNumElements()));
-	WriteString(pElemets, nIndent, pHandle);
+	std::string pElements = "NumElement: ";
+	pElements.append(std::to_string(pProp->GetNumElements()));
+	WriteString(pElements, nIndent, pHandle);
 
 	std::string pBits = "Bits: ";
 	pBits.append(std::to_string(pProp->m_nBits));

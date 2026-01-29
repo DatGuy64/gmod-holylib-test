@@ -335,7 +335,7 @@ static void hook_IVP_Event_Manager_Standard_simulate_time_events(void* eventmana
 	pCurrentSkipType = IVP_SkipType::IVP_None; // Idk if it can happen that something else sets it in the mean time but let's just be sure...
 
 	if (g_pPhysEnvModule.InDebug() > 2)
-		Msg(PROJECT_NAME " - physenv: IVP_Event_Manager_Standart::simulate_time_events called!\n");
+		Msg(PROJECT_NAME " - physenv: IVP_Event_Manager_Standard::simulate_time_events called!\n");
 
 	detour_IVP_Event_Manager_Standard_simulate_time_events.GetTrampoline<Symbols::IVP_Event_Manager_Standard_simulate_time_events>()(eventmanager, timemanager, environment, time);
 
@@ -1115,7 +1115,7 @@ LUA_FUNCTION_STATIC(physenv_DestroyEnvironment)
 	for (ILuaPhysicsEnvironment* ppLuaEnv : g_pCurrentEnvironment)
 	{
 		if (pLuaEnv == ppLuaEnv)
-			LUA->ThrowError("Tried to delete a IPhysicsEnvironment that is simulating!"); // Don't even dare.....
+			LUA->ArgError(1, "Tried to delete a IPhysicsEnvironment that is simulating!"); // Don't even dare.....
 	}
 
 	CPhysicsEnvironment* pEnvironment = (CPhysicsEnvironment*)pLuaEnv->pEnvironment;
@@ -1508,9 +1508,7 @@ LUA_FUNCTION_STATIC(IPhysicsEnvironment_Simulate)
 	bool onlyEntities = LUA->GetBool(3);
 
 	if (pEnvironment->IsInSimulation())
-	{
-		LUA->ThrowError("Tried to simulate a IPhysicsEnvironment that is already simulating!");
-	}
+		LUA->ArgError(1, "Tried to simulate a IPhysicsEnvironment that is already simulating!");
 
 	if (!func_CCollisionProperty_MarkSurroundingBoundsDirty)
 		Msg(PROJECT_NAME " - physenv: Missing CCollisionProperty::MarkSurroundingBoundsDirty so collision bounds might not update properly!");
@@ -1521,7 +1519,7 @@ LUA_FUNCTION_STATIC(IPhysicsEnvironment_Simulate)
 	{
 		if (pEnv == pLuaEnv)
 		{
-			LUA->ThrowError("Tried to simulate a IPhysicsEnvironment that is already simulating!");
+			LUA->ArgError(1, "Tried to simulate a IPhysicsEnvironment that is already simulating!");
 			return 0;
 		}
 	}
@@ -1598,7 +1596,7 @@ const objectparams_t g_PhysDefaultObjectParams =
 	1.0, // inertia
 	0.1f, // damping
 	0.1f, // rotdamping
-	0.05f, // rotIntertiaLimit
+	0.05f, // rotInertiaLimit
 	"DEFAULT",
 	nullptr,// game data
 	0.f, // volume (leave 0 if you don't have one or call physcollision->CollideVolume() to compute it)
@@ -2925,7 +2923,7 @@ void CPhysEnvModule::InitDetour(bool bPreServer)
 
 	if (!g_pModuleManager.IsUsingGhostInj()) // We return as else we'll break stuff.
 	{
-		Warning(PROJECT_NAME " - physenv: we weren't loaded early enouth! use the ghostinj and ensure that holylib is loaded properly!\n");
+		Warning(PROJECT_NAME " - physenv: we weren't loaded early enough! use the ghostinj and ensure that holylib is loaded properly!\n");
 		return;
 	}
 

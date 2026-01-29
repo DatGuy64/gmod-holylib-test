@@ -367,6 +367,7 @@ static void hook_CNetworkStringTable_Deconstructor(INetworkStringTable* tbl)
 {
 	DeleteGlobal_INetworkStringTable(tbl);
 	detour_CNetworkStringTable_Deconstructor.GetTrampoline<Symbols::CNetworkStringTable_Deconstructor>()(tbl);
+	// Loves to crash on Windows. Why? Idk.
 }
 
 LUA_FUNCTION_STATIC(INetworkStringTable__tostring)
@@ -577,7 +578,7 @@ LUA_FUNCTION_STATIC(INetworkStringTable_SetMaxEntries)
 	int maxEntries = (int)LUA->CheckNumber(2);
 	int maxEntryBits = Q_log2(maxEntries);
 	if ((1 << maxEntryBits) != maxEntries)
-		LUA->ThrowError("String tables must be powers of two in size!");
+		LUA->ArgError(2, "String tables must be powers of two in size!");
 
 	Util::DoUnsafeCodeCheck(LUA);
 
@@ -871,7 +872,7 @@ LUA_FUNCTION_STATIC(stringtable_CreateStringTable)
 	{
 		char err[255];
 		snprintf(err, sizeof(err), "Tried to create string table '%s' when it already exists!", name);
-		LUA->ThrowError(err);
+		LUA->ArgError(1, err);
 		return 0;
 	}
 
@@ -879,7 +880,7 @@ LUA_FUNCTION_STATIC(stringtable_CreateStringTable)
 	{
 		char err[255];
 		snprintf(err, sizeof(err), "Tried to create string table '%s' when the maxentries '%i' was NOT the power of two!", name, maxentries);
-		LUA->ThrowError(err);
+		LUA->ArgError(2, err);
 		return 0;
 	}
 
@@ -983,7 +984,7 @@ LUA_FUNCTION_STATIC(stringtable_CreateStringTableEx)
 	{
 		char err[255];
 		snprintf(err, sizeof(err), "Tried to create string table '%s' when it already exists!", name);
-		LUA->ThrowError(err);
+		LUA->ArgError(1, err);
 		return 0;
 	}
 
@@ -991,7 +992,7 @@ LUA_FUNCTION_STATIC(stringtable_CreateStringTableEx)
 	{
 		char err[255];
 		snprintf(err, sizeof(err), "Tried to create string table '%s' when the maxentries '%i' was NOT the power of two!", name, maxentries);
-		LUA->ThrowError(err);
+		LUA->ArgError(2, err);
 		return 0;
 	}
 
@@ -1202,6 +1203,7 @@ void CStringTableModule::InitDetour(bool bPreServer)
 	if (bPreServer)
 		return;
 
+#if SYSTEM_LINUX
 	// Note: This hook exists for safety and if everything goes well we shouldn't even require it.
 	SourceSDK::ModuleLoader engine_loader("engine");
 	Detour::Create(
@@ -1212,4 +1214,5 @@ void CStringTableModule::InitDetour(bool bPreServer)
 
 	func_CNetworkStringTable_DeleteAllStrings = (Symbols::CNetworkStringTable_DeleteAllStrings)Detour::GetFunction(engine_loader.GetModule(), Symbols::CNetworkStringTable_DeleteAllStringsSym);
 	Detour::CheckFunction((void*)func_CNetworkStringTable_DeleteAllStrings, "CNetworkStringTable::DeleteAllStrings");
+#endif
 }

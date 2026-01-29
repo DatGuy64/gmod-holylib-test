@@ -270,27 +270,35 @@ byte m_##name = 0;
 
 	template<class T>
 	inline T* ResolveSymbolNoDereference(
+		SourceSDK::FactoryLoader& pLoader, const std::vector<Symbol>& pSymbols
+	)
+	{
+	#if DETOUR_SYMBOL_ID != 0
+		if ((pSymbols.size()-1) < DETOUR_SYMBOL_ID)
+			return nullptr;
+	#endif
+
+		return reinterpret_cast<T*>(symfinder.Resolve(
+			pLoader.GetModule(), pSymbols[DETOUR_SYMBOL_ID].name.c_str(), pSymbols[DETOUR_SYMBOL_ID].length
+		));
+	}
+
+	template<class T>
+	inline T* ResolveSymbolNoDereference(
 		SourceSDK::FactoryLoader& pLoader, Symbol& pSymbol
 	)
 	{
-	#if defined SYSTEM_WINDOWS
-		auto iface = reinterpret_cast<T*>(symfinder.Resolve(
-			pLoader.GetModule(), pSymbol.name.c_str(), pSymbol.length
-		));
-		return iface != nullptr ? iface : nullptr;
-	#elif defined SYSTEM_POSIX
 		return reinterpret_cast<T*>(symfinder.Resolve(
 			pLoader.GetModule(), pSymbol.name.c_str(), pSymbol.length
 		));
-	#endif
 	}
 
 	/*
 	 * This function is used to resolve a global variable on a version without symbols.
 
-		Let's take per exemple g_PathIDTable
+		Let's take per example g_PathIDTable
 
-		To retrive it on x86 we need to use the symbol cause it's the simplest way, but on x64 we need to find a workaround.
+		To retrieve it on x86 we need to use the symbol cause it's the simplest way, but on x64 we need to find a workaround.
 
 		So i (and grok) end up with the idea to use the signature of a function that call g_PathIDTable somewhere and then use a offset to get the address of g_PathIDTable.
 

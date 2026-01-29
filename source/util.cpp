@@ -20,7 +20,7 @@
 #undef isalnum // 64x loves to shit on this one
 
 // Try not to use it. We want to move away from it.
-// Additionaly, we will add checks in many functions.
+// Additionally, we will add checks in many functions.
 GarrysMod::Lua::ILuaInterface* g_Lua = nullptr;
 
 IVEngineServer* engine = nullptr;
@@ -93,7 +93,7 @@ CBasePlayer* Util::Get_Player(GarrysMod::Lua::ILuaInterface* LUA, int iStackPos,
 		CBaseEntity* pEntity = pObj->GetEntity();
 
 		if (!pEntity && bError)
-			LUA->ThrowError("Tried to use a NULL Entity!");
+			LUA->ArgError(iStackPos, "Tried to use a NULL Entity!");
 
 		return (CBasePlayer*)pEntity;
 	}
@@ -102,7 +102,7 @@ CBasePlayer* Util::Get_Player(GarrysMod::Lua::ILuaInterface* LUA, int iStackPos,
 	if (!pEntHandle)
 	{
 		if (bError)
-			LUA->ThrowError("Tried to use a NULL Entity!");
+			LUA->ArgError(iStackPos, "Tried to use a NULL Entity!");
 
 		return nullptr;
 	}
@@ -111,7 +111,7 @@ CBasePlayer* Util::Get_Player(GarrysMod::Lua::ILuaInterface* LUA, int iStackPos,
 	if (!pEntity->IsPlayer())
 	{
 		if (bError)
-			LUA->ThrowError("Player entity is NULL or not a player (!?)");
+			LUA->ArgError(iStackPos, "Player entity is NULL or not a player (!?)");
 
 		return nullptr;
 	}
@@ -207,20 +207,20 @@ CBaseEntity* Util::Get_Entity(GarrysMod::Lua::ILuaInterface* LUA, int iStackPos,
 		CBaseEntity* pEntity = pObj->GetEntity();
 
 		if (!pEntity && bError)
-			LUA->ThrowError("Tried to use a NULL Entity!");
+			LUA->ArgError(iStackPos, "Tried to use a NULL Entity!");
 
 		return pEntity;
 	}
 
 	EHANDLE* pEntHandle = LUA->GetUserType<EHANDLE>(iStackPos, GarrysMod::Lua::Type::Entity);
 	if (!pEntHandle && bError)
-		LUA->ThrowError("Tried to use a NULL Entity!");
+		LUA->ArgError(iStackPos, "Tried to use a NULL Entity!");
 
 	CBaseEntity* pEntity = Util::entitylist->GetBaseEntity(*pEntHandle);
 	if (!pEntity && bError)
 	{
 		Warning(PROJECT_NAME ": EHANDLE Index %i - %i\n", pEntHandle->GetEntryIndex(), pEntHandle->GetSerialNumber());
-		LUA->ThrowError("Tried to use a NULL Entity! (The weird case?)");
+		LUA->ArgError(iStackPos, "Tried to use a NULL Entity! (The weird case?)");
 	}
 		
 	return pEntity;
@@ -278,7 +278,108 @@ CBasePlayer* Util::GetPlayerByClient(CBaseClient* client)
 	return (CBasePlayer*)servergameents->EdictToBaseEntity(engineserver->PEntityOfEntIndex(client->GetPlayerSlot() + 1));
 }
 
-void Util::ResetClusers(VisData* data)
+int Util::Get_ClientIndex(GarrysMod::Lua::ILuaInterface* pLua, int iStackPos, bool bError)
+{
+	int iClient = -1;
+	int nType = pLua->GetType(iStackPos);
+	if (nType == GarrysMod::Lua::Type::Number)
+	{
+		iClient = (int)pLua->GetNumber(iStackPos);
+	} else {
+#if MODULE_EXISTS_GAMESERVER
+		Lua::StateData* pState = Lua::GetLuaData(pLua);
+		if (pState->GetMetaTable(TO_LUA_TYPE(CBaseClient)) == nType)
+		{
+			CBaseClient* pClient = Get_CBaseClient(pLua, iStackPos, bError);
+			if (pClient)
+				iClient = pClient->GetPlayerSlot();
+		} else
+#endif
+		{
+			CBasePlayer* pPlayer = Util::Get_Player(pLua, iStackPos, bError);
+			if (pPlayer)
+				iClient = pPlayer->edict()->m_EdictIndex-1;
+		}
+	}
+
+	if (iClient < 0 || iClient >= gpGlobals->maxClients)
+	{
+		if (bError)
+			pLua->ArgError(iStackPos, "Failed to get a valid Client index!");
+
+		return -1;
+	}
+
+	return iClient;
+}
+
+CBaseClient* Util::Get_Client(GarrysMod::Lua::ILuaInterface* pLua, int iStackPos, bool bError)
+{
+	CBaseClient* pClient = nullptr;
+	int nType = pLua->GetType(iStackPos);
+	if (nType == GarrysMod::Lua::Type::Number)
+	{
+		int iClient = (int)pLua->GetNumber(iStackPos);
+		pClient = Util::GetClientByIndex(iClient);
+	} else {
+#if MODULE_EXISTS_GAMESERVER
+		Lua::StateData* pState = Lua::GetLuaData(pLua);
+		if (pState->GetMetaTable(TO_LUA_TYPE(CBaseClient)) == nType)
+		{
+			pClient = Get_CBaseClient(pLua, iStackPos, bError);
+		} else
+#endif
+		{
+			CBasePlayer* pPlayer = Util::Get_Player(pLua, iStackPos, bError);
+			if (pPlayer)
+				pClient = Util::GetClientByPlayer(pPlayer);
+		}
+	}
+
+	if (!pClient)
+	{
+		if (bError)
+			pLua->ArgError(iStackPos, "Failed to get a valid CBaseClient!");
+
+		return nullptr;
+	}
+
+	return pClient;
+}
+
+INetChannel* Util::Get_NetChannel(GarrysMod::Lua::ILuaInterface* pLua, int iStackPos, bool bError)
+{
+	INetChannel* pChannel = nullptr;
+	CBaseClient* pClient = nullptr;
+#if MODULE_EXISTS_GAMESERVER
+	pClient = Get_CBaseClient(pLua, iStackPos, bError);
+	if (pClient)
+	{
+		pChannel = pClient->GetNetChannel();
+	}
+	else
+#endif
+	{
+		CBasePlayer* pPlayer = Get_Player(pLua, iStackPos, bError);
+		if (pPlayer)
+		{
+			pClient = Util::GetClientByPlayer(pPlayer);
+			pChannel = pClient->GetNetChannel();
+		}
+	}
+
+	if (!pChannel)
+	{
+		if (bError)
+			pLua->ArgError(iStackPos, "Failed to get a valid INetChannel from player!");
+
+		return nullptr;
+	}
+
+	return pChannel;
+}
+
+void Util::ResetClusters(VisData* data)
 {
 	Q_memset(data->cluster, 0, sizeof(data->cluster));
 }
@@ -287,7 +388,7 @@ Symbols::CM_Vis func_CM_Vis = nullptr;
 Util::VisData* Util::CM_Vis(const Vector& orig, int type)
 {
 	Util::VisData* data = new Util::VisData;
-	Util::ResetClusers(data);
+	Util::ResetClusters(data);
 
 	if (func_CM_Vis)
 		func_CM_Vis(data->cluster, sizeof(data->cluster), engine->GetClusterForOrigin(orig), type);
@@ -362,7 +463,7 @@ CBaseEntity* Util::NextEnt(CBaseEntity* pEnt)
 
 	int nextIndex = pEnt->edict()->m_EdictIndex + 1;
 	int totalCount = Util::engineserver->GetEntityCount();
-	if (totalCount <= nextIndex) // ToDo: Verify that we don't skip the last entitiy.
+	if (totalCount <= nextIndex) // ToDo: Verify that we don't skip the last entity.
 		return nullptr;
 
 	CBaseEntity* pEntity = Util::GetCBaseEntityFromEdict(Util::engineserver->PEntityOfEntIndex(nextIndex));
@@ -590,6 +691,8 @@ Symbols::lj_tab_get Util::func_lj_tab_get = nullptr;
 Symbols::lua_setfenv Util::func_lua_setfenv = nullptr;
 Symbols::lua_touserdata Util::func_lua_touserdata = nullptr;
 Symbols::lua_type Util::func_lua_type = nullptr;
+Symbols::lua_gc Util::func_lua_gc = nullptr;
+Symbols::lua_setallocf Util::func_lua_setallocf = nullptr;
 Symbols::luaL_checklstring Util::func_luaL_checklstring = nullptr;
 Symbols::lua_pcall Util::func_lua_pcall = nullptr;
 Symbols::lua_insert Util::func_lua_insert = nullptr;
@@ -671,7 +774,7 @@ void Util::AddDetour()
 
 	if (!entitylist)
 	{
-		#if defined(ARCHITECTURE_X86) && defined(SYSTEM_LINUX)
+		#if defined(ARCHITECTURE_X86)
 			entitylist = Detour::ResolveSymbol<CGlobalEntityList>(server_loader, Symbols::gEntListSym);
 		#else
 			entitylist = Detour::ResolveSymbolWithOffset<CGlobalEntityList>(server_loader.GetModule(), Symbols::gEntListSym);
@@ -706,6 +809,12 @@ void Util::AddDetour()
 
 	func_lua_type = (Symbols::lua_type)Detour::GetFunction(lua_shared_loader.GetModule(), Symbols::lua_typeSym);
 	Detour::CheckFunction((void*)func_lua_type, "lua_type");
+
+	func_lua_gc = (Symbols::lua_gc)Detour::GetFunction(lua_shared_loader.GetModule(), Symbols::lua_gcSym);
+	Detour::CheckFunction((void*)func_lua_gc, "lua_gc");
+
+	func_lua_setallocf = (Symbols::lua_setallocf)Detour::GetFunction(lua_shared_loader.GetModule(), Symbols::lua_setallocfSym);
+	Detour::CheckFunction((void*)func_lua_setallocf, "lua_setallocf");
 
 	func_lua_setfenv = (Symbols::lua_type)Detour::GetFunction(lua_shared_loader.GetModule(), Symbols::lua_setfenvSym);
 	Detour::CheckFunction((void*)func_lua_setfenv, "lua_setfenv");
@@ -752,7 +861,7 @@ void Util::AddDetour()
 	 *		We also could introduce a Lua Flag so that modules can register for Menu/Client realm if wanted.
 	 *		But I won't really support client. At best only menu.
 	 * 
-	 * New Idea: I'm updating everything. The goal is to support any realm & even multiple ILuaInterfaces at the same time (Preperation for lua_threaded support).
+	 * New Idea: I'm updating everything. The goal is to support any realm & even multiple ILuaInterfaces at the same time (Preparation for lua_threaded support).
 	 */
 }
 
@@ -933,7 +1042,7 @@ void Util::Load()
 		if (pConVarConfig->GetState() == ConfigState::INVALID_JSON)
 		{
 			Warning(PROJECT_NAME " - core: Failed to load convars.json!\n- Check if the json is valid or delete the config to let a new one be generated!\n");
-			pConVarConfig->Destroy(); // Our config is in a invaid state :/
+			pConVarConfig->Destroy(); // Our config is in a invalid state :/
 			pConVarConfig = nullptr;
 			return;
 		}
@@ -998,7 +1107,7 @@ void Util::Load()
 		if (pCoreConfig->GetState() == ConfigState::INVALID_JSON)
 		{
 			Warning(PROJECT_NAME " - core: Failed to load core.json!\n- Check if the json is valid or delete the config to let a new one be generated!\n");
-			pCoreConfig->Destroy(); // Our config is in a invaid state :/
+			pCoreConfig->Destroy(); // Our config is in a invalid state :/
 			pCoreConfig = nullptr;
 			return;
 		}

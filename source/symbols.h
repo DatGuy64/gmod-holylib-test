@@ -184,6 +184,13 @@ namespace Symbols
 	using lua_type = int (*)(lua_State *L, int idx);
 	extern const Symbol lua_typeSym;
 
+	using lua_gc = int (*)(lua_State *L, int what, int data);
+	extern const Symbol lua_gcSym;
+		
+	using lua_allocf = void* (*)(void* ud, void* ptr, size_t osize, size_t nsize);
+	using lua_setallocf = void (*)(lua_State *L, lua_allocf, void* udata);
+	extern const Symbol lua_setallocfSym;
+
 	using luaL_checklstring = const char* (*)(lua_State *L, int idx, size_t* len);
 	extern const Symbol luaL_checklstringSym;
 
@@ -514,16 +521,6 @@ namespace Symbols
 	//---------------------------------------------------------------------------------
 	using SV_BroadcastVoiceData = void (*)(IClient*, int nBytes, char* data, int64 xuid);
 	extern const std::vector<Symbol> SV_BroadcastVoiceDataSym;
-
-	// These below are obsolete soon.
-	using CVoiceGameMgr_Update = void (GMCOMMON_CALLING_CONVENTION*)(CVoiceGameMgr*, double frametime);
-	extern const std::vector<Symbol> CVoiceGameMgr_UpdateSym;
-
-	extern const std::vector<Symbol> g_PlayerModEnableSym;
-	extern const std::vector<Symbol> g_BanMasksSym;
-	extern const std::vector<Symbol> g_SentGameRulesMasksSym;
-	extern const std::vector<Symbol> g_SentBanMasksSym;
-	extern const std::vector<Symbol> g_bWantModEnableSym;
 
 	//---------------------------------------------------------------------------------
 	// Purpose: physenv Symbols

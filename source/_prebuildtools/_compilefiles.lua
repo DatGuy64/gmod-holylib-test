@@ -5,7 +5,7 @@
 
 dofile("utils.lua")
 
-local function CompileLuaScipts()
+local function CompileLuaScripts()
 	local path = "../lua/scripts/"
 	for _, fileName in ipairs(ScanDir(path, false)) do
 		if not EndsWith(fileName, ".lua") then continue end
@@ -20,7 +20,7 @@ local function CompileLuaScipts()
 		WriteFile(headerFileName, headerFile)
 	end
 end
-CompileLuaScipts()
+CompileLuaScripts()
 
 local function CompileModuleList()
 	local path = "../modules/"
@@ -30,9 +30,16 @@ local function CompileModuleList()
 
 		local content = ReadFile(path .. fileName)
 		for moduleName in content:gmatch("IModule%s*%*%s*(%w+)%s*=%s*&%s*[%w_]+%s*") do
-			table.insert(moduleList, {moduleName, string.upper(RemoveEnd(fileName, ".cpp"))})
+			table.insert(moduleList, {
+				moduleName,
+				string.upper(RemoveEnd(fileName, ".cpp")),
+				-- If set this module will get a higher ID & will be loaded sooner
+				priority = string.find(content, "HOLYLIB_PRIORITY_MODULE") ~= nil,
+			})
 		end
 	end
+
+	table.sort(moduleList, function(a, b) return a.priority end)
 	
 	local moduleFile = [[
 // This file is generated! Do NOT touch this!
@@ -80,7 +87,7 @@ end
 CompileModuleList()
 
 
-local function CompileVerionFile()
+local function CompileVersionFile()
 	local path = "../../workflow_info.txt"
 	local file = io.open(path, "r")
 	local run_id = file and file:read("*l") or "1"
@@ -102,4 +109,4 @@ local function CompileVerionFile()
 
 	WriteFile("../_versioninfo.h", string.Trim(versionFile))
 end
-CompileVerionFile()
+CompileVersionFile()

@@ -37,11 +37,11 @@ LUA_FUNCTION_STATIC(gameevent_GetListeners)
 {
 	if (LUA->IsType(1, GarrysMod::Lua::Type::String))
 	{
-		CGameEventDescriptor* desciptor = pGameEventManager->GetEventDescriptor(LUA->GetString(1));
-		if (!desciptor)
+		CGameEventDescriptor* descriptor = pGameEventManager->GetEventDescriptor(LUA->GetString(1));
+		if (!descriptor)
 			return 0; // Return nothing -> nil on failure
 
-		LUA->PushNumber(desciptor->listeners.Count());
+		LUA->PushNumber(descriptor->listeners.Count());
 	} else {
 		LUA->CreateTable();
 			FOR_EACH_VEC(pGameEventManager->m_GameEvents, i)
@@ -64,16 +64,16 @@ LUA_FUNCTION_STATIC(gameevent_RemoveListener)
 	bool bSuccess = false;
 	if (pLuaGameEventListener)
 	{
-		CGameEventDescriptor* desciptor = pGameEventManager->GetEventDescriptor(strEvent);
-		if (!desciptor)
+		CGameEventDescriptor* descriptor = pGameEventManager->GetEventDescriptor(strEvent);
+		if (!descriptor)
 		{
 			LUA->PushBool(false);
 			return 1;
 		}
 
-		FOR_EACH_VEC(desciptor->listeners, i)
+		FOR_EACH_VEC(descriptor->listeners, i)
 		{
-			CGameEventCallback* callback = desciptor->listeners[i];
+			CGameEventCallback* callback = descriptor->listeners[i];
 			if (callback->m_nListenerType != CGameEventManager::SERVERSIDE)
 				continue;
 
@@ -83,7 +83,7 @@ LUA_FUNCTION_STATIC(gameevent_RemoveListener)
 
 			if (listener == pLuaGameEventListener)
 			{
-				desciptor->listeners.Remove(i); // ToDo: Verify that this doesn't cause a memory leak because CGameEventCallback isn't deleted.
+				descriptor->listeners.Remove(i); // ToDo: Verify that this doesn't cause a memory leak because CGameEventCallback isn't deleted.
 				bSuccess = true;
 				break;
 			}
@@ -101,11 +101,7 @@ LUA_FUNCTION_STATIC(gameevent_GetClientListeners)
 {
 	if (LUA->IsType(1, GarrysMod::Lua::Type::Entity))
 	{
-		CBasePlayer* pEntity = Util::Get_Player(LUA, 1, false);
-		if (!pEntity)
-			LUA->ThrowError("Tried to use a NULL Player!\n");
-
-		CBaseClient* pClient = Util::GetClientByPlayer(pEntity);
+		CBaseClient* pClient = Util::Get_Client(LUA, 1, true);
 
 		LUA->CreateTable();
 		int idx = 0;
@@ -172,33 +168,29 @@ LUA_FUNCTION_STATIC(gameevent_GetClientListeners)
 
 LUA_FUNCTION_STATIC(gameevent_RemoveClientListener)
 {
-	CBasePlayer* pEntity = Util::Get_Player(LUA, 1, false);
-	if (!pEntity)
-		LUA->ThrowError("Tried to use a NULL Player!\n");
-
-	CBaseClient* pClient = Util::GetClientByPlayer(pEntity);
+	CBaseClient* pClient = Util::Get_Client(LUA, 1, true);
 	const char* strEvent = LUA->CheckStringOpt(2, nullptr);
 
 	bool bSuccess = false;
 	if (strEvent)
 	{
-		CGameEventDescriptor* desciptor = pGameEventManager->GetEventDescriptor(strEvent);
-		if (!desciptor)
+		CGameEventDescriptor* descriptor = pGameEventManager->GetEventDescriptor(strEvent);
+		if (!descriptor)
 		{
 			LUA->PushBool(false);
 			return 1;
 		}
 
-		FOR_EACH_VEC(desciptor->listeners, i)
+		FOR_EACH_VEC(descriptor->listeners, i)
 		{
-			CGameEventCallback* callback = desciptor->listeners[i];
+			CGameEventCallback* callback = descriptor->listeners[i];
 			if (callback->m_nListenerType != CGameEventManager::CLIENTSTUB)
 				continue;
 
 			CBaseClient* listener = (CBaseClient*)callback->m_pCallback;
 			if (listener == pClient)
 			{
-				desciptor->listeners.Remove(i); // ToDo: Verify that this doesn't cause a memory leak because CGameEventCallback isn't deleted.
+				descriptor->listeners.Remove(i); // ToDo: Verify that this doesn't cause a memory leak because CGameEventCallback isn't deleted.
 				bSuccess = true;
 				break;
 			}
@@ -213,7 +205,7 @@ LUA_FUNCTION_STATIC(gameevent_RemoveClientListener)
 	return 1;
 }
 
-Symbols::CGameEventManager_AddListener func_CGameEventManager_AddListener;
+static Symbols::CGameEventManager_AddListener func_CGameEventManager_AddListener;
 LUA_FUNCTION_STATIC(gameevent_AddClientListener)
 {
 	if (!g_pGameeventLibModule.InDebug())
@@ -222,23 +214,20 @@ LUA_FUNCTION_STATIC(gameevent_AddClientListener)
 		return 0;
 	}
 
-	CBasePlayer* pEntity = Util::Get_Player(LUA, 1, true);
-	if (!pEntity)
-		LUA->ThrowError("Tried to use a NULL Player!\n");
-
+	CBaseClient* pClient = Util::Get_Client(LUA, 1, true);
 	const char* strEvent = LUA->CheckString(2);
 
 	if (!func_CGameEventManager_AddListener)
 		LUA->ThrowError("Failed to get CGameEventManager::AddListener");
 
-	CGameEventDescriptor* desciptor = pGameEventManager->GetEventDescriptor(strEvent);
-	if (!desciptor)
+	CGameEventDescriptor* descriptor = pGameEventManager->GetEventDescriptor(strEvent);
+	if (!descriptor)
 	{
 		LUA->PushBool(false);
 		return 1;
 	}
 
-	func_CGameEventManager_AddListener(pGameEventManager, Util::GetClientByPlayer(pEntity), desciptor, CGameEventManager::CLIENTSTUB);
+	func_CGameEventManager_AddListener(pGameEventManager, pClient, descriptor, CGameEventManager::CLIENTSTUB);
 
 	LUA->PushBool(true);
 	return 1;
@@ -496,13 +485,7 @@ LUA_FUNCTION_STATIC(gameevent_FireEvent)
 LUA_FUNCTION_STATIC(gameevent_FireClientEvent)
 {
 	IGameEvent* pEvent = Get_IGameEvent(LUA, 1, true);
-	CBasePlayer* pPlayer = Util::Get_Player(LUA, 2, true);
-	if (!pPlayer)
-		LUA->ArgError(2, "Tried to use a NULL player!");
-
-	CBaseClient* pClient = Util::GetClientByPlayer(pPlayer);
-	if (!pClient)
-		LUA->ThrowError("Failed to get CBaseClient from player!");
+	CBaseClient* pClient = Util::Get_Client(LUA, 2, true);
 
 	pClient->FireGameEvent(pEvent);
 	return 0;

@@ -241,6 +241,11 @@ namespace Util
 	extern CBasePlayer* Get_Player(GarrysMod::Lua::ILuaInterface* LUA, int iStackPos, bool bError);
 	extern CBaseEntity* Get_Entity(GarrysMod::Lua::ILuaInterface* LUA, int iStackPos, bool bError);
 	extern void Push_Entity(GarrysMod::Lua::ILuaInterface* LUA, CBaseEntity* pEnt);
+	// Returns -1 on failure if bError = false
+	extern int Get_ClientIndex(GarrysMod::Lua::ILuaInterface* LUA, int iStackPos, bool bError);
+	extern CBaseClient* Get_Client(GarrysMod::Lua::ILuaInterface* LUA, int iStackPos, bool bError);
+	extern INetChannel* Get_NetChannel(GarrysMod::Lua::ILuaInterface* LUA, int iStackPos, bool bError);
+
 	extern CBaseEntity* GetCBaseEntityFromEdict(edict_t* edict);
 	extern CBaseEntity* GetCBaseEntityFromIndex(int nEntIndex);
 	extern CBaseEntity* GetCBaseEntityFromHandle(const CBaseHandle& pHandle);
@@ -261,8 +266,8 @@ namespace Util
 
 	// Returns new VisData, delete it after use
 	extern VisData* CM_Vis(const Vector& orig, int type);
-	extern bool CM_Vis(byte* cluster, int clusterSize, int cluserID, int type);
-	extern void ResetClusers(VisData* data);
+	extern bool CM_Vis(byte* cluster, int clusterSize, int clusterID, int type);
+	extern void ResetClusters(VisData* data);
 
 	extern bool ShouldLoad();
 	extern void CheckVersion(bool bAutoUpdate);
@@ -296,7 +301,7 @@ namespace Util
 	}
 
 	// Workaround until https://github.com/Facepunch/garrysmod-issues/issues/6583
-	// On 32x deleting a pool goes fine, on 64x it can randomly freeze indefinetly, its not even consistent. Its random.
+	// On 32x deleting a pool goes fine, on 64x it can randomly freeze indefinitely, its not even consistent. Its random.
 	inline void DestroyThreadPool(IThreadPool* pool)
 	{
 		pool->Stop();
@@ -329,6 +334,8 @@ namespace Util
 	extern Symbols::lua_setfenv func_lua_setfenv;
 	extern Symbols::lua_touserdata func_lua_touserdata;
 	extern Symbols::lua_type func_lua_type;
+	extern Symbols::lua_gc func_lua_gc;
+	extern Symbols::lua_setallocf func_lua_setallocf;
 
 	extern Symbols::lua_pcall func_lua_pcall;
 	extern Symbols::lua_insert func_lua_insert;

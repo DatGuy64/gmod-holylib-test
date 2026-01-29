@@ -1,5 +1,3 @@
-#include <cstdarg>
-#include <cstdio>
 #include "opus/opus_framedecoder.h"
 #include "opus/steam_voice.h"
 #include "LuaInterface.h"
@@ -44,36 +42,6 @@ public:
 
 static ConVar voicechat_hooks("holylib_voicechat_hooks", "1", 0);
 
-// Debug level:
-// 0 = off
-// 1 = important (hook calls, pointers, state changes)
-// 2 = verbose (per-player update reasons)
-// 3 = very verbose (loop details)
-static ConVar holylib_voicechat_debug("holylib_voicechat_debug", "1", FCVAR_ARCHIVE, "Voicechat module debug level (0-3)");
-
-static inline void VCDBG(int lvl, const char* fmt, ...)
-{
-    if (holylib_voicechat_debug.GetInt() < lvl) return;
-
-    char buf[2048];
-    va_list args;
-    va_start(args, fmt);
-    V_vsnprintf(buf, sizeof(buf), fmt, args);
-    va_end(args);
-
-    Msg("[holylib:voicechat] %s", buf);
-}
-
-static inline void VCWARN(const char* fmt, ...)
-{
-    char buf[2048];
-    va_list args;
-    va_start(args, fmt);
-    V_vsnprintf(buf, sizeof(buf), fmt, args);
-    va_end(args);
-
-    Warning("[holylib:voicechat] %s", buf);
-}
 static constexpr int g_pDataBufferSize = 16384; // Used to decompress the data. 
 static constexpr int g_nCompressedSize = g_pDataBufferSize / 4; // Used as char[] to stackallocate compressed buffers when compressing which later on are moved to the heap
 // A buffer so that we reduce allocations. You should only use it directly in one function and NOT pass it around as other functions might override its contents!
@@ -99,7 +67,7 @@ static ConVar voicechat_savedecompressed("holylib_voicechat_savedecompressed", "
 static CVoiceChatModule g_pVoiceChatModule;
 IModule* pVoiceChatModule = &g_pVoiceChatModule;
 
-// IMPORTANT: When changing this sturct, you also NEED to update the VoiceDataFFI.lua file!!!
+// IMPORTANT: When changing this struct, you also NEED to update the VoiceDataFFI.lua file!!!
 struct VoiceData
 {
 	~VoiceData() {
@@ -659,17 +627,17 @@ struct VoiceStream {
 	void Save(FileHandle_t fh)
 	{
 		// Create a copy so that the main thread can still party on it.
-		std::unordered_map<int, VoiceData*> voiceDataEnties = pVoiceData;
+		std::unordered_map<int, VoiceData*> voiceDataEntries = pVoiceData;
 
 		g_pFullFileSystem->Write(&VOICESTREAM_VERSION, sizeof(int), fh);
 
 		int tickRate = (int)std::ceil(1 / gpGlobals->interval_per_tick);
 		g_pFullFileSystem->Write(&tickRate, sizeof(int), fh);
 
-		int count = (int)voiceDataEnties.size();
+		int count = (int)voiceDataEntries.size();
 		g_pFullFileSystem->Write(&count, sizeof(int), fh); // First write the total number of voice data
 
-		for (auto& [tickNumber, voiceData] : voiceDataEnties)
+		for (auto& [tickNumber, voiceData] : voiceDataEntries)
 		{
 			g_pFullFileSystem->Write(&tickNumber, sizeof(int), fh);
 
@@ -1085,7 +1053,7 @@ struct VoiceStream {
 	 */
 	inline VoiceData* GetIndex(int index)
 	{
-		if (index < nLowestTick || index > nHightestTick)
+		if (index < nLowestTick || index > nHighestTick)
 			return nullptr;
 
 		auto it = pVoiceData.find(index);
@@ -1110,9 +1078,9 @@ struct VoiceStream {
 		pVoiceData[index] = pData;
 		pData->bAllowLuaGC = false;
 
-		if (index > nHightestTick)
+		if (index > nHighestTick)
 		{
-			nHightestTick = index;
+			nHighestTick = index;
 		}
 
 		// Idk, I feel like some insane people might insert negative indexes xD
@@ -1179,7 +1147,7 @@ private:
 	// We don't clamp it since people might for example set it to -100 and then call GetNextTick to delay the start for example.
 	int nCurrentTick = 0;
 	// The highest tick we have stored, we use it to skip lookups in pVoiceData to improve performance for Indexes we know don't exist.
-	int nHightestTick = 0;
+	int nHighestTick = 0;
 	int nLowestTick = 0;
 };
 
@@ -1436,275 +1404,17 @@ static void VoiceEffect(VoiceEffectJob*& pJob)
 }
 }
 
-static CPlayerBitVec* g_PlayerModEnable;
-static CPlayerBitVec* g_BanMasks;
-static CPlayerBitVec* g_SentGameRulesMasks;
-static CPlayerBitVec* g_SentBanMasks;
-static CPlayerBitVec* g_bWantModEnable;
-static double g_fLastPlayerTalked[MAX_PLAYERS] = {0};
-static double g_fLastPlayerUpdated[MAX_PLAYERS] = {0};
+static bool g_bIsPlayerMuted[MAX_PLAYERS] = {0};
 static bool g_bIsPlayerTalking[MAX_PLAYERS] = {0};
-static CVoiceGameMgr* g_pManager = nullptr;
-static inline int Voice_MaxClients()
-{
-	int mc = (gpGlobals ? gpGlobals->maxClients : 0);
-	if (mc <= 0)
-		mc = MAX_PLAYERS;
-	if (mc > MAX_PLAYERS)
-		mc = MAX_PLAYERS;
-	return mc;
-}
-
-static ConVar voicechat_updateinterval("holylib_voicechat_updateinterval", "0.1", FCVAR_ARCHIVE, "How often we call PlayerCanHearPlayersVoice for the actively talking players. This interval is unique to each player");
-static ConVar voicechat_managerupdateinterval("holylib_voicechat_managerupdateinterval", "0.1", FCVAR_ARCHIVE, "How often we loop through all players to check their voice states. We still check the player's interval to reduce calls if they already have been updated in the last x(your defined interval) seconds.");
+static double g_fLastPlayerTalked[MAX_PLAYERS] = {0};
 static ConVar voicechat_stopdelay("holylib_voicechat_stopdelay", "1", FCVAR_ARCHIVE, "How many seconds before a player is marked as stopped talking");
-static ConVar voicechat_canhearhimself("holylib_voicechat_canhearhimself", "1", FCVAR_ARCHIVE, "If enabled, we assume the player can always hear himself and thus we save one call for PlayerCanHearPlayersVoice");
-
-static void UpdatePlayerTalkingState(CBasePlayer* pPlayer, bool bIsTalking = false)
-{
-	static double s_lastUpPrint[MAX_PLAYERS] = {0};
-
-	if (!g_pManager) // Skip if we have no manager.
-	{
-		VCDBG(1, "UpdatePlayerTalkingState: g_pManager=NULL => return. player=%p talking=%d\n", pPlayer, (int)bIsTalking);
-		return;
-	}
-
-	int iClient = pPlayer->edict()->m_EdictIndex-1;
-	double fTime = Util::engineserver->Time();
-
-	if (holylib_voicechat_debug.GetInt() >= 2 && iClient >= 0 && iClient < MAX_PLAYERS && (fTime - s_lastUpPrint[iClient]) > 0.5)
-	{
-		s_lastUpPrint[iClient] = fTime;
-		VCDBG(2, "UpdatePlayerTalkingState: slot=%d bIsTalking=%d isTalkingState=%d lastTalked=%f lastUpd=%f\n",
-			iClient, (int)bIsTalking, (int)g_bIsPlayerTalking[iClient], g_fLastPlayerTalked[iClient], g_fLastPlayerUpdated[iClient]);
-	}
-	if (bIsTalking)
-	{
-		g_fLastPlayerTalked[iClient] = fTime;
-	} else {
-		// We update anyways, just to ensure that the code won't break, but we won't call the lua hook since we know their not talking and don't need it.
-		if (g_bIsPlayerTalking[iClient] && (g_fLastPlayerTalked[iClient] + voicechat_stopdelay.GetFloat()) > fTime) // They are talking, and we have no reason to update so just skip it.
-		{
-			if (g_pVoiceChatModule.InDebug() == 2)
-			{
-				Msg("Skipping voice player update since their not talking! (%i, %f, %f, %f)\n", iClient, fTime, g_fLastPlayerTalked[iClient], voicechat_stopdelay.GetFloat());
-			}
-
-			return;
-		}
-	}
-
-	if ((g_bIsPlayerTalking[iClient] == bIsTalking || !bIsTalking) && (g_fLastPlayerUpdated[iClient] + voicechat_updateinterval.GetFloat()) > fTime)
-	{
-		if (g_pVoiceChatModule.InDebug() == 2)
-		{
-			Msg("Skipping voice player update! (%i, %s, %s, %f, %f, %f)\n", iClient, bIsTalking ? "true" : "false", g_bIsPlayerTalking[iClient] ? "true" : "false", g_fLastPlayerUpdated[iClient], fTime, voicechat_updateinterval.GetFloat());
-		}
-
-		return;
-	}
-
-	if (g_pVoiceChatModule.InDebug() == 2)
-	{
-		Msg("Doing voice player update! (%i, %s, %s, %f, %f, %f)\n", iClient, bIsTalking ? "true" : "false", g_bIsPlayerTalking[iClient] ? "true" : "false", g_fLastPlayerUpdated[iClient], fTime, voicechat_updateinterval.GetFloat());
-	}
-
-	CSingleUserRecipientFilter user( pPlayer );
-
-	// Request the state of their "VModEnable" cvar.
-	if((*g_bWantModEnable)[iClient])
-	{
-		UserMessageBegin( user, "RequestState" );
-		MessageEnd();
-		// Since this is reliable, only send it once
-		(*g_bWantModEnable)[iClient] = false;
-	}
-
-	
-	// --- HolyLib voicechat guard: CVoiceGameMgr layout may change after updates.
-	// If m_pHelper is invalid, avoid crash and fall back to sv_alltalk-only behavior.
-	if (!g_pManager || !g_pManager->m_pHelper)
-	{
-		if (g_pVoiceChatModule.InDebug() >= 1)
-		{
-			Msg("[holylib:voicechat] UpdatePlayerTalkingState: manager/helper invalid. g_pManager=%p helper=%p iClient=%d bIsTalking=%d\n",
-				g_pManager, g_pManager ? g_pManager->m_pHelper : nullptr, iClient, (int)bIsTalking);
-		}
-
-		ConVarRef sv_alltalk("sv_alltalk");
-		const bool bAllTalkFallback = sv_alltalk.GetBool();
-
-		const int maxClientsFallback = Voice_MaxClients();
-		for (int iOtherClient = 0; iOtherClient < maxClientsFallback; ++iOtherClient)
-		{
-			const bool bCanHear = bAllTalkFallback;
-			g_pVoiceServer->SetClientListening(iOtherClient + 1, iClient + 1, bCanHear);
-			if (bCanHear)
-				g_pVoiceServer->SetClientProximity(iOtherClient + 1, iClient + 1, false);
-		}
-
-		g_fLastPlayerUpdated[iClient] = fTime;
-		g_bIsPlayerTalking[iClient] = bIsTalking;
-		return;
-	}
-
-	ConVarRef sv_alltalk("sv_alltalk");
-	bool bAllTalk = sv_alltalk.GetBool();
-
-	int modEnable = -1;
-	if (g_PlayerModEnable)
-		modEnable = (*g_PlayerModEnable)[iClient] ? 1 : 0;
-	else
-		VCWARN("g_PlayerModEnable NULL (symbols broken?)\n");
-
-	if (!g_bWantModEnable) VCWARN("g_bWantModEnable NULL (symbols broken?)\n");
-	if (!g_BanMasks) VCWARN("g_BanMasks NULL (symbols broken?)\n");
-	if (!g_SentGameRulesMasks) VCWARN("g_SentGameRulesMasks NULL (symbols broken?)\n");
-	if (!g_SentBanMasks) VCWARN("g_SentBanMasks NULL (symbols broken?)\n");
-
-	VCDBG(2, "Gate check: bIsTalking=%d modEnable=%d sv_alltalk=%d\n", (int)bIsTalking, modEnable, (int)bAllTalk);
-
-	CPlayerBitVec gameRulesMask;
-	CPlayerBitVec ProximityMask;
-	bool bProximity = false;
-	if(bIsTalking && (*g_PlayerModEnable)[iClient] )
-	{
-		bool bCanHearHimself = voicechat_canhearhimself.GetBool();
-		// Build a mask of who they can hear based on the game rules.
-		const int maxClients = Voice_MaxClients();
-		for(int iOtherClient=0; iOtherClient < maxClients; iOtherClient++)
-		{
-			CBaseEntity *pEnt = Util::GetCBaseEntityFromEdict(Util::engineserver->PEntityOfEntIndex(iOtherClient + 1));
-			
-if(!pEnt || !pEnt->IsPlayer())
-	continue;
-
-bool allow = false;
-bProximity = false;
-
-if (bCanHearHimself && (iOtherClient == iClient))
-{
-	allow = true;
-}
-else if (bAllTalk)
-{
-	allow = true;
-}
-else
-{
-	allow = g_pManager->m_pHelper->CanPlayerHearPlayer((CBasePlayer*)pEnt, pPlayer, bProximity);
-}
-
-if (holylib_voicechat_debug.GetInt() >= 3)
-	VCDBG(3, "HearCheck: listener=%d talker=%d allow=%d prox=%d\n", iOtherClient, iClient, (int)allow, (int)bProximity);
-
-if (allow)
-{
-	gameRulesMask[iOtherClient] = true;
-	ProximityMask[iOtherClient] = bProximity;
-}
-		}
-	}
-
-	// If this is different from what the client has, send an update. 
-	if((gameRulesMask != g_SentGameRulesMasks[iClient] || 
-		g_BanMasks[iClient] != g_SentBanMasks[iClient]))
-	{
-		g_SentGameRulesMasks[iClient] = gameRulesMask;
-		g_SentBanMasks[iClient] = g_BanMasks[iClient];
-
-		UserMessageBegin( user, "VoiceMask" );
-			int dw;
-			for(dw=0; dw < VOICE_MAX_PLAYERS_DW; dw++)
-			{
-				WRITE_LONG(gameRulesMask.GetDWord(dw));
-				WRITE_LONG(g_BanMasks[dw].GetDWord(iClient));
-			}
-			WRITE_BYTE( !!(*g_PlayerModEnable)[iClient] );
-		MessageEnd();
-	}
-
-	// Tell the engine.
-	const int maxClients = Voice_MaxClients();
-		for(int iOtherClient=0; iOtherClient < maxClients; iOtherClient++)
-	{
-		bool bCanHear = gameRulesMask[iOtherClient] && !g_BanMasks[iOtherClient][iClient];
-		g_pVoiceServer->SetClientListening( iOtherClient+1, iClient+1, bCanHear );
-
-		if ( bCanHear )
-		{
-			g_pVoiceServer->SetClientProximity( iOtherClient+1, iClient+1, !!ProximityMask[iOtherClient] );
-		}
-	}
-
-	g_fLastPlayerUpdated[iClient] = fTime;
-	if (bIsTalking || (g_fLastPlayerTalked[iClient] + voicechat_stopdelay.GetFloat()) > fTime)
-	{
-		g_bIsPlayerTalking[iClient] = true;
-	} else {
-		g_bIsPlayerTalking[iClient] = bIsTalking;
-	}
-
-	if (g_pVoiceChatModule.InDebug() == 2)
-	{
-		Msg("Updated voice player! (%i, %s, %s, %f, %f, %f, %f)\n", iClient, bIsTalking ? "true" : "false", g_bIsPlayerTalking[iClient] ? "true" : "false", fTime, g_fLastPlayerTalked[iClient], (g_fLastPlayerTalked[iClient] + voicechat_stopdelay.GetFloat()), voicechat_stopdelay.GetFloat());
-	}
-}
-
-static Detouring::Hook detour_CVoiceGameMgr_Update;
-static void hook_CVoiceGameMgr_Update(CVoiceGameMgr* pManager, double frametime)
-{
-
-static double s_lastMgrPrint = 0.0;
-VCDBG(3, "CVoiceGameMgr::Update hook fired. pManager=%p frametime=%f\n", pManager, frametime);
-
-double now = gpGlobals ? gpGlobals->curtime : 0.0;
-if (holylib_voicechat_debug.GetInt() >= 1 && (now - s_lastMgrPrint) > 1.0)
-{
-    s_lastMgrPrint = now;
-    VCDBG(1, "CVoiceGameMgr::Update alive. pManager=%p maxPlayers=%d updateInterval=%f\n",
-        pManager, Voice_MaxClients(), 0.0 /*no longer reading manager interval*/);
-}
-
-	g_pManager = pManager;
-	static double s_UpdateInterval = 0.0;
-	s_UpdateInterval += frametime;
-	if(s_UpdateInterval < voicechat_managerupdateinterval.GetFloat())
-	{
-		VCDBG(3, "MgrUpdate skipped: m_UpdateInterval=%f < %f\n", s_UpdateInterval, voicechat_managerupdateinterval.GetFloat());
-		return;
-	}
-
-	if (g_pVoiceChatModule.InDebug() == 3)
-	{
-		Msg("Doing voice manager update!\n");
-	}
-
-	s_UpdateInterval = 0.0;
-	const int maxClients = Voice_MaxClients();
-	for(int iClient=0; iClient < maxClients; iClient++)
-	{
-		CBaseEntity *pEnt = Util::GetCBaseEntityFromEdict(Util::engineserver->PEntityOfEntIndex(iClient + 1));
-		if(!pEnt || !pEnt->IsPlayer())
-			continue;
-
-		CBasePlayer *pPlayer = (CBasePlayer*)pEnt;
-
-		UpdatePlayerTalkingState(pPlayer, false);
-	}
-}
-
-// This is seperate since most of the above code will be removed with the next gmod update as Rubat brought over our optimization :D
-static bool g_bIsPlayerTalking2[MAX_PLAYERS] = {0};
-static double g_fLastPlayerTalked2[MAX_PLAYERS] = {0};
 static void CheckTalkingState(int nPlayerSlot, bool bIsTalking)
 {
 	if (bIsTalking)
 	{
-		if (!g_bIsPlayerTalking2[nPlayerSlot]) // Started to talk
+		if (!g_bIsPlayerTalking[nPlayerSlot]) // Started to talk
 		{
-			g_bIsPlayerTalking2[nPlayerSlot] = true;
+			g_bIsPlayerTalking[nPlayerSlot] = true;
 
 			if (Lua::PushHook("HolyLib:OnPlayerStartTalking"))
 			{
@@ -1714,11 +1424,11 @@ static void CheckTalkingState(int nPlayerSlot, bool bIsTalking)
 				g_Lua->CallFunctionProtected(2, 0, true);
 			}
 		}
-		g_fLastPlayerTalked2[nPlayerSlot] = gpGlobals->curtime;
+		g_fLastPlayerTalked[nPlayerSlot] = gpGlobals->curtime;
 	} else {
-		if (gpGlobals->curtime > (g_fLastPlayerTalked2[nPlayerSlot] + voicechat_stopdelay.GetFloat()) && g_bIsPlayerTalking2[nPlayerSlot])
+		if (gpGlobals->curtime > (g_fLastPlayerTalked[nPlayerSlot] + voicechat_stopdelay.GetFloat()) && g_bIsPlayerTalking[nPlayerSlot])
 		{ // Stopped talking, tied to holylib_voicechat_stopdelay convar
-			g_bIsPlayerTalking2[nPlayerSlot] = false;
+			g_bIsPlayerTalking[nPlayerSlot] = false;
 
 			if (Lua::PushHook("HolyLib:OnPlayerStoppedTalking"))
 			{
@@ -1734,20 +1444,18 @@ static void CheckTalkingState(int nPlayerSlot, bool bIsTalking)
 void CVoiceChatModule::ClientDisconnect(edict_t* pClient)
 {
 	// We gotta prevent the hook from firing when the player already disconnected, so we reset these here
-	g_bIsPlayerTalking2[pClient->m_EdictIndex-1] = false;
-	g_fLastPlayerTalked2[pClient->m_EdictIndex-1] = 0.0;
+	g_bIsPlayerTalking[pClient->m_EdictIndex-1] = false;
+	g_bIsPlayerMuted[pClient->m_EdictIndex-1] = false;
+	g_fLastPlayerTalked[pClient->m_EdictIndex-1] = 0.0;
 }
 
 void CVoiceChatModule::ServerActivate(edict_t* pEdictList, int edictCount, int clientMax)
 {
 	for (int i = 0; i < gpGlobals->maxClients; ++i)
 	{
-		g_fLastPlayerTalked[i] = 0.0;
-		g_fLastPlayerUpdated[i] = 0.0;
 		g_bIsPlayerTalking[i] = false;
-
-		g_bIsPlayerTalking2[i] = false;
-		g_fLastPlayerTalked2[i] = 0.0;
+		g_bIsPlayerMuted[i] = false;
+		g_fLastPlayerTalked[i] = 0.0;
 	}
 }
 
@@ -1755,57 +1463,38 @@ void CVoiceChatModule::LevelShutdown()
 {
 	for (int i = 0; i < gpGlobals->maxClients; ++i)
 	{
-		g_fLastPlayerTalked[i] = 0.0;
-		g_fLastPlayerUpdated[i] = 0.0;
 		g_bIsPlayerTalking[i] = false;
-
-		g_bIsPlayerTalking2[i] = false;
-		g_fLastPlayerTalked2[i] = 0.0;
+		g_bIsPlayerMuted[i] = false;
+		g_fLastPlayerTalked[i] = 0.0;
 	}
-	g_pManager = nullptr;
 }
 
 static Detouring::Hook detour_SV_BroadcastVoiceData;
 static void hook_SV_BroadcastVoiceData(IClient* pClient, int nBytes, char* data, int64 xuid)
 {
-
-static double s_lastVoicePrint = 0.0;
-double now = gpGlobals ? gpGlobals->curtime : 0.0;
-if (holylib_voicechat_debug.GetInt() >= 1 && (now - s_lastVoicePrint) > 1.0)
-{
-    s_lastVoicePrint = now;
-    VCDBG(1, "SV_BroadcastVoiceData hook alive. pClient=%p nBytes=%d data=%p xuid=%lld manager=%p\n",
-        pClient, nBytes, data, (long long)xuid, g_pManager);
-}
-VCDBG(3, "SV_BroadcastVoiceData: slot=%d bytes=%d hooks=%d\n",
-    pClient ? pClient->GetPlayerSlot() : -1, nBytes, (int)voicechat_hooks.GetBool());
-
 	VPROF_BUDGET("HolyLib - SV_BroadcastVoiceData", VPROF_BUDGETGROUP_HOLYLIB);
 
+	if (g_bIsPlayerMuted[pClient->GetPlayerSlot()])
+	{
+		if (g_pVoiceChatModule.InDebug() == 1)
+			Msg(PROJECT_NAME " - voicechat: client %i voice packet was skipped since their muted!\n", pClient->GetPlayerSlot());
+
+		return;
+	}
+
 	if (g_pVoiceChatModule.InDebug() == 1)
-		Msg("cl: %p\nbytes: %i\ndata: %p\n", pClient, nBytes, data);
+		Msg(PROJECT_NAME " - voicechat: cl: %p\nbytes: %i\ndata: %p\n", pClient, nBytes, data);
 
-#if SYSTEM_LINUX
-	if (g_pVoiceChatModule.InDebug() >= 1) Msg("[holylib:voicechat] SV_BroadcastVoiceData: before UpdatePlayerTalkingState\n");
-	UpdatePlayerTalkingState(Util::GetPlayerByClient((CBaseClient*)pClient), true);
-	if (g_pVoiceChatModule.InDebug() >= 1) Msg("[holylib:voicechat] SV_BroadcastVoiceData: after UpdatePlayerTalkingState\n");
-#endif
-
-	if (g_pVoiceChatModule.InDebug() >= 1) Msg("[holylib:voicechat] SV_BroadcastVoiceData: before CheckTalkingState\n");
 	CheckTalkingState(pClient->GetPlayerSlot(), true);
-	if (g_pVoiceChatModule.InDebug() >= 1) Msg("[holylib:voicechat] SV_BroadcastVoiceData: after CheckTalkingState\n");
 
 	if (!voicechat_hooks.GetBool())
 	{
-		VCDBG(2, "voicechat_hooks=0 => calling trampoline without lua preprocessing\n");
 		detour_SV_BroadcastVoiceData.GetTrampoline<Symbols::SV_BroadcastVoiceData>()(pClient, nBytes, data, xuid);
 		return;
 	}
 
-	if (g_pVoiceChatModule.InDebug() >= 1) Msg("[holylib:voicechat] SV_BroadcastVoiceData: before HolyLib:PreProcessVoiceChat\n");
 	if (Lua::PushHook("HolyLib:PreProcessVoiceChat"))
 	{
-		VCDBG(2, "Calling Lua hook HolyLib:PreProcessVoiceChat slot=%d bytes=%d\n", pClient ? pClient->GetPlayerSlot() : -1, nBytes);
 		VoiceData* pVoiceData = new VoiceData;
 		pVoiceData->SetData(data, nBytes);
 		pVoiceData->iPlayerSlot = pClient->GetPlayerSlot();
@@ -1821,8 +1510,6 @@ VCDBG(3, "SV_BroadcastVoiceData: slot=%d bytes=%d hooks=%d\n",
 			g_Lua->Pop(1);
 		}
 
-		VCDBG(2, "Lua PreProcessVoiceChat returned handled=%d\n", (int)bHandled);
-
 		if (pLuaData)
 		{
 			pLuaData->Release(g_Lua);
@@ -1830,14 +1517,10 @@ VCDBG(3, "SV_BroadcastVoiceData: slot=%d bytes=%d hooks=%d\n",
 
 		delete pVoiceData;
 
-		if (g_pVoiceChatModule.InDebug() >= 1) Msg("[holylib:voicechat] SV_BroadcastVoiceData: before GMOD_OnReceivedVoicePacket pPlayer=%p\n", pPlayer);
 		Util::servergameclients->GMOD_OnReceivedVoicePacket( pPlayer->edict() );
-		if (g_pVoiceChatModule.InDebug() >= 1) Msg("[holylib:voicechat] SV_BroadcastVoiceData: after GMOD_OnReceivedVoicePacket\n");
 
-		if (bHandled) {
-			if (g_pVoiceChatModule.InDebug() >= 1) Msg("[holylib:voicechat] SV_BroadcastVoiceData: Lua handled voice packet => returning early\n");
+		if (bHandled)
 			return;
-		}
 	}
 
 	detour_SV_BroadcastVoiceData.GetTrampoline<Symbols::SV_BroadcastVoiceData>()(pClient, nBytes, data, xuid);
@@ -1845,10 +1528,7 @@ VCDBG(3, "SV_BroadcastVoiceData: slot=%d bytes=%d hooks=%d\n",
 
 LUA_FUNCTION_STATIC(voicechat_SendEmptyData)
 {
-	CBasePlayer* pPlayer = Util::Get_Player(LUA, 1, true); // Should error if given invalid player.
-	CBaseClient* pClient = Util::GetClientByPlayer(pPlayer);
-	if (!pClient)
-		LUA->ThrowError("Failed to get CBaseClient!\n");
+	CBaseClient* pClient = Util::Get_Client(LUA, 1, true);
 
 	SVC_VoiceData voiceData;
 	voiceData.m_nFromClient = (int)LUA->CheckNumberOpt(2, pClient->GetPlayerSlot());
@@ -1863,11 +1543,7 @@ LUA_FUNCTION_STATIC(voicechat_SendEmptyData)
 
 LUA_FUNCTION_STATIC(voicechat_SendVoiceData)
 {
-	CBasePlayer* pPlayer = Util::Get_Player(LUA, 1, true); // Should error if given invalid player.
-	IClient* pClient = Util::GetClientByPlayer(pPlayer);
-	if (!pClient)
-		LUA->ThrowError("Failed to get CBaseClient!\n");
-
+	CBaseClient* pClient = Util::Get_Client(LUA, 1, true);
 	VoiceData* pData = Get_VoiceData(LUA, 2, true);
 
 	SVC_VoiceData voiceData;
@@ -1899,11 +1575,7 @@ LUA_FUNCTION_STATIC(voicechat_BroadcastVoiceData)
 		LUA->PushNil();
 		while (LUA->Next(-2))
 		{
-			CBasePlayer* pPlayer = Util::Get_Player(LUA, -1, true);
-			CBaseClient* pClient = Util::GetClientByPlayer(pPlayer);
-			if (!pClient)
-				LUA->ThrowError("Failed to get CBaseClient!\n");
-
+			CBaseClient* pClient = Util::Get_Client(LUA, -1, true);
 			pClient->SendNetMsg(voiceData);
 
 			LUA->Pop(1);
@@ -1919,17 +1591,12 @@ LUA_FUNCTION_STATIC(voicechat_BroadcastVoiceData)
 
 LUA_FUNCTION_STATIC(voicechat_ProcessVoiceData)
 {
-	CBasePlayer* pPlayer = Util::Get_Player(LUA, 1, true); // Should error if given invalid player.
-	CBaseClient* pClient = Util::GetClientByPlayer(pPlayer);
-	if (!pClient)
-		LUA->ThrowError("Failed to get CBaseClient!\n");
-
+	CBaseClient* pClient = Util::Get_Client(LUA, 1, true);
 	VoiceData* pData = Get_VoiceData(LUA, 2, true);
 
 	if (!DETOUR_ISVALID(detour_SV_BroadcastVoiceData))
 		LUA->ThrowError("Missing valid detour for SV_BroadcastVoiceData!\n");
 
-	UpdatePlayerTalkingState(pPlayer, true);
 	detour_SV_BroadcastVoiceData.GetTrampoline<Symbols::SV_BroadcastVoiceData>()(
 		pClient, pData->GetLength(), pData->GetData(), 0
 	);
@@ -1965,15 +1632,8 @@ LUA_FUNCTION_STATIC(voicechat_CreateVoiceData)
 
 LUA_FUNCTION_STATIC(voicechat_IsHearingClient)
 {
-	CBasePlayer* pPlayer = Util::Get_Player(LUA, 1, true);
-	IClient* pClient = Util::GetClientByPlayer(pPlayer);
-	if (!pClient)
-		LUA->ThrowError("Failed to get CBaseClient!\n");
-
-	CBasePlayer* pTargetPlayer = Util::Get_Player(LUA, 2, true);
-	IClient* pTargetClient = Util::GetClientByPlayer(pTargetPlayer);
-	if (!pTargetClient)
-		LUA->ThrowError("Failed to get CBaseClient for target player!\n");
+	CBaseClient* pClient = Util::Get_Client(LUA, 1, true);
+	CBaseClient* pTargetClient = Util::Get_Client(LUA, 2, true);
 
 	LUA->PushBool(pClient->IsHearingClient(pTargetClient->GetPlayerSlot()));
 
@@ -1982,15 +1642,8 @@ LUA_FUNCTION_STATIC(voicechat_IsHearingClient)
 
 LUA_FUNCTION_STATIC(voicechat_IsProximityHearingClient)
 {
-	CBasePlayer* pPlayer = Util::Get_Player(LUA, 1, true);
-	IClient* pClient = Util::GetClientByPlayer(pPlayer);
-	if (!pClient)
-		LUA->ThrowError("Failed to get CBaseClient!\n");
-
-	CBasePlayer* pTargetPlayer = Util::Get_Player(LUA, 2, true);
-	IClient* pTargetClient = Util::GetClientByPlayer(pTargetPlayer);
-	if (!pTargetClient)
-		LUA->ThrowError("Failed to get CBaseClient for target player!\n");
+	CBaseClient* pClient = Util::Get_Client(LUA, 1, true);
+	CBaseClient* pTargetClient = Util::Get_Client(LUA, 2, true);
 
 	LUA->PushBool(pClient->IsProximityHearingClient(pTargetClient->GetPlayerSlot()));
 
@@ -2310,17 +1963,7 @@ LUA_FUNCTION_STATIC(voicechat_SaveVoiceStream)
 
 LUA_FUNCTION_STATIC(voicechat_IsPlayerTalking)
 {
-	int iClient = -1;
-	if (LUA->IsType(1, GarrysMod::Lua::Type::Number))
-	{
-		iClient = (int)LUA->GetNumber(1);
-	} else {
-		CBasePlayer* pPlayer = Util::Get_Player(LUA, 1, true);
-		iClient = pPlayer->edict()->m_EdictIndex-1;
-	}
-
-	if (iClient < 0 || iClient >= gpGlobals->maxClients)
-		LUA->ThrowError("Failed to get a valid Client index!");
+	int iClient = Util::Get_ClientIndex(LUA, 1, true);
 
 	LUA->PushBool(g_bIsPlayerTalking[iClient]);
 	return 1;
@@ -2328,17 +1971,7 @@ LUA_FUNCTION_STATIC(voicechat_IsPlayerTalking)
 
 LUA_FUNCTION_STATIC(voicechat_LastPlayerTalked)
 {
-	int iClient = -1;
-	if (LUA->IsType(1, GarrysMod::Lua::Type::Number))
-	{
-		iClient = (int)LUA->GetNumber(1);
-	} else {
-		CBasePlayer* pPlayer = Util::Get_Player(LUA, 1, true);
-		iClient = pPlayer->edict()->m_EdictIndex-1;
-	}
-
-	if (iClient < 0 || iClient >= gpGlobals->maxClients)
-		LUA->ThrowError("Failed to get a valid Client index!");
+	int iClient = Util::Get_ClientIndex(LUA, 1, true);
 
 	LUA->PushNumber(g_fLastPlayerTalked[iClient]);
 	return 1;
@@ -2404,6 +2037,20 @@ LUA_FUNCTION_STATIC(voicechat_ApplyEffect)
 		delete pJob;
 		return 1;
 	}
+}
+
+LUA_FUNCTION_STATIC(voicechat_IsPlayerMuted)
+{
+	int iClient = Util::Get_ClientIndex(LUA, 1, true);
+	LUA->PushBool(g_bIsPlayerMuted[iClient]);
+	return 1;
+}
+
+LUA_FUNCTION_STATIC(voicechat_SetPlayerMuted)
+{
+	int iClient = Util::Get_ClientIndex(LUA, 1, true);
+	g_bIsPlayerMuted[iClient] = LUA->GetBool(2);
+	return 0;
 }
 
 void CVoiceChatModule::LuaThink(GarrysMod::Lua::ILuaInterface* pLua)
@@ -2526,6 +2173,8 @@ void CVoiceChatModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServer
 		Util::AddFunc(pLua, voicechat_IsPlayerTalking, "IsPlayerTalking");
 		Util::AddFunc(pLua, voicechat_LastPlayerTalked, "LastPlayerTalked");
 		Util::AddFunc(pLua, voicechat_ApplyEffect, "ApplyEffect");
+		Util::AddFunc(pLua, voicechat_SetPlayerMuted, "SetPlayerMuted");
+		Util::AddFunc(pLua, voicechat_IsPlayerMuted, "IsPlayerMuted");
 	Util::FinishTable(pLua, "voicechat");
 }
 
@@ -2546,8 +2195,6 @@ void CVoiceChatModule::Shutdown()
 IVoiceServer* g_pVoiceServer = nullptr;
 void CVoiceChatModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn)
 {
-    VCDBG(1, "Init() called. appfn=%p gamefn=%p\n", appfn, gamefn);
-
 	if (appfn[0])
 	{
 		g_pVoiceServer = (IVoiceServer*)appfn[0](INTERFACEVERSION_VOICESERVER, nullptr);
@@ -2557,21 +2204,12 @@ void CVoiceChatModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn)
 	}
 
 	Detour::CheckValue("get interface", "g_pVoiceServer", g_pVoiceServer != nullptr);
-	VCDBG(1, "Init() g_pVoiceServer=%p\n", g_pVoiceServer);
 }
-
-#if SYSTEM_WINDOWS
-DETOUR_THISCALL_START()
-	DETOUR_THISCALL_ADDFUNC1( hook_CVoiceGameMgr_Update, CVoiceGameMgr_Update, CVoiceGameMgr*, double );
-DETOUR_THISCALL_FINISH();
-#endif
 
 void CVoiceChatModule::InitDetour(bool bPreServer)
 {
 	if (bPreServer)
 		return;
-
-	VCDBG(1, "InitDetour(pre=%d)\n", (int)bPreServer);
 
 	SourceSDK::ModuleLoader engine_loader("engine");
 	Detour::Create(
@@ -2579,35 +2217,6 @@ void CVoiceChatModule::InitDetour(bool bPreServer)
 		engine_loader.GetModule(), Symbols::SV_BroadcastVoiceDataSym,
 		(void*)hook_SV_BroadcastVoiceData, m_pID
 	);
-	VCDBG(1, "Detour SV_BroadcastVoiceData valid=%d\n", DETOUR_ISVALID(detour_SV_BroadcastVoiceData));
-
-#if SYSTEM_LINUX
-	SourceSDK::FactoryLoader server_loader("server");
-	Detour::Create(
-		&detour_CVoiceGameMgr_Update, "CVoiceGameMgr::Update",
-		server_loader.GetModule(), Symbols::CVoiceGameMgr_UpdateSym,
-		(void*)DETOUR_THISCALL(hook_CVoiceGameMgr_Update, CVoiceGameMgr_Update), m_pID
-	);
-	VCDBG(1, "Detour CVoiceGameMgr::Update valid=%d\n", DETOUR_ISVALID(detour_CVoiceGameMgr_Update));
-
-	g_PlayerModEnable = Detour::ResolveSymbol<CPlayerBitVec>(server_loader, Symbols::g_PlayerModEnableSym);
-	Detour::CheckValue("get class", "g_PlayerModEnable", g_PlayerModEnable != nullptr);
-
-	g_BanMasks = Detour::ResolveSymbol<CPlayerBitVec>(server_loader, Symbols::g_BanMasksSym);
-	Detour::CheckValue("get class", "g_BanMasks", g_BanMasks != nullptr);
-
-	g_SentGameRulesMasks = Detour::ResolveSymbol<CPlayerBitVec>(server_loader, Symbols::g_SentGameRulesMasksSym);
-	Detour::CheckValue("get class", "g_SentGameRulesMasks", g_SentGameRulesMasks != nullptr);
-
-	g_SentBanMasks = Detour::ResolveSymbol<CPlayerBitVec>(server_loader, Symbols::g_SentBanMasksSym);
-	Detour::CheckValue("get class", "g_SentBanMasks", g_SentBanMasks != nullptr);
-
-	g_bWantModEnable = Detour::ResolveSymbol<CPlayerBitVec>(server_loader, Symbols::g_bWantModEnableSym);
-	Detour::CheckValue("get class", "g_bWantModEnable", g_bWantModEnable != nullptr);
-
-	VCDBG(1, "Resolved symbols: g_PlayerModEnable=%p g_BanMasks=%p g_SentGameRulesMasks=%p g_SentBanMasks=%p g_bWantModEnable=%p\n",
-		g_PlayerModEnable, g_BanMasks, g_SentGameRulesMasks, g_SentBanMasks, g_bWantModEnable);
-#endif
 }
 
 void CVoiceChatModule::PreLuaModuleLoaded(lua_State* L, const char* pFileName)
@@ -2615,10 +2224,9 @@ void CVoiceChatModule::PreLuaModuleLoaded(lua_State* L, const char* pFileName)
 	std::string_view strFileName = pFileName;
 	if (strFileName.find("voicebox") !=std::string::npos)
 	{
-		VCWARN("PreLuaModuleLoaded: detected '%s' (voicebox). Disabling SV_BroadcastVoiceData detour NOW. valid=%d\n", pFileName, DETOUR_ISVALID(detour_SV_BroadcastVoiceData));
+		Msg(PROJECT_NAME " - voicechat: Removing SV_BroadcastVoiceData hook before voicebox is loaded\n");
 		detour_SV_BroadcastVoiceData.Disable();
 		detour_SV_BroadcastVoiceData.Destroy();
-		VCDBG(1, "After disable/destroy: valid=%d\n", DETOUR_ISVALID(detour_SV_BroadcastVoiceData));
 	}
 }
 
@@ -2627,14 +2235,12 @@ void CVoiceChatModule::PostLuaModuleLoaded(lua_State* L, const char* pFileName)
 	std::string_view strFileName = pFileName;
 	if (strFileName.find("voicebox") !=std::string::npos)
 	{
-		VCWARN("PostLuaModuleLoaded: detected '%s' (voicebox). Recreating SV_BroadcastVoiceData detour.\n", pFileName);
-
+		Msg(PROJECT_NAME " - voicechat: Recreating SV_BroadcastVoiceData hook after voicebox was loaded\n");
 		SourceSDK::ModuleLoader engine_loader("engine");
 		Detour::Create(
 			&detour_SV_BroadcastVoiceData, "SV_BroadcastVoiceData",
 			engine_loader.GetModule(), Symbols::SV_BroadcastVoiceDataSym,
 			(void*)hook_SV_BroadcastVoiceData, m_pID
 		);
-		VCDBG(1, "After recreate: valid=%d\n", DETOUR_ISVALID(detour_SV_BroadcastVoiceData));
 	}
 }

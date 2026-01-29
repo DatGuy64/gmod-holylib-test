@@ -39,12 +39,12 @@ LUA_FUNCTION_STATIC(Test_GetEntity)
 {
 	CBaseEntity* pEntity = Util::Get_Entity(LUA, 1, true);
 	EHANDLE* pEntHandle = LUA->GetUserType<EHANDLE>(1, GarrysMod::Lua::Type::Entity);
-	// If something broke, either we will return false, or we will crash which is intented to make the tests fail.
+	// If something broke, either we will return false, or we will crash which is intended to make the tests fail.
 	LUA->PushBool(pEntity && pEntity->edict() && pEntity->edict()->m_EdictIndex == pEntHandle->GetEntryIndex());
 	return 1;
 }
 
-LUA_FUNCTION_STATIC(Test_GetPlayer) // Same as Test_GetEntity though calling Get_Player since it's a seperate independent function.
+LUA_FUNCTION_STATIC(Test_GetPlayer) // Same as Test_GetEntity though calling Get_Player since it's a separate independent function.
 {
 	CBasePlayer* pEntity = Util::Get_Player(LUA, 1, true);
 	EHANDLE* pEntHandle = LUA->GetUserType<EHANDLE>(1, GarrysMod::Lua::Type::Entity);
@@ -195,6 +195,14 @@ LUA_FUNCTION_STATIC(Test_DisableStressBots)
 	return 1;
 }
 
+LUA_FUNCTION_STATIC(Test_Crash)
+{
+	Util::DoUnsafeCodeCheck(LUA);
+
+	*((int*)nullptr) = 1;
+	return 0;
+}
+
 static void SetupCoreTestFunctions(GarrysMod::Lua::ILuaInterface* pLua)
 {
 	Lua::GetLuaData(pLua)->RegisterMetaTable(Lua::_HOLYLIB_CORE_TEST, pLua->CreateMetaTable("_HOLYLIB_CORE_TEST"));
@@ -231,6 +239,7 @@ static void SetupCoreTestFunctions(GarrysMod::Lua::ILuaInterface* pLua)
 		
 		Util::AddFunc(pLua, Test_EnableStressBots, "EnableStressBots"); // Required until we get https://github.com/Facepunch/garrysmod-requests/issues/2948
 		Util::AddFunc(pLua, Test_DisableStressBots, "DisableStressBots");
+		Util::AddFunc(pLua, Test_Crash, "Crash");
 	Util::FinishTable(pLua, "_HOLYLIB_CORE");
 }
 
@@ -252,7 +261,7 @@ bool Lua::PushHook(const char* hook, GarrysMod::Lua::ILuaInterface* pLua)
 
 	if (!ThreadInMainThread() && pLua == g_Lua)
 	{
-		Warning(PROJECT_NAME ": Lua::PushHook was called ouside of the main thread! (%s)\n", hook);
+		Warning(PROJECT_NAME ": Lua::PushHook was called outside of the main thread! (%s)\n", hook);
 		return false;
 	}
 
@@ -447,7 +456,8 @@ void Lua::SetManualShutdown()
 	bManualShutdown = true;
 }
 
-GarrysMod::Lua::ILuaInterface* Lua::GetRealm(unsigned char realm) {
+GarrysMod::Lua::ILuaInterface* Lua::GetRealm(unsigned char realm)
+{
 	SourceSDK::FactoryLoader luashared_loader("lua_shared");
 	GarrysMod::Lua::ILuaShared* LuaShared = (GarrysMod::Lua::ILuaShared*)luashared_loader.GetFactory()(GMOD_LUASHARED_INTERFACE, nullptr);
 	if (LuaShared == nullptr) {
@@ -458,7 +468,8 @@ GarrysMod::Lua::ILuaInterface* Lua::GetRealm(unsigned char realm) {
 	return LuaShared->GetLuaInterface(realm);
 }
 
-GarrysMod::Lua::ILuaShared* Lua::GetShared() {
+GarrysMod::Lua::ILuaShared* Lua::GetShared()
+{
 	SourceSDK::FactoryLoader luashared_loader("lua_shared");
 	if ( !luashared_loader.GetFactory() )
 		Msg(PROJECT_NAME ": About to crash!\n");
@@ -843,12 +854,12 @@ Lua::StateData::~StateData()
 {
 	for (int i = 0; i < Lua::Internal::pMaxEntries; ++i)
 	{
-		Lua::ModuleData* pData = pModuelData[i];
+		Lua::ModuleData* pData = pModuleData[i];
 		if (pData == nullptr)
 			continue;
 
 		delete pData;
-		pModuelData[i] = nullptr;
+		pModuleData[i] = nullptr;
 	}
 
 	if (pProxy)

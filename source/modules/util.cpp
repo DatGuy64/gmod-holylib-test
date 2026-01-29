@@ -160,7 +160,7 @@ static void CompressJob(CompressEntry*& entry)
 
 /*
  * If the Async function's arent used. We simply won't create the threadpools.
- * This should save a bit of CPU usage since we won't have a thread that is permantly in a while loop,
+ * This should save a bit of CPU usage since we won't have a thread that is permanently in a while loop,
  * calling ThreadSleep every 10 milliseconds or so.
  */
 inline void StartThread()
@@ -534,8 +534,9 @@ LUA_FUNCTION_STATIC(util_JSONToTable)
 	rapidjson::Document doc;
 	doc.Parse(jsonString);
 
-	if (doc.HasParseError()) {
-		LUA->ThrowError("Invalid JSON string");
+	if (doc.HasParseError())
+	{
+		LUA->ArgError(1, "Invalid JSON string");
 		return 0;
 	}
 

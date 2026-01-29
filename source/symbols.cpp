@@ -77,6 +77,10 @@ namespace Symbols
 
 	const Symbol lua_typeSym = Symbol::FromName("lua_type");
 
+	const Symbol lua_gcSym = Symbol::FromName("lua_gc");
+
+	const Symbol lua_setallocfSym = Symbol::FromName("lua_setallocf");
+
 	const Symbol luaL_checklstringSym = Symbol::FromName("luaL_checklstring");
 
 	const Symbol lua_pcallSym = Symbol::FromName("lua_pcall");
@@ -92,7 +96,7 @@ namespace Symbols
 	const std::vector<Symbol> gEntListSym = { // Search for "Master was null or not a master!\n"
 		Symbol::FromName("gEntList"),
 		Symbol::FromSignature("\x55\x48\x8D\x3D\x2A\x2A\x2A\x2A\x48\x89\xE5\x53\x48\x83\xEC\x08\xC6\x05\x2A\x2A\x43\x01\x00", 0x111),
-		Symbol::FromSignature("\x55\x8B\xEC\x8B\x45\x08\x56\x85\xC0\x74\x2A\x6A\x00", 0x12),
+		Symbol::FromSignature("****\x6A\x00\x6A\x00\x6A\x00\x6A\x00\x57\x6A\x00\xE8****\x8B\xD8\x85\xDB"), // ?? ?? ?? ?? 6A 00 6A 00 6A 00 6A 00 57 6A 00 E8 ?? ?? ?? ?? 8B D8 85 DB
 		Symbol::FromSignature("\x48\x89\x5C\x24\x08\x57\x48\x83\xEC\x40\x48\x8B\xFA\x48\x85\xC9", 0x1C),
 	};
 
@@ -172,8 +176,7 @@ namespace Symbols
 	//---------------------------------------------------------------------------------
 	const std::vector<Symbol> CBaseClient_ProcessListenEventsSym = {
 		Symbol::FromName("_ZN11CBaseClient19ProcessListenEventsEP16CLC_ListenEvents"),
-		// FUCK. The symbol for 64x is broken or I got the WRONG ONE. WHY DOES CHLTVClient have the same SHIT and SAME vprof name :(
-		Symbol::FromSignature("\x55\x48\x89\xE5\x41\x56\x41\x55\x41\x54\x49\x89\xF4\x53\x48\x8B\x1D****\x8B\x93\x0C\x10\x00\x00\x85\xD2\x41\x0F\x95\xC5******\x41\x0F\xB6\x74\x24\x20\x49"), // 55 48 89 E5 41 56 41 55 41 54 49 89 F4 53 48 8B 1D ?? ?? ?? ?? 8B 93 0C 10 00 00 85 D2 41 0F 95 C5 ?? ?? ?? ?? ?? ?? 41 0F B6 74 24 20 49
+		Symbol::FromSignature("\x55\x48\x89\xE5\x41\x56\x41\x55\x41\x54\x49\x89\xF4\x53\x48\x8B\x1D****\x8B\x93\x0C\x10\x00\x00\x85\xD2\x41\x0F\x95\xC5******\x48"), // 55 48 89 E5 41 56 41 55 41 54 49 89 F4 53 48 8B 1D ?? ?? ?? ?? 8B 93 0C 10 00 00 85 D2 41 0F 95 C5 ?? ?? ?? ?? ?? ?? 48
 	};
 
 	const std::vector<Symbol> CGameEventManager_AddListenerSym = { // Fk this. No 64x
@@ -186,7 +189,7 @@ namespace Symbols
 	const std::vector<Symbol> CPlugin_LoadSym = {
 		Symbol::FromName("_ZN7CPlugin4LoadEPKc"),
 		Symbol::FromSignature("\x55\x48\x89\xE5\x41\x56\x49\x89\xFE\x41\x55\x41\x54\x49\x89\xF4\xBE\x2E"), // 55 48 89 E5 41 56 49 89 FE 41 55 41 54 49 89 F4 BE 2E
-		// No windows since windows doens't have/support serverplugins at all
+		// No windows since windows doesn't have/support serverplugins at all
 	};
 
 	//---------------------------------------------------------------------------------
@@ -272,7 +275,7 @@ namespace Symbols
 	//---------------------------------------------------------------------------------
 	// Purpose: stringtable Symbols
 	//---------------------------------------------------------------------------------
-	const std::vector<Symbol> CNetworkStringTable_DeleteAllStringsSym = { // Error reading string table %s\n - CNetworkStringTableContainer::ReadStringTables -> Fidn the CNetworkStringTable::ReadStringTable call -> Find the CNetworkStringTable::DeleteAllStrings call
+	const std::vector<Symbol> CNetworkStringTable_DeleteAllStringsSym = { // Error reading string table %s\n - CNetworkStringTableContainer::ReadStringTables -> Find the CNetworkStringTable::ReadStringTable call -> Find the CNetworkStringTable::DeleteAllStrings call
 		Symbol::FromName("_ZN19CNetworkStringTable16DeleteAllStringsEv"),
 		Symbol::FromSignature("\x55\x48\x89\xE5\x53\x48\x89\xFB\x48\x83\xEC\x08\x48\x8B\x7F\x50"), // 55 48 89 E5 53 48 89 FB 48 83 EC 08 48 8B 7F 50
 		// No windows since there we use a completely different and unholy setup since Rubat never bothered for https://github.com/Facepunch/garrysmod-requests/issues/2766 :sob:
@@ -507,7 +510,7 @@ namespace Symbols
 	// Purpose: networking Symbols
 	// NOTE: This is just optimizations, having CGMOD_Player_CreateViewModelSym on Windows would be good but all the other things are probably best for Linux only.
 	//---------------------------------------------------------------------------------
-	const std::vector<Symbol> AllocChangeFrameListSym = { // I'm still suprised I managed to get this one :^
+	const std::vector<Symbol> AllocChangeFrameListSym = { // I'm still surprised I managed to get this one :^
 		Symbol::FromName("_Z20AllocChangeFrameListii"),
 		Symbol::FromSignature("\x55\x48\x89\xE5\x41\x55\x41\x54\x41\x89\xFC\xBF\x28"), // 55 48 89 E5 41 55 41 54 41 89 FC BF 28
 		Symbol::FromSignature("\x55\x8B\xEC\x56\x57\x6A\x18"),
@@ -669,7 +672,7 @@ namespace Symbols
 		Symbol::FromName("_ZN13CSteam3Server8ShutdownEv"),
 		Symbol::FromSignature("\x55\x48\x89\xE5\x53\x48\x89\xFB\x48\x83\xEC\x08\x48\x83\x7F**\x74\x5A"), // 55 48 89 E5 53 48 89 FB 48 83 EC 08 48 83 7F ?? ?? 74 5A
 		Symbol::FromSignature("\x55\x8B\xEC\x83\xEC\x08\x56\x8B\xF1\x83\x7E\x04\x00"), // 55 8B EC 83 EC 08 56 8B F1 83 7E 04 00
-		//Inline in win64 unfortunatly
+		//Inline in win64 unfortunately
 	};
 
 	const std::vector<Symbol> CSteam3Server_ActivateSym = { //Search for "-steamport"
@@ -689,7 +692,7 @@ namespace Symbols
 	const std::vector<Symbol> SV_InitGameServerSteamSym = {
 		Symbol::FromName("_Z22SV_InitGameServerSteamv"),
 		Symbol::FromSignature("\x55\x48\x89\xE5\x53\x48\x83\xEC\x08\x48\x8B\x1D********\x00\x00\x01"), // 55 48 89 E5 53 48 83 EC 08 48 8B 1D ?? ?? ?? ?? ?? ?? ?? ?? 00 00 01
-		//Inline in win unfortunatly
+		//Inline in win unfortunately
 	};
 
 	const std::vector<Symbol> CSteam3Server_NotifyClientConnectSym = { // 64x = "S3: Client"
@@ -709,7 +712,7 @@ namespace Symbols
 	const std::vector<Symbol> CSteam3Server_CheckForDuplicateSteamIDSym = { // 64x = "STEAM UserID"
 		Symbol::FromName("_ZN13CSteam3Server24CheckForDuplicateSteamIDEPK11CBaseClient"),
 		Symbol::FromSignature("\x55\x48\x89\xE5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x48\x83\xEC\x68\x48\x89\x75\x80"), // 55 48 89 E5 41 57 41 56 41 55 41 54 53 48 83 EC 68 48 89 75 80
-		//Inline in win unfortunatly
+		//Inline in win unfortunately
 	};
 
 	//---------------------------------------------------------------------------------
@@ -720,44 +723,6 @@ namespace Symbols
 		Symbol::FromSignature("\x55\x48******\x48\x89\xE5\x41\x57\x41\x56\x41\x89\xF6\x41\x55\x49\x89\xFD\x41\x54"), // 55 48 ?? ?? ?? ?? ?? ?? 48 89 E5 41 57 41 56 41 89 F6 41 55 49 89 FD 41 54
 		Symbol::FromSignature("\x55\x8B\xEC\xA1****\x83\xEC\x50\x8B\x50\x48"), // 55 8B EC A1 ?? ?? ?? ?? 83 EC 50 8B 50 48
 		Symbol::FromSignature("\x48\x89\x5C\x24\x20\x56\x57\x41\x56\x48******\x8B\xF2\x4C\x8B\xF1"), // 48 89 5C 24 20 56 57 41 56 48 ?? ?? ?? ?? ?? ?? 8B F2 4C 8B F1
-	};
-
-
-	// NOTE: All of thoes below are obsolete with the next gmod update, see https://github.com/Facepunch/garrysmod-requests/issues/2801 <3
-	const std::vector<Symbol> CVoiceGameMgr_UpdateSym = { // VoiceMask
-		Symbol::FromName("_ZN13CVoiceGameMgr6UpdateEd"),
-		NULL_SIGNATURE, //Symbol::FromSignature("\x55\x48\x89\xE5\x53\x48\x89\xFB\x48\x83\xEC\x08\xF2\x0F\x58\x47\x18"), //55 48 89 E5 53 48 89 FB 48 83 EC 08 F2 0F 58 47 18
-		Symbol::FromSignature("\x55\x8B\xEC\xDD\x45\x08\x56\x8B\xF1\xDC\x46\x10\xDD\x56\x10"), // 55 8B EC DD 45 08 56 8B F1 DC 46 10 DD 56 10
-	};
-
-	const std::vector<Symbol> g_PlayerModEnableSym = {
-		Symbol::FromName("g_PlayerModEnable"),
-		NULL_SIGNATURE,
-		Symbol::FromSignature("\x2A\x2A\x2A\x2A\x89\x5D\xFC\x2A\x2A\x2A\x2A\x2A\x83\xC4\x04"), // CVoiceGameMgr::ClientCommand: VModEnable - ?? ?? ?? ?? 89 5D FC ?? ?? ?? ?? ?? 83 C4 04
-	};
-
-	const std::vector<Symbol> g_BanMasksSym = {
-		Symbol::FromName("g_BanMasks"),
-		NULL_SIGNATURE,
-		Symbol::FromSignature("\x2A\x2A\x2A\x2A\x8B\x4D\x08\x46\x8B\x07"), // CVoiceGameMgr::ClientCommand: vban - ?? ?? ?? ?? 8B 4D 08 46 8B 07
-	};
-
-	const std::vector<Symbol> g_SentGameRulesMasksSym = {
-		Symbol::FromName("g_SentGameRulesMasks"),
-		NULL_SIGNATURE,
-		Symbol::FromSignature("\x2A\x2A\x2A\x2A\x89\x81\x2A\x2A\x2A\x2A\x8B\x81\x2A\x2A\x2A\x2A\x89\x81\x2A\x2A\x2A\x2A\x8B\x81\x2A\x2A\x2A\x2A\x89\x81\x2A\x2A\x2A\x2A\x8D\x45\xA0"), // Guess - ?? ?? ?? ?? 89 81 ?? ?? ?? ?? 8B 81 ?? ?? ?? ?? 89 81 ?? ?? ?? ?? 8B 81 ?? ?? ?? ?? 89 81 ?? ?? ?? ?? 8D 45 A0
-	};
-
-	const std::vector<Symbol> g_SentBanMasksSym = {
-		Symbol::FromName("g_SentBanMasks"),
-		NULL_SIGNATURE,
-		Symbol::FromSignature("\x2A\x2A\x2A\x2A\x89\x81\x2A\x2A\x2A\x2A\x8B\x81\x2A\x2A\x2A\x2A\x89\x81\x2A\x2A\x2A\x2A\x8D\x45\xA0"), // Guess - ?? ?? ?? ?? 89 81 ?? ?? ?? ?? 8B 81 ?? ?? ?? ?? 89 81 ?? ?? ?? ?? 8D 45 A0
-	};
-
-	const std::vector<Symbol> g_bWantModEnableSym = {
-		Symbol::FromName("g_bWantModEnable"),
-		NULL_SIGNATURE,
-		Symbol::FromSignature("\x2A\x2A\x2A\x2A\x89\x81\x2A\x2A\x2A\x2A\x8D\x45\xA0"), // Guess - ?? ?? ?? ?? 89 81 ?? ?? ?? ?? 8D 45 A0
 	};
 
 	//---------------------------------------------------------------------------------
