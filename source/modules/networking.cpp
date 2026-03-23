@@ -2580,6 +2580,9 @@ extern void HolyPVS_ResetAWHSlot(int idx);
 
 void CNetworkingModule::ClientDisconnect(edict_t* pPlayer)
 {
+	if (pPlayer->m_EdictIndex > MAX_PLAYERS)
+		return;
+
 	g_pPlayerTransmitCache[pPlayer->m_EdictIndex - 1].Reset();
 
 #if MODULE_EXISTS_PVS
