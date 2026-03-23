@@ -287,8 +287,14 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 	{
 		for (int i=0; i<g_pAddEntityToPVS.GetNumBits(); ++i)
 		{
-			if (g_pAddEntityToPVS.IsBitSet(i))
-				Util::servergameents->EdictToBaseEntity(&pWorld[i])->SetTransmit(pInfo, true);
+			if (!g_pAddEntityToPVS.IsBitSet(i))
+				continue;
+
+			CBaseEntity* pEnt = Util::servergameents->EdictToBaseEntity(&pWorld[i]);
+			if (!pEnt)
+				continue;
+
+			pEnt->SetTransmit(pInfo, true);
 		}
 	}
 
@@ -405,8 +411,14 @@ void PreCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned 
 	{
 		for (int i=0; i<g_pAddEntityToPVS.GetNumBits(); ++i)
 		{
-			if (g_pAddEntityToPVS.IsBitSet(i))
-				Util::servergameents->EdictToBaseEntity(&pWorld[i])->SetTransmit(pInfo, true);
+			if (!g_pAddEntityToPVS.IsBitSet(i))
+				continue;
+
+			CBaseEntity* pEnt = Util::servergameents->EdictToBaseEntity(&pWorld[i]);
+			if (!pEnt)
+				continue;
+
+			pEnt->SetTransmit(pInfo, true);
 		}
 	}
 
