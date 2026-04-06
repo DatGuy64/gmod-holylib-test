@@ -1406,7 +1406,7 @@ static void VoiceEffect(VoiceEffectJob*& pJob)
 
 static bool g_bIsPlayerMuted[MAX_PLAYERS] = {0};
 static bool g_bIsPlayerDeafened[MAX_PLAYERS] = {0};
-static bool g_bIsPlayerTalking[MAX_PLAYERS] = {0};
+bool g_bIsPlayerTalking[MAX_PLAYERS] = {0};
 static double g_fLastPlayerTalked[MAX_PLAYERS] = {0};
 static ConVar voicechat_stopdelay("holylib_voicechat_stopdelay", "1", FCVAR_ARCHIVE, "How many seconds before a player is marked as stopped talking");
 static void CheckTalkingState(int nPlayerSlot, bool bIsTalking)

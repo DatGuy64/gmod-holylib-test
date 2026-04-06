@@ -34,6 +34,8 @@ extern float g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1];
 extern uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2];
 extern uint64_t g_HolyPVS_AWHWhitelist[HOLYLIB_MAX_PLAYERS + 1][2];
 
+extern bool g_bIsPlayerTalking[HOLYLIB_MAX_PLAYERS];
+
 bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds);
 
 
@@ -1930,6 +1932,10 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 		CBaseEntity* targetEnt = g_pEntityCache[i];
 		if (!targetEnt) continue;
 		if (HolyPVS_AWHWhitelistTest(viewerSlot, i))
+			continue;
+
+		const int talkingSlot = i - 1;
+		if (talkingSlot >= 0 && talkingSlot < HOLYLIB_MAX_PLAYERS && g_bIsPlayerTalking[talkingSlot])
 			continue;
 
 		if (forceBurst)
