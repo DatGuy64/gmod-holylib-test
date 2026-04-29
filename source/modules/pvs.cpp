@@ -50,12 +50,12 @@ static float g_LOSNext[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
 static unsigned char g_LOSVis[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
 
 // Standard Source Engine player hull constants for LOS checks
-static const float g_PlayerBBoxMinX   = -15.0f;
-static const float g_PlayerBBoxMinY   = -15.0f;
-static const float g_PlayerBBoxMaxX   =  15.0f;
-static const float g_PlayerBBoxMaxY   =  15.0f;
-static const float g_PlayerBBoxBottom =   5.0f;
-static const float g_PlayerBBoxTop    =  70.0f;
+constexpr float g_PlayerBBoxMinX   = -15.0f;
+constexpr float g_PlayerBBoxMinY   = -15.0f;
+constexpr float g_PlayerBBoxMaxX   =  15.0f;
+constexpr float g_PlayerBBoxMaxY   =  15.0f;
+constexpr float g_PlayerBBoxBottom =   5.0f;
+constexpr float g_PlayerBBoxTop    =  70.0f;
 
 void HolyPVS_ResetAWHSlot(int idx)
 {
