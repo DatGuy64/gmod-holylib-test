@@ -49,6 +49,14 @@ uint64_t g_HolyPVS_AWHWhitelist[HOLYLIB_MAX_PLAYERS + 1][2] = { {0,0} };
 static float g_LOSNext[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
 static unsigned char g_LOSVis[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
 
+// Standard Source Engine player hull constants for LOS checks
+static const float g_PlayerBBoxMinX   = -15.0f;
+static const float g_PlayerBBoxMinY   = -15.0f;
+static const float g_PlayerBBoxMaxX   =  15.0f;
+static const float g_PlayerBBoxMaxY   =  15.0f;
+static const float g_PlayerBBoxBottom =   5.0f;
+static const float g_PlayerBBoxTop    =  70.0f;
+
 void HolyPVS_ResetAWHSlot(int idx)
 {
     g_HolyPVS_AWHJustEnabled[idx] = false;
@@ -199,21 +207,14 @@ static int VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
         viewerEye.x, viewerEye.y, viewerEye.z,
         origin.x, origin.y, origin.z);
 
-    static const float minX = -16.0f + 1.0f;
-    static const float minY = -16.0f + 1.0f;
-    static const float maxX =  16.0f - 1.0f;
-    static const float maxY =  16.0f - 1.0f;
-    static const float zBottom = 0.0f  + 5.0f;
-    static const float zTop    = 72.0f - 2.0f;
-
-    if (LOS_Clear(viewerEye, origin + Vector(minX, minY, zBottom))) { Msg("[AWH] LOS corner 1 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector(maxX, minY, zBottom))) { Msg("[AWH] LOS corner 2 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector(minX, maxY, zBottom))) { Msg("[AWH] LOS corner 3 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector(maxX, maxY, zBottom))) { Msg("[AWH] LOS corner 4 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector(minX, minY, zTop)))    { Msg("[AWH] LOS corner 5 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector(maxX, minY, zTop)))    { Msg("[AWH] LOS corner 6 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector(minX, maxY, zTop)))    { Msg("[AWH] LOS corner 7 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector(maxX, maxY, zTop)))    { Msg("[AWH] LOS corner 8 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector(g_PlayerBBoxMinX, g_PlayerBBoxMinY, g_PlayerBBoxBottom))) { Msg("[AWH] LOS corner 1 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector(g_PlayerBBoxMaxX, g_PlayerBBoxMinY, g_PlayerBBoxBottom))) { Msg("[AWH] LOS corner 2 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector(g_PlayerBBoxMinX, g_PlayerBBoxMaxY, g_PlayerBBoxBottom))) { Msg("[AWH] LOS corner 3 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector(g_PlayerBBoxMaxX, g_PlayerBBoxMaxY, g_PlayerBBoxBottom))) { Msg("[AWH] LOS corner 4 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector(g_PlayerBBoxMinX, g_PlayerBBoxMinY, g_PlayerBBoxTop)))    { Msg("[AWH] LOS corner 5 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector(g_PlayerBBoxMaxX, g_PlayerBBoxMinY, g_PlayerBBoxTop)))    { Msg("[AWH] LOS corner 6 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector(g_PlayerBBoxMinX, g_PlayerBBoxMaxY, g_PlayerBBoxTop)))    { Msg("[AWH] LOS corner 7 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector(g_PlayerBBoxMaxX, g_PlayerBBoxMaxY, g_PlayerBBoxTop)))    { Msg("[AWH] LOS corner 8 clear\n"); return 1; }
 
     Msg("[AWH] LOS_NoCache: ALL corners blocked\n");
     return 0;
