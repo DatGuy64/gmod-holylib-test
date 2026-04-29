@@ -99,7 +99,7 @@ static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 
 static CTraceFilterWorldOnly g_HolyLibTraceFilterWorldOnly;
 
-static inline int VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target);
+static int VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target);
 
 bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds)
 {
@@ -175,7 +175,7 @@ bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* t
 }
 
 // Returns: 1=visible, 0=hidden, -1=entity unstable (vtable invalid, treat as visible)
-static inline int VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
+static int VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
 {
     if (!viewer || !target)
         return -1;
