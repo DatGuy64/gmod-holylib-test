@@ -178,6 +178,12 @@ static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target
     if (*(uintptr_t*)target < 0x08000000 || *(uintptr_t*)target > 0xf8000000)
         return false;
 
+	Msg("[AWH] target=%p CollisionProp=%p col_vtable=0x%x classname=%s\n",
+		(void*)target,
+		(void*)target->CollisionProp(),
+		target->CollisionProp() ? *(uintptr_t*)target->CollisionProp() : 0,
+		target->GetClassname());
+
     auto* col = target->CollisionProp();
     if (!col || *(uintptr_t*)col < 0x08000000 || *(uintptr_t*)col > 0xf8000000)
         return false;
