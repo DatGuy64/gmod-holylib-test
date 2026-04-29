@@ -143,6 +143,22 @@ static inline bool VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* ta
 
     Msg("[HolyLib - AWH DEBUG] VisibleByLOS_WithEye: calling CollisionProp on edict=%i target=%p\n",
         targetEdict->m_EdictIndex, (void*)target);
+
+    // Sanity: verify the edict still points to this entity (not recycled mid-frame)
+    CBaseEntity* edictEnt = (CBaseEntity*)targetEdict->GetUnknown();
+    if (!edictEnt)
+    {
+        Msg("[HolyLib - AWH DEBUG] VisibleByLOS_WithEye: edict->GetUnknown() is null for edict=%i\n",
+            targetEdict->m_EdictIndex);
+        return false;
+    }
+    if (edictEnt != target)
+    {
+        Msg("[HolyLib - AWH DEBUG] VisibleByLOS_WithEye: edict->GetUnknown() %p != target %p for edict=%i — entity was recycled\n",
+            (void*)edictEnt, (void*)target, targetEdict->m_EdictIndex);
+        return false;
+    }
+
     auto* col = target->CollisionProp();
     if (!col)
     {
