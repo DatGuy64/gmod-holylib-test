@@ -1913,79 +1913,87 @@ static inline bool HolyPVS_AWHWhitelistTest(int viewerSlot, int targetSlot)
 
 static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo)
 {
-	if (!g_HolyPVS_AWHEnabled[viewerSlot])
-		return;
+    if (!g_HolyPVS_AWHEnabled[viewerSlot])
+        return;
 
-	//VPROF_BUDGET("HolyLib - AntiWallhack", VPROF_BUDGETGROUP_OTHER_NETWORKING);
-	const bool forceBurst = g_HolyPVS_AWHJustEnabled[viewerSlot];
+    const bool forceBurst = g_HolyPVS_AWHJustEnabled[viewerSlot];
+    const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
+    const int maxClients = gpGlobals->maxClients;
 
-	const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
-	const int maxClients = gpGlobals->maxClients;
+    CBitVec<MAX_EDICTS>* pTransmitBits = pInfo->m_pTransmitEdict;
+    CBitVec<MAX_EDICTS>* pAlwaysBits = pInfo->m_pTransmitAlways;
 
-	CBitVec<MAX_EDICTS>* pTransmitBits = pInfo->m_pTransmitEdict;
-	CBitVec<MAX_EDICTS>* pAlwaysBits = pInfo->m_pTransmitAlways;
+    if (!viewer)
+        return;
+    edict_t* viewerEdict = viewer->edict();
+    if (!viewerEdict || viewerEdict->IsFree())
+        return;
 
-	for (int i = 1; i <= maxClients; ++i)
-	{
-		if (i == viewerSlot) continue;
+    for (int i = 1; i <= maxClients; ++i)
+    {
+        if (i == viewerSlot) continue;
 
-		CBaseEntity* targetEnt = g_pEntityCache[i];
-		if (!targetEnt) continue;
-
-		edict_t* targetEdict = targetEnt->edict();
-		if (!targetEdict || targetEdict->IsFree())
+        edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
+        if (!targetEdict || targetEdict->IsFree())
             continue;
 
-		if (HolyPVS_AWHWhitelistTest(viewerSlot, i))
-			continue;
+        CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
+        if (!targetEnt)
+            continue;
 
-		const int talkingSlot = i - 1;
-		if (talkingSlot >= 0 && talkingSlot < HOLYLIB_MAX_PLAYERS && g_bIsPlayerTalking[talkingSlot])
-			continue;
+        if (!targetEnt->IsPlayer())
+            continue;
 
-		if (forceBurst)
-		{
-			HolyPVS_AWHSeenSet(viewerSlot, i);
-			if (!pTransmitBits->Get(i))
-			{
-				pTransmitBits->Set(i);
-				if (pAlwaysBits) pAlwaysBits->Set(i);
-			}
-			continue;
-		}
+        if (HolyPVS_AWHWhitelistTest(viewerSlot, i))
+            continue;
 
-		if (!pTransmitBits->Get(i)) continue;
+        const int talkingSlot = i - 1;
+        if (talkingSlot >= 0 && talkingSlot < HOLYLIB_MAX_PLAYERS && g_bIsPlayerTalking[talkingSlot])
+            continue;
 
-		if (!HolyPVS_AWHSeenTest(viewerSlot, i))
-		{
-			HolyPVS_AWHSeenSet(viewerSlot, i);
-			continue;
-		}
+        if (forceBurst)
+        {
+            HolyPVS_AWHSeenSet(viewerSlot, i);
+            if (!pTransmitBits->Get(i))
+            {
+                pTransmitBits->Set(i);
+                if (pAlwaysBits) pAlwaysBits->Set(i);
+            }
+            continue;
+        }
 
-		if (!HolyPVS_VisibleByLOS(viewer, targetEnt, cacheSeconds))
-		{
-			pTransmitBits->Clear(i);
-			if (pAlwaysBits) pAlwaysBits->Clear(i);
+        if (!pTransmitBits->Get(i)) continue;
 
-			for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
-			{
-				edict_t* chEd = ch->edict();
-				if (!chEd) continue;
+        if (!HolyPVS_AWHSeenTest(viewerSlot, i))
+        {
+            HolyPVS_AWHSeenSet(viewerSlot, i);
+            continue;
+        }
 
-				const int idx = chEd->m_EdictIndex;
-				if (idx <= maxClients) continue;
+        if (!HolyPVS_VisibleByLOS(viewer, targetEnt, cacheSeconds))
+        {
+            pTransmitBits->Clear(i);
+            if (pAlwaysBits) pAlwaysBits->Clear(i);
 
-				if (pTransmitBits->Get(idx))
-				{
-					pTransmitBits->Clear(idx);
-					if (pAlwaysBits) pAlwaysBits->Clear(idx);
-				}
-			}
-		}
-	}
+            for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
+            {
+                edict_t* chEd = ch->edict();
+                if (!chEd || chEd->IsFree()) continue;
 
-	if (forceBurst)
-		g_HolyPVS_AWHJustEnabled[viewerSlot] = false;
+                const int idx = chEd->m_EdictIndex;
+                if (idx <= maxClients) continue;
+
+                if (pTransmitBits->Get(idx))
+                {
+                    pTransmitBits->Clear(idx);
+                    if (pAlwaysBits) pAlwaysBits->Clear(idx);
+                }
+            }
+        }
+    }
+
+    if (forceBurst)
+        g_HolyPVS_AWHJustEnabled[viewerSlot] = false;
 }
 
 bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)
