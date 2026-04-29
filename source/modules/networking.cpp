@@ -1928,15 +1928,19 @@ static inline void ApplyAntiWallhackFastTransmit(const Vector& viewerEye, int vi
     {
         if (i == viewerSlot) continue;
 
+        // g_pEntityCache[i] is set to nullptr in OnEntityDeleted — it is the only
+        // reliable indicator that an entity is still alive. EdictToBaseEntity can
+        // return a pointer to already-freed memory during teleport / state transitions.
+        CBaseEntity* targetEnt = g_pEntityCache[i];
+        if (!targetEnt)
+            continue;
+
         edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
         if (!targetEdict || targetEdict->IsFree())
             continue;
 
-        CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
-        if (!targetEnt)
-            continue;
-
-        if (!targetEnt->IsPlayer())
+        // Cross-check: cache and edict must agree on the entity pointer
+        if ((CBaseEntity*)targetEdict->GetUnknown() != targetEnt)
             continue;
 
         if (HolyPVS_AWHWhitelistTest(viewerSlot, i))

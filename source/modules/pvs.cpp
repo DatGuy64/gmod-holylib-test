@@ -138,24 +138,10 @@ static inline bool VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* ta
     if (!target || !targetEdict || targetEdict->IsFree())
         return false;
 
-    // Do NOT call target->edict() — vtable call unsafe during teleport/state change.
-    // targetEdict is passed directly from caller who fetched it via PEntityOfEntIndex.
-
-    uintptr_t vtable = *(uintptr_t*)target;
-    if (vtable < 0x10000)
-    {
-        Msg("[HolyLib - AWH] VisibleByLOS_WithEye: corrupted vtable 0x%x on edict=%i — skipping\n",
-            vtable, targetEdict->m_EdictIndex);
-        return false;
-    }
-
+    // Verify edict and entity are still in sync
     CBaseEntity* edictEnt = (CBaseEntity*)targetEdict->GetUnknown();
     if (!edictEnt || edictEnt != target)
-    {
-        Msg("[HolyLib - AWH] VisibleByLOS_WithEye: edict/entity mismatch on edict=%i — skipping\n",
-            targetEdict->m_EdictIndex);
         return false;
-    }
 
     auto* col = target->CollisionProp();
     if (!col)
