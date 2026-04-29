@@ -155,8 +155,12 @@ static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target
     if (!viewer || !target)
         return false;
 
-	if (!viewer->edict() || viewer->edict()->IsFree()) return false;
-    if (!target->edict() || target->edict()->IsFree()) return false;
+    edict_t* viewerEdict = viewer->edict();
+    edict_t* targetEdict = target->edict();
+    if (!viewerEdict || !targetEdict)
+        return false;
+    if (viewerEdict->IsFree() || targetEdict->IsFree())
+        return false;
 
     Vector viewerEye = viewer->EyePosition();
 
