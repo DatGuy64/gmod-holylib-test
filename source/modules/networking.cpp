@@ -35,6 +35,7 @@ extern uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2];
 extern uint64_t g_HolyPVS_AWHWhitelist[HOLYLIB_MAX_PLAYERS + 1][2];
 
 extern bool g_bIsPlayerTalking[HOLYLIB_MAX_PLAYERS];
+extern bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* target, int tIdx, float cacheSeconds);
 
 bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds);
 
@@ -1911,7 +1912,99 @@ static inline bool HolyPVS_AWHWhitelistTest(int viewerSlot, int targetSlot)
 }
 
 
+static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo)
+{
+    if (!g_HolyPVS_AWHEnabled[viewerSlot])
+        return;
 
+    const bool forceBurst = g_HolyPVS_AWHJustEnabled[viewerSlot];
+    const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
+    const int maxClients = gpGlobals->maxClients;
+
+    CBitVec<MAX_EDICTS>* pTransmitBits = pInfo->m_pTransmitEdict;
+    CBitVec<MAX_EDICTS>* pAlwaysBits = pInfo->m_pTransmitAlways;
+
+    if (!viewer)
+        return;
+    // Validate viewer vtable before any virtual call
+    if (*(uintptr_t*)viewer < 0x08000000 || *(uintptr_t*)viewer > 0xf8000000)
+        return;
+    edict_t* viewerEdict = viewer->edict();
+    if (!viewerEdict || viewerEdict->IsFree())
+        return;
+
+    for (int i = 1; i <= maxClients; ++i)
+    {
+        if (i == viewerSlot) continue;
+
+        edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
+        if (!targetEdict || targetEdict->IsFree())
+            continue;
+
+        CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
+        if (!targetEnt)
+            continue;
+
+        // Validate edict/entity coherence and target vtable
+        if ((CBaseEntity*)targetEdict->GetUnknown() != targetEnt)
+            continue;
+        if (*(uintptr_t*)targetEnt < 0x08000000 || *(uintptr_t*)targetEnt > 0xf8000000)
+            continue;
+
+        if (!targetEnt->IsPlayer())
+            continue;
+
+        if (HolyPVS_AWHWhitelistTest(viewerSlot, i))
+            continue;
+
+        const int talkingSlot = i - 1;
+        if (talkingSlot >= 0 && talkingSlot < HOLYLIB_MAX_PLAYERS && g_bIsPlayerTalking[talkingSlot])
+            continue;
+
+        if (forceBurst)
+        {
+            HolyPVS_AWHSeenSet(viewerSlot, i);
+            if (!pTransmitBits->Get(i))
+            {
+                pTransmitBits->Set(i);
+                if (pAlwaysBits) pAlwaysBits->Set(i);
+            }
+            continue;
+        }
+
+        if (!pTransmitBits->Get(i)) continue;
+
+        if (!HolyPVS_AWHSeenTest(viewerSlot, i))
+        {
+            HolyPVS_AWHSeenSet(viewerSlot, i);
+            continue;
+        }
+
+        if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))
+        {
+            pTransmitBits->Clear(i);
+            if (pAlwaysBits) pAlwaysBits->Clear(i);
+
+            for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
+            {
+                edict_t* chEd = ch->edict();
+                if (!chEd || chEd->IsFree()) continue;
+
+                const int idx = chEd->m_EdictIndex;
+                if (idx <= maxClients) continue;
+
+                if (pTransmitBits->Get(idx))
+                {
+                    pTransmitBits->Clear(idx);
+                    if (pAlwaysBits) pAlwaysBits->Clear(idx);
+                }
+            }
+        }
+    }
+
+    if (forceBurst)
+        g_HolyPVS_AWHJustEnabled[viewerSlot] = false;
+}
 
 bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)
 {
@@ -2350,6 +2443,7 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 	pInfo->m_pTransmitEdict->Or(g_pGlobalTransmitTickCache.g_bWasSeenByPlayer, &g_pGlobalTransmitTickCache.g_bWasSeenByPlayer);
 //	Msg("A:%i, N:%i, F: %i, P: %i\n", always, dontSend, fullCheck, PVS );
 
+	ApplyAntiWallhackFastTransmit(pRecipientPlayer, clientIndex+1, pInfo);
 		return true;
 }
 
