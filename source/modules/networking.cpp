@@ -2000,11 +2000,17 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 {
 	if (!networking_fasttransmit.GetBool() || !gpGlobals || !engine || !mdlcache || !func_CBaseAnimating_SetTransmit)
 		return false;
+	
+	if (!pInfo->m_pClientEnt || pInfo->m_pClientEnt->IsFree())
+        return true;
 
 	// get recipient player's skybox: 3670181
 	CBaseEntity *pRecipientEntity = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
 	if (!pRecipientEntity)
 		return true;
+
+	if (!pRecipientEntity->IsPlayer())
+        return true;
 	
 	MDLCACHE_CRITICAL_SECTION();
 	CBasePlayer *pRecipientPlayer = static_cast<CBasePlayer*>(pRecipientEntity);
