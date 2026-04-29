@@ -141,50 +141,28 @@ static inline bool VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* ta
     // Do NOT call target->edict() — vtable call unsafe during teleport/state change.
     // targetEdict is passed directly from caller who fetched it via PEntityOfEntIndex.
 
-    Msg("[HolyLib - AWH DEBUG] VisibleByLOS_WithEye: calling CollisionProp on edict=%i target=%p\n",
-        targetEdict->m_EdictIndex, (void*)target);
-
-    // Sanity: verify the edict still points to this entity (not recycled mid-frame)
-    CBaseEntity* edictEnt = (CBaseEntity*)targetEdict->GetUnknown();
-    if (!edictEnt)
-    {
-        Msg("[HolyLib - AWH DEBUG] VisibleByLOS_WithEye: edict->GetUnknown() is null for edict=%i\n",
-            targetEdict->m_EdictIndex);
-        return false;
-    }
-    if (edictEnt != target)
-    {
-        Msg("[HolyLib - AWH DEBUG] VisibleByLOS_WithEye: edict->GetUnknown() %p != target %p for edict=%i — entity was recycled\n",
-            (void*)edictEnt, (void*)target, targetEdict->m_EdictIndex);
-        return false;
-    }
-
-    // Read the raw vtable pointer from the object — if it's invalid/small, the object is corrupted
     uintptr_t vtable = *(uintptr_t*)target;
-    Msg("[HolyLib - AWH DEBUG] VisibleByLOS_WithEye: edict=%i target=%p vtable=0x%x edictUnknown=%p\n",
-        targetEdict->m_EdictIndex, (void*)target, vtable, (void*)targetEdict->GetUnknown());
-
-    // A vtable pointer below 0x10000 means the object is corrupted/destroyed
     if (vtable < 0x10000)
     {
-        Msg("[HolyLib - AWH DEBUG] VisibleByLOS_WithEye: CORRUPTED vtable 0x%x on target=%p edict=%i — skipping\n",
-            vtable, (void*)target, targetEdict->m_EdictIndex);
+        Msg("[HolyLib - AWH] VisibleByLOS_WithEye: corrupted vtable 0x%x on edict=%i — skipping\n",
+            vtable, targetEdict->m_EdictIndex);
+        return false;
+    }
+
+    CBaseEntity* edictEnt = (CBaseEntity*)targetEdict->GetUnknown();
+    if (!edictEnt || edictEnt != target)
+    {
+        Msg("[HolyLib - AWH] VisibleByLOS_WithEye: edict/entity mismatch on edict=%i — skipping\n",
+            targetEdict->m_EdictIndex);
         return false;
     }
 
     auto* col = target->CollisionProp();
-    Msg("[HolyLib - AWH DEBUG] CollisionProp returned %p\n", (void*)col);
     if (!col)
-    {
-        Msg("[HolyLib - AWH DEBUG] VisibleByLOS_WithEye: target CollisionProp null (edict=%i)\n",
-            targetEdict->m_EdictIndex);
         return false;
-    }
 
     const Vector mins = col->OBBMins();
-    Msg("[HolyLib - AWH DEBUG] OBBMins OK: (%.1f,%.1f,%.1f)\n", mins.x, mins.y, mins.z);
     const Vector maxs = col->OBBMaxs();
-    Msg("[HolyLib - AWH DEBUG] OBBMaxs OK: (%.1f,%.1f,%.1f)\n", maxs.x, maxs.y, maxs.z);
 
     const float minX = mins.x + 1.0f;
     const float minY = mins.y + 1.0f;
@@ -195,9 +173,7 @@ static inline bool VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* ta
 
     Vector local;
     Vector world;
-    Msg("[HolyLib - AWH DEBUG] calling EntityToWorldTransform\n");
     const matrix3x4_t& mat = target->EntityToWorldTransform();
-    Msg("[HolyLib - AWH DEBUG] EntityToWorldTransform OK\n");
 
     local.z = zBottom;
     local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
@@ -220,6 +196,17 @@ bool HolyPVS_VisibleByLOS_WithSlot(const Vector& viewerEye, int vIdx, CBaseEntit
     if (cacheSeconds > 0.0f)
     {
         const float now = gpGlobals->curtime;
+
+        // First time we ever check this pair: assume visible and defer the real LOS check
+        // to the next cache expiry. This avoids calling vtable methods on an entity that
+        // just entered the PVS and may still be in an unstable state (e.g. mid-teleport).
+        if (g_LOSNext[vIdx][tIdx] == 0.0f)
+        {
+            g_LOSVis[vIdx][tIdx] = 1; // assume visible
+            g_LOSNext[vIdx][tIdx] = now + cacheSeconds;
+            return true;
+        }
+
         if (g_LOSNext[vIdx][tIdx] > now)
             return g_LOSVis[vIdx][tIdx] != 0;
     }

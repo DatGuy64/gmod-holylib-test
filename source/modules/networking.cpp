@@ -1924,9 +1924,6 @@ static inline void ApplyAntiWallhackFastTransmit(const Vector& viewerEye, int vi
     CBitVec<MAX_EDICTS>* pTransmitBits = pInfo->m_pTransmitEdict;
     CBitVec<MAX_EDICTS>* pAlwaysBits = pInfo->m_pTransmitAlways;
 
-    Msg("[HolyLib - AWH DEBUG] ApplyAWH: viewerSlot=%i eye=(%.1f,%.1f,%.1f) forceBurst=%s cache=%.2f\n",
-        viewerSlot, viewerEye.x, viewerEye.y, viewerEye.z, forceBurst ? "yes" : "no", cacheSeconds);
-
     for (int i = 1; i <= maxClients; ++i)
     {
         if (i == viewerSlot) continue;
@@ -1937,10 +1934,7 @@ static inline void ApplyAntiWallhackFastTransmit(const Vector& viewerEye, int vi
 
         CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
         if (!targetEnt)
-        {
-            Msg("[HolyLib - AWH DEBUG] slot %i: EdictToBaseEntity returned null for edict %i\n", viewerSlot, i);
             continue;
-        }
 
         if (!targetEnt->IsPlayer())
             continue;
@@ -1970,9 +1964,6 @@ static inline void ApplyAntiWallhackFastTransmit(const Vector& viewerEye, int vi
             HolyPVS_AWHSeenSet(viewerSlot, i);
             continue;
         }
-
-        Msg("[HolyLib - AWH DEBUG] slot %i -> slot %i: calling VisibleByLOS_WithSlot (target ptr=%p edict=%i)\n",
-            viewerSlot, i, (void*)targetEnt, targetEdict->m_EdictIndex);
 
         if (!HolyPVS_VisibleByLOS_WithSlot(viewerEye, viewerSlot, targetEnt, targetEdict, i, cacheSeconds))
         {
@@ -2436,14 +2427,6 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 	}
 	pInfo->m_pTransmitEdict->Or(g_pGlobalTransmitTickCache.g_bWasSeenByPlayer, &g_pGlobalTransmitTickCache.g_bWasSeenByPlayer);
 //	Msg("A:%i, N:%i, F: %i, P: %i\n", always, dontSend, fullCheck, PVS );
-
-	Msg("[HolyLib - AWH DEBUG] New_CheckTransmit: clientIndex=%i clientEnt=%p IsFree=%s entity=%p IsPlayer=%s pos=(%.1f,%.1f,%.1f)\n",
-		clientIndex,
-		(void*)pInfo->m_pClientEnt,
-		pInfo->m_pClientEnt->IsFree() ? "yes" : "no",
-		(void*)pRecipientEntity,
-		pRecipientEntity->IsPlayer() ? "yes" : "no",
-		clientPosition.x, clientPosition.y, clientPosition.z);
 
 	ApplyAntiWallhackFastTransmit(clientPosition, clientIndex+1, pInfo);
 		return true;
