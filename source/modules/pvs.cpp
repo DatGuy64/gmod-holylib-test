@@ -173,6 +173,7 @@ static inline bool VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* ta
     }
 
     auto* col = target->CollisionProp();
+    Msg("[HolyLib - AWH DEBUG] CollisionProp returned %p\n", (void*)col);
     if (!col)
     {
         Msg("[HolyLib - AWH DEBUG] VisibleByLOS_WithEye: target CollisionProp null (edict=%i)\n",
@@ -181,7 +182,9 @@ static inline bool VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* ta
     }
 
     const Vector mins = col->OBBMins();
+    Msg("[HolyLib - AWH DEBUG] OBBMins OK: (%.1f,%.1f,%.1f)\n", mins.x, mins.y, mins.z);
     const Vector maxs = col->OBBMaxs();
+    Msg("[HolyLib - AWH DEBUG] OBBMaxs OK: (%.1f,%.1f,%.1f)\n", maxs.x, maxs.y, maxs.z);
 
     const float minX = mins.x + 1.0f;
     const float minY = mins.y + 1.0f;
@@ -192,7 +195,9 @@ static inline bool VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* ta
 
     Vector local;
     Vector world;
+    Msg("[HolyLib - AWH DEBUG] calling EntityToWorldTransform\n");
     const matrix3x4_t& mat = target->EntityToWorldTransform();
+    Msg("[HolyLib - AWH DEBUG] EntityToWorldTransform OK\n");
 
     local.z = zBottom;
     local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
