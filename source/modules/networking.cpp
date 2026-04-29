@@ -35,7 +35,7 @@ extern uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2];
 extern uint64_t g_HolyPVS_AWHWhitelist[HOLYLIB_MAX_PLAYERS + 1][2];
 
 extern bool g_bIsPlayerTalking[HOLYLIB_MAX_PLAYERS];
-extern bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* target, int tIdx, float cacheSeconds);
+extern bool HolyPVS_VisibleByLOS_WithSlot(const Vector& viewerEye, int vIdx, CBaseEntity* target, int tIdx, float cacheSeconds);
 
 bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds);
 
@@ -1912,7 +1912,7 @@ static inline bool HolyPVS_AWHWhitelistTest(int viewerSlot, int targetSlot)
 }
 
 
-static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo)
+static inline void ApplyAntiWallhackFastTransmit(const Vector& viewerEye, int viewerSlot, CCheckTransmitInfo* pInfo)
 {
     if (!g_HolyPVS_AWHEnabled[viewerSlot])
         return;
@@ -1924,11 +1924,8 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
     CBitVec<MAX_EDICTS>* pTransmitBits = pInfo->m_pTransmitEdict;
     CBitVec<MAX_EDICTS>* pAlwaysBits = pInfo->m_pTransmitAlways;
 
-    if (!viewer)
-        return;
-    edict_t* viewerEdict = viewer->edict();
-    if (!viewerEdict || viewerEdict->IsFree())
-        return;
+    Msg("[HolyLib - AWH DEBUG] ApplyAWH: viewerSlot=%i eye=(%.1f,%.1f,%.1f) forceBurst=%s cache=%.2f\n",
+        viewerSlot, viewerEye.x, viewerEye.y, viewerEye.z, forceBurst ? "yes" : "no", cacheSeconds);
 
     for (int i = 1; i <= maxClients; ++i)
     {
@@ -1940,7 +1937,10 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 
         CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
         if (!targetEnt)
+        {
+            Msg("[HolyLib - AWH DEBUG] slot %i: EdictToBaseEntity returned null for edict %i\n", viewerSlot, i);
             continue;
+        }
 
         if (!targetEnt->IsPlayer())
             continue;
@@ -1971,7 +1971,10 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
             continue;
         }
 
-        if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))
+        Msg("[HolyLib - AWH DEBUG] slot %i -> slot %i: calling VisibleByLOS_WithSlot (target ptr=%p edict=%i)\n",
+            viewerSlot, i, (void*)targetEnt, targetEdict->m_EdictIndex);
+
+        if (!HolyPVS_VisibleByLOS_WithSlot(viewerEye, viewerSlot, targetEnt, i, cacheSeconds))
         {
             pTransmitBits->Clear(i);
             if (pAlwaysBits) pAlwaysBits->Clear(i);
@@ -2434,7 +2437,15 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 	pInfo->m_pTransmitEdict->Or(g_pGlobalTransmitTickCache.g_bWasSeenByPlayer, &g_pGlobalTransmitTickCache.g_bWasSeenByPlayer);
 //	Msg("A:%i, N:%i, F: %i, P: %i\n", always, dontSend, fullCheck, PVS );
 
-	ApplyAntiWallhackFastTransmit(pRecipientPlayer, clientIndex+1, pInfo);
+	Msg("[HolyLib - AWH DEBUG] New_CheckTransmit: clientIndex=%i clientEnt=%p IsFree=%s entity=%p IsPlayer=%s pos=(%.1f,%.1f,%.1f)\n",
+		clientIndex,
+		(void*)pInfo->m_pClientEnt,
+		pInfo->m_pClientEnt->IsFree() ? "yes" : "no",
+		(void*)pRecipientEntity,
+		pRecipientEntity->IsPlayer() ? "yes" : "no",
+		clientPosition.x, clientPosition.y, clientPosition.z);
+
+	ApplyAntiWallhackFastTransmit(clientPosition, clientIndex+1, pInfo);
 		return true;
 }
 

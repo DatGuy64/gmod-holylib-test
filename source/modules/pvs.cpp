@@ -131,42 +131,28 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
 	return tr.fraction > 0.97f;
 }
 
-bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* target, int tIdx, float cacheSeconds)
+// Version with pre-computed viewer eye position — avoids ANY vtable call on viewer.
+// Called from ApplyAntiWallhackFastTransmit where viewer validity is uncertain.
+static inline bool VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* target)
 {
-    if (cacheSeconds > 0.0f)
-    {
-        const float now = gpGlobals->curtime;
-        if (g_LOSNext[vIdx][tIdx] > now)
-            return g_LOSVis[vIdx][tIdx] != 0;
-    }
-
-    const bool vis = VisibleByLOS_NoCache(viewer, target);
-
-    if (cacheSeconds > 0.0f)
-    {
-        g_LOSVis[vIdx][tIdx] = vis ? 1 : 0;
-        g_LOSNext[vIdx][tIdx] = gpGlobals->curtime + cacheSeconds;
-    }
-    return vis;
-}
-
-static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
-{
-    if (!viewer || !target)
+    if (!target)
         return false;
 
-    edict_t* viewerEdict = viewer->edict();
     edict_t* targetEdict = target->edict();
-    if (!viewerEdict || !targetEdict)
+    if (!targetEdict || targetEdict->IsFree())
+    {
+        Msg("[HolyLib - AWH DEBUG] VisibleByLOS_WithEye: target edict invalid (ptr=%p, free=%s)\n",
+            (void*)targetEdict, (targetEdict && targetEdict->IsFree()) ? "yes" : "n/a");
         return false;
-    if (viewerEdict->IsFree() || targetEdict->IsFree())
-        return false;
-
-    Vector viewerEye = viewer->EyePosition();
+    }
 
     auto* col = target->CollisionProp();
     if (!col)
+    {
+        Msg("[HolyLib - AWH DEBUG] VisibleByLOS_WithEye: target CollisionProp null (edict=%i)\n",
+            targetEdict->m_EdictIndex);
         return false;
+    }
 
     const Vector mins = col->OBBMins();
     const Vector maxs = col->OBBMaxs();
@@ -195,6 +181,42 @@ static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target
     local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
 
     return false;
+}
+
+// Version with known slots and pre-computed eye — called from networking AWH path.
+bool HolyPVS_VisibleByLOS_WithSlot(const Vector& viewerEye, int vIdx, CBaseEntity* target, int tIdx, float cacheSeconds)
+{
+    if (cacheSeconds > 0.0f)
+    {
+        const float now = gpGlobals->curtime;
+        if (g_LOSNext[vIdx][tIdx] > now)
+            return g_LOSVis[vIdx][tIdx] != 0;
+    }
+
+    const bool vis = VisibleByLOS_WithEye(viewerEye, target);
+
+    if (cacheSeconds > 0.0f)
+    {
+        g_LOSVis[vIdx][tIdx] = vis ? 1 : 0;
+        g_LOSNext[vIdx][tIdx] = gpGlobals->curtime + cacheSeconds;
+    }
+    return vis;
+}
+
+static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
+{
+    if (!viewer || !target)
+        return false;
+
+    edict_t* viewerEdict = viewer->edict();
+    edict_t* targetEdict = target->edict();
+    if (!viewerEdict || !targetEdict)
+        return false;
+    if (viewerEdict->IsFree() || targetEdict->IsFree())
+        return false;
+
+    Vector viewerEye = viewer->EyePosition();
+    return VisibleByLOS_WithEye(viewerEye, target);
 }
 
 
