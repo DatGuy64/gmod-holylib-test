@@ -35,7 +35,7 @@ extern uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2];
 extern uint64_t g_HolyPVS_AWHWhitelist[HOLYLIB_MAX_PLAYERS + 1][2];
 
 extern bool g_bIsPlayerTalking[HOLYLIB_MAX_PLAYERS];
-extern bool HolyPVS_VisibleByLOS_WithSlot(const Vector& viewerEye, int vIdx, CBaseEntity* target, int tIdx, float cacheSeconds);
+extern bool HolyPVS_VisibleByLOS_WithSlot(const Vector& viewerEye, int vIdx, CBaseEntity* target, edict_t* targetEdict, int tIdx, float cacheSeconds);
 
 bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds);
 
@@ -1974,7 +1974,7 @@ static inline void ApplyAntiWallhackFastTransmit(const Vector& viewerEye, int vi
         Msg("[HolyLib - AWH DEBUG] slot %i -> slot %i: calling VisibleByLOS_WithSlot (target ptr=%p edict=%i)\n",
             viewerSlot, i, (void*)targetEnt, targetEdict->m_EdictIndex);
 
-        if (!HolyPVS_VisibleByLOS_WithSlot(viewerEye, viewerSlot, targetEnt, i, cacheSeconds))
+        if (!HolyPVS_VisibleByLOS_WithSlot(viewerEye, viewerSlot, targetEnt, targetEdict, i, cacheSeconds))
         {
             pTransmitBits->Clear(i);
             if (pAlwaysBits) pAlwaysBits->Clear(i);

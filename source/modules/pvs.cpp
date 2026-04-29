@@ -133,19 +133,16 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
 
 // Version with pre-computed viewer eye position — avoids ANY vtable call on viewer.
 // Called from ApplyAntiWallhackFastTransmit where viewer validity is uncertain.
-static inline bool VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* target)
+static inline bool VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* target, edict_t* targetEdict)
 {
-    if (!target)
+    if (!target || !targetEdict || targetEdict->IsFree())
         return false;
 
-    edict_t* targetEdict = target->edict();
-    if (!targetEdict || targetEdict->IsFree())
-    {
-        Msg("[HolyLib - AWH DEBUG] VisibleByLOS_WithEye: target edict invalid (ptr=%p, free=%s)\n",
-            (void*)targetEdict, (targetEdict && targetEdict->IsFree()) ? "yes" : "n/a");
-        return false;
-    }
+    // Do NOT call target->edict() — vtable call unsafe during teleport/state change.
+    // targetEdict is passed directly from caller who fetched it via PEntityOfEntIndex.
 
+    Msg("[HolyLib - AWH DEBUG] VisibleByLOS_WithEye: calling CollisionProp on edict=%i target=%p\n",
+        targetEdict->m_EdictIndex, (void*)target);
     auto* col = target->CollisionProp();
     if (!col)
     {
@@ -184,7 +181,7 @@ static inline bool VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* ta
 }
 
 // Version with known slots and pre-computed eye — called from networking AWH path.
-bool HolyPVS_VisibleByLOS_WithSlot(const Vector& viewerEye, int vIdx, CBaseEntity* target, int tIdx, float cacheSeconds)
+bool HolyPVS_VisibleByLOS_WithSlot(const Vector& viewerEye, int vIdx, CBaseEntity* target, edict_t* targetEdict, int tIdx, float cacheSeconds)
 {
     if (cacheSeconds > 0.0f)
     {
@@ -193,7 +190,7 @@ bool HolyPVS_VisibleByLOS_WithSlot(const Vector& viewerEye, int vIdx, CBaseEntit
             return g_LOSVis[vIdx][tIdx] != 0;
     }
 
-    const bool vis = VisibleByLOS_WithEye(viewerEye, target);
+    const bool vis = VisibleByLOS_WithEye(viewerEye, target, targetEdict);
 
     if (cacheSeconds > 0.0f)
     {
@@ -216,7 +213,7 @@ static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target
         return false;
 
     Vector viewerEye = viewer->EyePosition();
-    return VisibleByLOS_WithEye(viewerEye, target);
+    return VisibleByLOS_WithEye(viewerEye, target, targetEdict);
 }
 
 
