@@ -203,6 +203,7 @@ static Detouring::Hook detour_CServerGameEnts_CheckTransmit;
 #ifndef HOLYLIB_MANUALNETWORKING
 extern bool g_pReplaceCServerGameEnts_CheckTransmit;
 extern bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts);
+extern void Networking_ApplyAntiWallhack(CCheckTransmitInfo* pInfo);
 static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)
 {
 	VPROF_BUDGET("HolyLib - CServerGameEnts::CheckTransmit", VPROF_BUDGETGROUP_OTHER_NETWORKING);
@@ -271,14 +272,19 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 #if MODULE_EXISTS_NETWORKING
 	if (g_pReplaceCServerGameEnts_CheckTransmit)
 	{
-		if (!New_CServerGameEnts_CheckTransmit(gameents, pInfo, pEdictIndices, nEdicts))
+		const bool bNetworkingHandledTransmit = New_CServerGameEnts_CheckTransmit(gameents, pInfo, pEdictIndices, nEdicts);
+		if (!bNetworkingHandledTransmit)
 		{
 			detour_CServerGameEnts_CheckTransmit.GetTrampoline<Symbols::CServerGameEnts_CheckTransmit>()(gameents, pInfo, pEdictIndices, nEdicts);
+			Networking_ApplyAntiWallhack(pInfo);
 		}
 	} else
 #endif
 	{
 		detour_CServerGameEnts_CheckTransmit.GetTrampoline<Symbols::CServerGameEnts_CheckTransmit>()(gameents, pInfo, pEdictIndices, nEdicts);
+#if MODULE_EXISTS_NETWORKING
+		Networking_ApplyAntiWallhack(pInfo);
+#endif
 	}
 
 	if(g_bEnableLuaPostTransmitHook && Lua::PushHook("HolyLib:PostCheckTransmit"))
