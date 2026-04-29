@@ -159,6 +159,19 @@ static inline bool VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* ta
         return false;
     }
 
+    // Read the raw vtable pointer from the object — if it's invalid/small, the object is corrupted
+    uintptr_t vtable = *(uintptr_t*)target;
+    Msg("[HolyLib - AWH DEBUG] VisibleByLOS_WithEye: edict=%i target=%p vtable=0x%x edictUnknown=%p\n",
+        targetEdict->m_EdictIndex, (void*)target, vtable, (void*)targetEdict->GetUnknown());
+
+    // A vtable pointer below 0x10000 means the object is corrupted/destroyed
+    if (vtable < 0x10000)
+    {
+        Msg("[HolyLib - AWH DEBUG] VisibleByLOS_WithEye: CORRUPTED vtable 0x%x on target=%p edict=%i — skipping\n",
+            vtable, (void*)target, targetEdict->m_EdictIndex);
+        return false;
+    }
+
     auto* col = target->CollisionProp();
     if (!col)
     {
