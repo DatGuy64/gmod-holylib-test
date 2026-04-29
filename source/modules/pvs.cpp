@@ -50,10 +50,10 @@ static unsigned char g_LOSVis[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
 
 void HolyPVS_ResetAWHSlot(int idx)
 {
-    g_HolyPVS_AWHJustEnabled[idx] = false;
 	if (idx < 1 || idx > HOLYLIB_MAX_PLAYERS)
 		return;
 
+	g_HolyPVS_AWHJustEnabled[idx] = false;
 	g_HolyPVS_AWHEnabled[idx] = false;
 	g_HolyPVS_AWHCacheSeconds[idx] = 0.0f;
 
@@ -102,13 +102,18 @@ static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target
 
 bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds)
 {
+	// Fail open: invalid/half-created entities should be considered visible instead
+	// of crashing or hiding players during connect/spawn transitions.
+	if (!gpGlobals || !enginetrace || !viewer || !target)
+		return true;
+
 	if (cacheSeconds <= 0.0f)
 		return VisibleByLOS_NoCache(viewer, target);
 
 	const int vIdx = GetClientIndexFromEntity(viewer);
 	const int tIdx = GetClientIndexFromEntity(target);
 	if (vIdx < 1 || vIdx > HOLYLIB_MAX_PLAYERS || tIdx < 1 || tIdx > HOLYLIB_MAX_PLAYERS)
-		return VisibleByLOS_NoCache(viewer, target);
+		return true;
 
 	const float now = gpGlobals->curtime;
 
@@ -132,14 +137,24 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
 
 static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
 {
-    if (!viewer || !target)
-        return false;
+	// Fail open here too. Returning false would remove the player from transmit,
+	// but invalid pointers during player join are not evidence of no visibility.
+	if (!gpGlobals || !enginetrace || !viewer || !target)
+		return true;
 
-    Vector viewerEye = viewer->EyePosition();
+	edict_t* viewerEdict = viewer->edict();
+	edict_t* targetEdict = target->edict();
+	if (!viewerEdict || !targetEdict)
+		return true;
 
-    auto* col = target->CollisionProp();
-    if (!col)
-        return false;
+	if (!viewer->IsPlayer() || !target->IsPlayer())
+		return true;
+
+	Vector viewerEye = viewer->EyePosition();
+
+	auto* col = target->CollisionProp();
+	if (!col)
+		return true;
 
     const Vector mins = col->OBBMins();
     const Vector maxs = col->OBBMaxs();
@@ -470,6 +485,7 @@ LUA_FUNCTION_STATIC(pvs_SetAntiWallhack)
 
 	g_HolyPVS_AWHEnabled[idx] = bEnable;
 	g_HolyPVS_AWHCacheSeconds[idx] = cacheSeconds;
+	g_HolyPVS_AWHJustEnabled[idx] = bEnable;
 
 	if (!bEnable)
 	{

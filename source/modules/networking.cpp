@@ -411,6 +411,55 @@ static CBaseEntity* g_pEntityCache[MAX_EDICTS] = {nullptr};
 bool g_pReplaceCServerGameEnts_CheckTransmit = false;
 static edict_t* world_edict = nullptr;
 
+// When a player is joining, the engine can put its edict in CheckTransmit before the
+// CBaseEntity/CollisionProp/transform chain is fully safe to use from our LOS code.
+// Fail open for a short grace window instead of dereferencing an unstable player.
+static const float HOLYPVS_AWH_JOIN_GRACE_SECONDS = 2.0f;
+static float g_HolyPVS_AWHSlotGraceUntil[HOLYLIB_MAX_PLAYERS + 1] = { 0.0f };
+
+static inline bool HolyPVS_AWHSlotInGrace(int slot)
+{
+	return gpGlobals && slot >= 1 && slot <= HOLYLIB_MAX_PLAYERS && g_HolyPVS_AWHSlotGraceUntil[slot] > gpGlobals->curtime;
+}
+
+static inline void HolyPVS_AWHMarkSlotFresh(int slot)
+{
+	if (slot < 1 || slot > HOLYLIB_MAX_PLAYERS)
+		return;
+
+	g_HolyPVS_AWHSlotGraceUntil[slot] = gpGlobals ? gpGlobals->curtime + HOLYPVS_AWH_JOIN_GRACE_SECONDS : 0.0f;
+}
+
+static inline CBaseEntity* HolyPVS_AWHGetStablePlayerEntity(int slot)
+{
+	if (!gpGlobals || !Util::engineserver || !Util::servergameents)
+		return nullptr;
+
+	if (slot < 1 || slot > gpGlobals->maxClients || slot > HOLYLIB_MAX_PLAYERS)
+		return nullptr;
+
+	if (HolyPVS_AWHSlotInGrace(slot))
+		return nullptr;
+
+	edict_t* pEdict = Util::engineserver->PEntityOfEntIndex(slot);
+	if (!pEdict || pEdict->m_EdictIndex != slot || !pEdict->GetNetworkable())
+		return nullptr;
+
+	CBaseEntity* pEntity = Util::servergameents->EdictToBaseEntity(pEdict);
+	if (!pEntity)
+		return nullptr;
+
+	// Make sure we did not pick up a stale CBaseEntity pointer from a recycled client slot.
+	edict_t* pEntityEdict = pEntity->edict();
+	if (pEntityEdict != pEdict)
+		return nullptr;
+
+	if (!pEntity->IsPlayer())
+		return nullptr;
+
+	return pEntity;
+}
+
 // Offset & helper functions
 
 static DTVarByOffset m_Local_Offset("DT_LocalPlayerExclusive", "m_Local");
@@ -1010,7 +1059,16 @@ static inline bool HolyPVS_AWHWhitelistTest(int viewerSlot, int targetSlot)
 
 static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo)
 {
+	if (!gpGlobals || !viewer || !pInfo || !pInfo->m_pTransmitEdict)
+		return;
+
+	if (viewerSlot < 1 || viewerSlot > gpGlobals->maxClients || viewerSlot > HOLYLIB_MAX_PLAYERS)
+		return;
+
 	if (!g_HolyPVS_AWHEnabled[viewerSlot])
+		return;
+
+	if (HolyPVS_AWHSlotInGrace(viewerSlot))
 		return;
 
 	//VPROF_BUDGET("HolyLib - AntiWallhack", VPROF_BUDGETGROUP_OTHER_NETWORKING);
@@ -1022,11 +1080,11 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 	CBitVec<MAX_EDICTS>* pTransmitBits = pInfo->m_pTransmitEdict;
 	CBitVec<MAX_EDICTS>* pAlwaysBits = pInfo->m_pTransmitAlways;
 
-	for (int i = 1; i <= maxClients; ++i)
+	for (int i = 1; i <= maxClients && i <= HOLYLIB_MAX_PLAYERS; ++i)
 	{
 		if (i == viewerSlot) continue;
 
-		CBaseEntity* targetEnt = g_pEntityCache[i];
+		CBaseEntity* targetEnt = HolyPVS_AWHGetStablePlayerEntity(i);
 		if (!targetEnt) continue;
 		if (HolyPVS_AWHWhitelistTest(viewerSlot, i))
 			continue;
@@ -1082,20 +1140,17 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 
 void Networking_ApplyAntiWallhack(CCheckTransmitInfo* pInfo)
 {
-	if (!gpGlobals || !pInfo || !pInfo->m_pClientEnt)
+	if (!gpGlobals || !pInfo || !pInfo->m_pClientEnt || !pInfo->m_pTransmitEdict)
 		return;
 
 	const int viewerSlot = pInfo->m_pClientEnt->m_EdictIndex;
-	if (viewerSlot <= 0 || viewerSlot > gpGlobals->maxClients)
+	if (viewerSlot < 1 || viewerSlot > gpGlobals->maxClients || viewerSlot > HOLYLIB_MAX_PLAYERS)
 		return;
 
 	if (!g_HolyPVS_AWHEnabled[viewerSlot])
 		return;
 
-	CBaseEntity* pRecipientEntity = Util::servergameents ? Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt) : nullptr;
-	if (!pRecipientEntity)
-		pRecipientEntity = g_pEntityCache[viewerSlot];
-
+	CBaseEntity* pRecipientEntity = HolyPVS_AWHGetStablePlayerEntity(viewerSlot);
 	if (!pRecipientEntity)
 		return;
 
@@ -1349,7 +1404,7 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 	}
 	pInfo->m_pTransmitEdict->Or(g_pGlobalTransmitTickCache.g_bWasSeenByPlayer, &g_pGlobalTransmitTickCache.g_bWasSeenByPlayer);
 
-	ApplyAntiWallhackFastTransmit(pRecipientPlayer, clientIndex+1, pInfo);
+	Networking_ApplyAntiWallhack(pInfo);
 	return true;
 }
 
@@ -1516,13 +1571,20 @@ void CNetworkingModule::OnEntityDeleted(CBaseEntity* pEntity)
 	CleanupSetPreventTransmit(pEntity);
 	g_pEntityCache[pEdict->m_EdictIndex] = nullptr;
 	g_pForceWeaponTransmitIndexes.Clear(pEdict->m_EdictIndex);
+
+	if (pEdict->m_EdictIndex >= 1 && pEdict->m_EdictIndex <= HOLYLIB_MAX_PLAYERS)
+		g_HolyPVS_AWHSlotGraceUntil[pEdict->m_EdictIndex] = 0.0f;
 }
 
 void CNetworkingModule::OnEntityCreated(CBaseEntity* pEntity)
 {
 	const edict_t* pEdict = pEntity->edict();
 	if (pEdict)
+	{
 		g_pEntityCache[pEdict->m_EdictIndex] = pEntity;
+		if (pEdict->m_EdictIndex >= 1 && pEdict->m_EdictIndex <= HOLYLIB_MAX_PLAYERS)
+			HolyPVS_AWHMarkSlotFresh(pEdict->m_EdictIndex);
+	}
 }
 
 #if MODULE_EXISTS_PVS
@@ -1535,6 +1597,7 @@ void CNetworkingModule::ClientDisconnect(edict_t* pPlayer)
 		return;
 
 	g_pPlayerTransmitCache[pPlayer->m_EdictIndex-1].Reset();
+	g_HolyPVS_AWHSlotGraceUntil[pPlayer->m_EdictIndex] = 0.0f;
 
 #if MODULE_EXISTS_PVS
 	// Reset AWH state for this slot so the next player reusing the slot doesn't inherit it.
@@ -1711,7 +1774,11 @@ void CNetworkingModule::ServerActivate(edict_t* pEdictList, int edictCount, int 
 	if (pEdictList)
 	{
 		for (int i=0; i<edictCount; ++i)
+		{
 			g_pEntityCache[i] = Util::GetCBaseEntityFromEdict(&pEdictList[i]);
+			if (i >= 1 && i <= HOLYLIB_MAX_PLAYERS && g_pEntityCache[i])
+				HolyPVS_AWHMarkSlotFresh(i);
+		}
 	}
 
 	if (g_pCVar)
