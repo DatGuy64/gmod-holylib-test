@@ -140,18 +140,23 @@ bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* t
 
         if (g_LOSNext[vIdx][tIdx] == 0.0f)
         {
-            // First time: grace tick, assume visible
+            Msg("[AWH] WithSlot %i->%i: first grace tick\n", vIdx, tIdx);
             g_LOSVis[vIdx][tIdx] = 1;
             g_LOSNext[vIdx][tIdx] = now + cacheSeconds;
             return true;
         }
 
         if (g_LOSNext[vIdx][tIdx] > now)
+        {
+            Msg("[AWH] WithSlot %i->%i: cache hit vis=%i\n", vIdx, tIdx, (int)g_LOSVis[vIdx][tIdx]);
             return g_LOSVis[vIdx][tIdx] != 0;
+        }
+
+        Msg("[AWH] WithSlot %i->%i: cache expired, doing LOS\n", vIdx, tIdx);
     }
 
-    // -1 = unstable (vtable invalid), 0 = hidden, 1 = visible
     const int result = VisibleByLOS_NoCache(viewer, target);
+    Msg("[AWH] WithSlot %i->%i: LOS result=%i\n", vIdx, tIdx, result);
 
     if (cacheSeconds > 0.0f)
     {
@@ -188,10 +193,11 @@ static inline int VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
     if (*(uintptr_t*)target < 0x08000000 || *(uintptr_t*)target > 0xf8000000)
         return -1;
 
-    // CollisionProp() vtable is broken since the April 2026 GMod update.
-    // Use GetAbsOrigin() + standard player bbox instead.
-    // Standard Source Engine player hull: (-16,-16,0) to (16,16,72)
     const Vector& origin = target->GetAbsOrigin();
+
+    Msg("[AWH] LOS_NoCache: viewerEye=(%.1f,%.1f,%.1f) targetOrigin=(%.1f,%.1f,%.1f)\n",
+        viewerEye.x, viewerEye.y, viewerEye.z,
+        origin.x, origin.y, origin.z);
 
     static const float minX = -16.0f + 1.0f;
     static const float minY = -16.0f + 1.0f;
@@ -200,16 +206,16 @@ static inline int VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
     static const float zBottom = 0.0f  + 5.0f;
     static const float zTop    = 72.0f - 2.0f;
 
-    // Test 8 corners of the player bbox in world space (origin-relative)
-    if (LOS_Clear(viewerEye, origin + Vector(minX, minY, zBottom))) return 1;
-    if (LOS_Clear(viewerEye, origin + Vector(maxX, minY, zBottom))) return 1;
-    if (LOS_Clear(viewerEye, origin + Vector(minX, maxY, zBottom))) return 1;
-    if (LOS_Clear(viewerEye, origin + Vector(maxX, maxY, zBottom))) return 1;
-    if (LOS_Clear(viewerEye, origin + Vector(minX, minY, zTop)))    return 1;
-    if (LOS_Clear(viewerEye, origin + Vector(maxX, minY, zTop)))    return 1;
-    if (LOS_Clear(viewerEye, origin + Vector(minX, maxY, zTop)))    return 1;
-    if (LOS_Clear(viewerEye, origin + Vector(maxX, maxY, zTop)))    return 1;
+    if (LOS_Clear(viewerEye, origin + Vector(minX, minY, zBottom))) { Msg("[AWH] LOS corner 1 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector(maxX, minY, zBottom))) { Msg("[AWH] LOS corner 2 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector(minX, maxY, zBottom))) { Msg("[AWH] LOS corner 3 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector(maxX, maxY, zBottom))) { Msg("[AWH] LOS corner 4 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector(minX, minY, zTop)))    { Msg("[AWH] LOS corner 5 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector(maxX, minY, zTop)))    { Msg("[AWH] LOS corner 6 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector(minX, maxY, zTop)))    { Msg("[AWH] LOS corner 7 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector(maxX, maxY, zTop)))    { Msg("[AWH] LOS corner 8 clear\n"); return 1; }
 
+    Msg("[AWH] LOS_NoCache: ALL corners blocked\n");
     return 0;
 }
 
