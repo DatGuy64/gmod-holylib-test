@@ -99,7 +99,86 @@ static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 
 static CTraceFilterWorldOnly g_HolyLibTraceFilterWorldOnly;
 
-static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target);
+bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds);
+
+static inline bool LOS_Clear(const Vector& start, const Vector& end)
+{
+	trace_t tr;
+	Ray_t ray;
+	ray.Init(start, end);
+	enginetrace->TraceRay(ray, MASK_OPAQUE | CONTENTS_IGNORE_NODRAW_OPAQUE, &g_HolyLibTraceFilterWorldOnly, &tr);
+	return tr.fraction > 0.97f;
+}
+
+// Returns: 1=visible, 0=hidden, -1=entity unstable (vtable invalid, skip safely)
+static inline int VisibleByLOS_Safe(const Vector& viewerEye, CBaseEntity* target, edict_t* targetEdict)
+{
+    if (!target || !targetEdict || targetEdict->IsFree())
+        return -1;
+
+    // Verify edict still points to this entity
+    if ((CBaseEntity*)targetEdict->GetUnknown() != target)
+        return -1;
+
+    // Validate target vtable (catches mid-teleport / partially destroyed objects)
+    uintptr_t targetVtable = *(uintptr_t*)target;
+    if (targetVtable < 0x08000000 || targetVtable > 0xf8000000)
+        return -1;
+
+    auto* col = target->CollisionProp();
+    if (!col)
+        return -1;
+
+    // Validate CCollisionProperty vtable (0xffffffff on bots or unstable entities)
+    uintptr_t colVtable = *(uintptr_t*)col;
+    if (colVtable < 0x08000000 || colVtable > 0xf8000000)
+        return -1;
+
+    const Vector mins = col->OBBMins();
+    const Vector maxs = col->OBBMaxs();
+
+    const float minX = mins.x + 1.0f;
+    const float minY = mins.y + 1.0f;
+    const float maxX = maxs.x - 1.0f;
+    const float maxY = maxs.y - 1.0f;
+    const float zBottom = mins.z + 5.0f;
+    const float zTop = maxs.z - 2.0f;
+
+    Vector local, world;
+    const matrix3x4_t& mat = target->EntityToWorldTransform();
+
+    local.z = zBottom;
+    local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
+    local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
+    local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
+    local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
+
+    local.z = zTop;
+    local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
+    local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
+    local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
+    local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
+
+    return 0;
+}
+
+static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
+{
+    if (!viewer || !target)
+        return false;
+
+    edict_t* viewerEdict = viewer->edict();
+    edict_t* targetEdict = target->edict();
+    if (!viewerEdict || !targetEdict || viewerEdict->IsFree() || targetEdict->IsFree())
+        return false;
+
+    uintptr_t viewerVtable = *(uintptr_t*)viewer;
+    if (viewerVtable < 0x08000000 || viewerVtable > 0xf8000000)
+        return false;
+
+    Vector viewerEye = viewer->EyePosition();
+    return VisibleByLOS_Safe(viewerEye, target, targetEdict) == 1;
+}
 
 bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds)
 {
@@ -122,147 +201,153 @@ bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheS
 	return vis;
 }
 
-static inline bool LOS_Clear(const Vector& start, const Vector& end)
+extern bool g_bIsPlayerTalking[HOLYLIB_MAX_PLAYERS];
+
+static inline bool HolyPVS_AWHSeenTest(int viewerSlot, int targetSlot)
 {
-	trace_t tr;
-	Ray_t ray;
-	ray.Init(start, end);
-	enginetrace->TraceRay(ray, MASK_OPAQUE | CONTENTS_IGNORE_NODRAW_OPAQUE, &g_HolyLibTraceFilterWorldOnly, &tr);
-	return tr.fraction > 0.97f;
+    const int bit = targetSlot - 1;
+    const int word = (bit >> 6);
+    const uint64_t mask = 1ULL << (bit & 63);
+    return (g_HolyPVS_AWHSeen[viewerSlot][word] & mask) != 0ULL;
 }
 
-// Version with pre-computed viewer eye position — avoids ANY vtable call on viewer.
-// Called from ApplyAntiWallhackFastTransmit where viewer validity is uncertain.
-// Returns: 1 = visible, 0 = hidden, -1 = entity unstable (retry later)
-static inline int VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* target, edict_t* targetEdict)
+static inline void HolyPVS_AWHSeenSet(int viewerSlot, int targetSlot)
 {
-    if (!target || !targetEdict || targetEdict->IsFree())
-    {
-        Msg("[AWH] WithEye: early bail - target=%p edict=%p free=%s\n", (void*)target, (void*)targetEdict, (targetEdict && targetEdict->IsFree()) ? "yes" : "no");
-        return -1;
-    }
-
-    CBaseEntity* edictEnt = (CBaseEntity*)targetEdict->GetUnknown();
-    if (!edictEnt || edictEnt != target)
-    {
-        Msg("[AWH] WithEye: edict/ent mismatch edict=%i edictEnt=%p target=%p\n", targetEdict->m_EdictIndex, (void*)edictEnt, (void*)target);
-        return -1;
-    }
-
-    // Validate target vtable before any virtual call
-    uintptr_t targetVtable = *(uintptr_t*)target;
-    if (targetVtable < 0x08000000 || targetVtable > 0xf8000000)
-    {
-        Msg("[AWH] WithEye: invalid target vtable 0x%x on edict=%i — entity unstable\n", targetVtable, targetEdict->m_EdictIndex);
-        return -1;
-    }
-
-    Msg("[AWH] WithEye: calling CollisionProp edict=%i target=%p\n", targetEdict->m_EdictIndex, (void*)target);
-    auto* col = target->CollisionProp();
-    Msg("[AWH] WithEye: CollisionProp=%p\n", (void*)col);
-    if (!col)
-        return -1;
-
-    uintptr_t colVtable = *(uintptr_t*)col;
-    Msg("[AWH] WithEye: col vtable=0x%x\n", colVtable);
-    // Valid .so addresses on 32-bit Linux are typically 0x08000000 - 0xf8000000
-    // Anything outside that range (including 0xffffffff, 0xb, etc.) is corrupted
-    if (colVtable < 0x08000000 || colVtable > 0xf8000000)
-    {
-        Msg("[AWH] WithEye: invalid col vtable 0x%x on edict=%i — entity unstable\n", colVtable, targetEdict->m_EdictIndex);
-        return -1;
-    }
-
-    Msg("[AWH] WithEye: calling OBBMins\n");
-    const Vector mins = col->OBBMins();
-    Msg("[AWH] WithEye: OBBMins=(%.1f,%.1f,%.1f)\n", mins.x, mins.y, mins.z);
-    const Vector maxs = col->OBBMaxs();
-    Msg("[AWH] WithEye: OBBMaxs=(%.1f,%.1f,%.1f)\n", maxs.x, maxs.y, maxs.z);
-
-    const float minX = mins.x + 1.0f;
-    const float minY = mins.y + 1.0f;
-    const float maxX = maxs.x - 1.0f;
-    const float maxY = maxs.y - 1.0f;
-    const float zBottom = mins.z + 5.0f;
-    const float zTop = maxs.z - 2.0f;
-
-    Vector local;
-    Vector world;
-    const matrix3x4_t& mat = target->EntityToWorldTransform();
-
-    local.z = zBottom;
-    local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
-    local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
-    local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
-    local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
-
-    local.z = zTop;
-    local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
-    local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
-    local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
-    local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
-
-    return 0;
+    const int bit = targetSlot - 1;
+    const int word = (bit >> 6);
+    const uint64_t mask = 1ULL << (bit & 63);
+    g_HolyPVS_AWHSeen[viewerSlot][word] |= mask;
 }
 
-// Version with known slots and pre-computed eye — called from networking AWH path.
-bool HolyPVS_VisibleByLOS_WithSlot(const Vector& viewerEye, int vIdx, CBaseEntity* target, edict_t* targetEdict, int tIdx, float cacheSeconds)
+static inline bool HolyPVS_AWHWhitelistTest(int viewerSlot, int targetSlot)
 {
-    Msg("[AWH] WithSlot: vIdx=%i tIdx=%i target=%p edict=%p cacheSeconds=%.2f\n", vIdx, tIdx, (void*)target, (void*)targetEdict, cacheSeconds);
-    if (cacheSeconds > 0.0f)
+    const int bit = targetSlot - 1;
+    const int word = (bit >> 6);
+    const uint64_t mask = 1ULL << (bit & 63);
+    return (g_HolyPVS_AWHWhitelist[viewerSlot][word] & mask) != 0ULL;
+}
+
+// Applies AWH filtering after CheckTransmit.
+// Called from hook_CServerGameEnts_CheckTransmit regardless of fasttransmit setting.
+static void ApplyAWH(CCheckTransmitInfo* pInfo)
+{
+    if (!pInfo || !pInfo->m_pClientEnt || pInfo->m_pClientEnt->IsFree())
+        return;
+
+    const int viewerSlot = pInfo->m_pClientEnt->m_EdictIndex;
+    if (viewerSlot < 1 || viewerSlot > HOLYLIB_MAX_PLAYERS)
+        return;
+
+    if (!g_HolyPVS_AWHEnabled[viewerSlot])
+        return;
+
+    CBaseEntity* viewerEnt = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
+    if (!viewerEnt)
+        return;
+
+    uintptr_t viewerVtable = *(uintptr_t*)viewerEnt;
+    if (viewerVtable < 0x08000000 || viewerVtable > 0xf8000000)
+        return;
+
+    const Vector viewerEye = viewerEnt->EyePosition();
+    const bool forceBurst = g_HolyPVS_AWHJustEnabled[viewerSlot];
+    const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
+    const int maxClients = gpGlobals->maxClients;
+
+    CBitVec<MAX_EDICTS>* pTransmitBits = pInfo->m_pTransmitEdict;
+    CBitVec<MAX_EDICTS>* pAlwaysBits = pInfo->m_pTransmitAlways;
+
+    for (int i = 1; i <= maxClients; ++i)
     {
+        if (i == viewerSlot) continue;
+
+        if (!forceBurst && !pTransmitBits->Get(i)) continue;
+
+        edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
+        if (!targetEdict || targetEdict->IsFree())
+            continue;
+
+        CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
+        if (!targetEnt || (CBaseEntity*)targetEdict->GetUnknown() != targetEnt)
+            continue;
+
+        if (HolyPVS_AWHWhitelistTest(viewerSlot, i))
+            continue;
+
+        const int talkingSlot = i - 1;
+        if (talkingSlot >= 0 && talkingSlot < HOLYLIB_MAX_PLAYERS && g_bIsPlayerTalking[talkingSlot])
+            continue;
+
+        if (forceBurst)
+        {
+            HolyPVS_AWHSeenSet(viewerSlot, i);
+            if (!pTransmitBits->Get(i))
+            {
+                pTransmitBits->Set(i);
+                if (pAlwaysBits) pAlwaysBits->Set(i);
+            }
+            continue;
+        }
+
+        if (!HolyPVS_AWHSeenTest(viewerSlot, i))
+        {
+            HolyPVS_AWHSeenSet(viewerSlot, i);
+            continue;
+        }
+
         const float now = gpGlobals->curtime;
+        bool visible = true;
 
-        if (g_LOSNext[vIdx][tIdx] == 0.0f)
+        if (g_LOSNext[viewerSlot][i] == 0.0f)
         {
-            Msg("[AWH] WithSlot: first-time grace tick, returning visible\n");
-            g_LOSVis[vIdx][tIdx] = 1;
-            g_LOSNext[vIdx][tIdx] = now + cacheSeconds;
-            return true;
+            // First time: grace tick
+            g_LOSVis[viewerSlot][i] = 1;
+            g_LOSNext[viewerSlot][i] = now + (cacheSeconds > 0.0f ? cacheSeconds : 0.1f);
+        }
+        else if (cacheSeconds <= 0.0f || g_LOSNext[viewerSlot][i] <= now)
+        {
+            const int result = VisibleByLOS_Safe(viewerEye, targetEnt, targetEdict);
+            if (result == -1)
+            {
+                // Unstable entity: never check again
+                g_LOSVis[viewerSlot][i] = 1;
+                g_LOSNext[viewerSlot][i] = now + 99999.0f;
+            }
+            else
+            {
+                g_LOSVis[viewerSlot][i] = (result == 1) ? 1 : 0;
+                if (cacheSeconds > 0.0f)
+                    g_LOSNext[viewerSlot][i] = now + cacheSeconds;
+                visible = (result == 1);
+            }
+        }
+        else
+        {
+            visible = g_LOSVis[viewerSlot][i] != 0;
         }
 
-        if (g_LOSNext[vIdx][tIdx] > now)
+        if (!visible)
         {
-            Msg("[AWH] WithSlot: cache hit, vis=%i\n", (int)g_LOSVis[vIdx][tIdx]);
-            return g_LOSVis[vIdx][tIdx] != 0;
-        }
+            pTransmitBits->Clear(i);
+            if (pAlwaysBits) pAlwaysBits->Clear(i);
 
-        Msg("[AWH] WithSlot: cache expired, doing real LOS check\n");
+            for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
+            {
+                edict_t* chEd = ch->edict();
+                if (!chEd || chEd->IsFree()) continue;
+                const int idx = chEd->m_EdictIndex;
+                if (idx <= maxClients) continue;
+                if (pTransmitBits->Get(idx))
+                {
+                    pTransmitBits->Clear(idx);
+                    if (pAlwaysBits) pAlwaysBits->Clear(idx);
+                }
+            }
+        }
     }
 
-    const int result = VisibleByLOS_WithEye(viewerEye, target, targetEdict);
-    Msg("[AWH] WithSlot: LOS result=%i\n", result);
-
-    if (cacheSeconds > 0.0f)
-    {
-        if (result == -1)
-        {
-            // Entity unstable (corrupted vtable, mid-teleport etc.)
-            // Reset cache to 0 so grace tick fires again next call
-            Msg("[AWH] WithSlot: entity unstable, resetting LOS cache to trigger grace tick\n");
-            g_LOSNext[vIdx][tIdx] = 0.0f;
-            return true; // assume visible — don't hide a player we can't check
-        }
-        g_LOSVis[vIdx][tIdx] = (result == 1) ? 1 : 0;
-        g_LOSNext[vIdx][tIdx] = gpGlobals->curtime + cacheSeconds;
-    }
-    return result != 0;
-}
-
-static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
-{
-    if (!viewer || !target)
-        return false;
-
-    edict_t* viewerEdict = viewer->edict();
-    edict_t* targetEdict = target->edict();
-    if (!viewerEdict || !targetEdict)
-        return false;
-    if (viewerEdict->IsFree() || targetEdict->IsFree())
-        return false;
-
-    Vector viewerEye = viewer->EyePosition();
-    return VisibleByLOS_WithEye(viewerEye, target, targetEdict) == 1;
+    if (forceBurst)
+        g_HolyPVS_AWHJustEnabled[viewerSlot] = false;
 }
 
 
@@ -417,6 +502,9 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 	{
 		detour_CServerGameEnts_CheckTransmit.GetTrampoline<Symbols::CServerGameEnts_CheckTransmit>()(gameents, pInfo, pEdictIndices, nEdicts);
 	}
+
+	// Apply AWH filtering after CheckTransmit — works regardless of fasttransmit setting
+	ApplyAWH(pInfo);
 
 	if(g_bEnableLuaPostTransmitHook && Lua::PushHook("HolyLib:PostCheckTransmit"))
 	{
