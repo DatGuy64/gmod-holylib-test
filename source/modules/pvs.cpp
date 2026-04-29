@@ -136,19 +136,30 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
 static inline bool VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* target, edict_t* targetEdict)
 {
     if (!target || !targetEdict || targetEdict->IsFree())
+    {
+        Msg("[AWH] WithEye: early bail - target=%p edict=%p free=%s\n", (void*)target, (void*)targetEdict, (targetEdict && targetEdict->IsFree()) ? "yes" : "no");
         return false;
+    }
 
     // Verify edict and entity are still in sync
     CBaseEntity* edictEnt = (CBaseEntity*)targetEdict->GetUnknown();
     if (!edictEnt || edictEnt != target)
+    {
+        Msg("[AWH] WithEye: edict/ent mismatch edict=%i edictEnt=%p target=%p\n", targetEdict->m_EdictIndex, (void*)edictEnt, (void*)target);
         return false;
+    }
 
+    Msg("[AWH] WithEye: calling CollisionProp edict=%i target=%p\n", targetEdict->m_EdictIndex, (void*)target);
     auto* col = target->CollisionProp();
+    Msg("[AWH] WithEye: CollisionProp=%p\n", (void*)col);
     if (!col)
         return false;
 
+    Msg("[AWH] WithEye: calling OBBMins\n");
     const Vector mins = col->OBBMins();
+    Msg("[AWH] WithEye: OBBMins=(%.1f,%.1f,%.1f)\n", mins.x, mins.y, mins.z);
     const Vector maxs = col->OBBMaxs();
+    Msg("[AWH] WithEye: OBBMaxs=(%.1f,%.1f,%.1f)\n", maxs.x, maxs.y, maxs.z);
 
     const float minX = mins.x + 1.0f;
     const float minY = mins.y + 1.0f;
@@ -179,25 +190,30 @@ static inline bool VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* ta
 // Version with known slots and pre-computed eye — called from networking AWH path.
 bool HolyPVS_VisibleByLOS_WithSlot(const Vector& viewerEye, int vIdx, CBaseEntity* target, edict_t* targetEdict, int tIdx, float cacheSeconds)
 {
+    Msg("[AWH] WithSlot: vIdx=%i tIdx=%i target=%p edict=%p cacheSeconds=%.2f\n", vIdx, tIdx, (void*)target, (void*)targetEdict, cacheSeconds);
     if (cacheSeconds > 0.0f)
     {
         const float now = gpGlobals->curtime;
 
-        // First time we ever check this pair: assume visible and defer the real LOS check
-        // to the next cache expiry. This avoids calling vtable methods on an entity that
-        // just entered the PVS and may still be in an unstable state (e.g. mid-teleport).
         if (g_LOSNext[vIdx][tIdx] == 0.0f)
         {
-            g_LOSVis[vIdx][tIdx] = 1; // assume visible
+            Msg("[AWH] WithSlot: first-time grace tick, returning visible\n");
+            g_LOSVis[vIdx][tIdx] = 1;
             g_LOSNext[vIdx][tIdx] = now + cacheSeconds;
             return true;
         }
 
         if (g_LOSNext[vIdx][tIdx] > now)
+        {
+            Msg("[AWH] WithSlot: cache hit, vis=%i\n", (int)g_LOSVis[vIdx][tIdx]);
             return g_LOSVis[vIdx][tIdx] != 0;
+        }
+
+        Msg("[AWH] WithSlot: cache expired, doing real LOS check\n");
     }
 
     const bool vis = VisibleByLOS_WithEye(viewerEye, target, targetEdict);
+    Msg("[AWH] WithSlot: LOS result=%s\n", vis ? "visible" : "hidden");
 
     if (cacheSeconds > 0.0f)
     {

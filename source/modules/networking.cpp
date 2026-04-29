@@ -1937,11 +1937,19 @@ static inline void ApplyAntiWallhackFastTransmit(const Vector& viewerEye, int vi
 
         edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
         if (!targetEdict || targetEdict->IsFree())
+        {
+            Msg("[AWH] slot %i -> %i: edict invalid (ptr=%p free=%s)\n", viewerSlot, i, (void*)targetEdict, (targetEdict && targetEdict->IsFree()) ? "yes" : "no");
             continue;
+        }
 
         // Cross-check: cache and edict must agree on the entity pointer
         if ((CBaseEntity*)targetEdict->GetUnknown() != targetEnt)
+        {
+            Msg("[AWH] slot %i -> %i: cache/edict mismatch cache=%p unknown=%p\n", viewerSlot, i, (void*)targetEnt, (void*)targetEdict->GetUnknown());
             continue;
+        }
+
+        Msg("[AWH] slot %i -> %i: passed all guards, targetEnt=%p\n", viewerSlot, i, (void*)targetEnt);
 
         if (HolyPVS_AWHWhitelistTest(viewerSlot, i))
             continue;
