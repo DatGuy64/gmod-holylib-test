@@ -136,6 +136,9 @@ static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target
     if (!viewer || !target)
         return false;
 
+	if (!viewer->edict() || viewer->edict()->IsFree()) return false;
+    if (!target->edict() || target->edict()->IsFree()) return false;
+
     Vector viewerEye = viewer->EyePosition();
 
     auto* col = target->CollisionProp();

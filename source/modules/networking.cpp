@@ -1931,6 +1931,11 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 
 		CBaseEntity* targetEnt = g_pEntityCache[i];
 		if (!targetEnt) continue;
+
+		edict_t* targetEdict = targetEnt->edict();
+		if (!targetEdict || targetEdict->IsFree())
+            continue;
+
 		if (HolyPVS_AWHWhitelistTest(viewerSlot, i))
 			continue;
 
