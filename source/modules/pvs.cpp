@@ -137,9 +137,9 @@ bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* t
     {
         const float now = gpGlobals->curtime;
 
-        // First time checking this pair: grace tick, assume visible, defer real check
         if (g_LOSNext[vIdx][tIdx] == 0.0f)
         {
+            // First time: grace tick, assume visible
             g_LOSVis[vIdx][tIdx] = 1;
             g_LOSNext[vIdx][tIdx] = now + cacheSeconds;
             return true;
@@ -149,72 +149,67 @@ bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* t
             return g_LOSVis[vIdx][tIdx] != 0;
     }
 
-    const bool vis = VisibleByLOS_NoCache(viewer, target);
+    // -1 = unstable (vtable invalid), 0 = hidden, 1 = visible
+    const int result = VisibleByLOS_NoCache(viewer, target);
 
     if (cacheSeconds > 0.0f)
     {
-        g_LOSVis[vIdx][tIdx] = vis ? 1 : 0;
+        if (result < 0)
+        {
+            // Entity unstable (bot with no collision, mid-teleport etc.)
+            // Mark as permanently visible so we never hide it
+            g_LOSVis[vIdx][tIdx] = 1;
+            g_LOSNext[vIdx][tIdx] = gpGlobals->curtime + 99999.0f;
+            return true;
+        }
+        g_LOSVis[vIdx][tIdx] = result;
         g_LOSNext[vIdx][tIdx] = gpGlobals->curtime + cacheSeconds;
     }
-    return vis;
+    return result != 0;
 }
 
-static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
+// Returns: 1=visible, 0=hidden, -1=entity unstable (vtable invalid, treat as visible)
+static inline int VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
 {
     if (!viewer || !target)
-        return false;
+        return -1;
 
     edict_t* viewerEdict = viewer->edict();
     edict_t* targetEdict = target->edict();
     if (!viewerEdict || !targetEdict || viewerEdict->IsFree() || targetEdict->IsFree())
-        return false;
+        return -1;
 
-    // Validate vtables before virtual calls (guards against mid-teleport / bot instability)
     if (*(uintptr_t*)viewer < 0x08000000 || *(uintptr_t*)viewer > 0xf8000000)
-        return false;
+        return -1;
 
     Vector viewerEye = viewer->EyePosition();
 
     if (*(uintptr_t*)target < 0x08000000 || *(uintptr_t*)target > 0xf8000000)
-        return false;
+        return -1;
 
-	Msg("[AWH] target=%p CollisionProp=%p col_vtable=0x%x classname=%s\n",
-		(void*)target,
-		(void*)target->CollisionProp(),
-		target->CollisionProp() ? *(uintptr_t*)target->CollisionProp() : 0,
-		target->GetClassname());
+    // CollisionProp() vtable is broken since the April 2026 GMod update.
+    // Use GetAbsOrigin() + standard player bbox instead.
+    // Standard Source Engine player hull: (-16,-16,0) to (16,16,72)
+    const Vector& origin = target->GetAbsOrigin();
 
-    auto* col = target->CollisionProp();
-    if (!col || *(uintptr_t*)col < 0x08000000 || *(uintptr_t*)col > 0xf8000000)
-        return false;
+    static const float minX = -16.0f + 1.0f;
+    static const float minY = -16.0f + 1.0f;
+    static const float maxX =  16.0f - 1.0f;
+    static const float maxY =  16.0f - 1.0f;
+    static const float zBottom = 0.0f  + 5.0f;
+    static const float zTop    = 72.0f - 2.0f;
 
-    const Vector mins = col->OBBMins();
-    const Vector maxs = col->OBBMaxs();
+    // Test 8 corners of the player bbox in world space (origin-relative)
+    if (LOS_Clear(viewerEye, origin + Vector(minX, minY, zBottom))) return 1;
+    if (LOS_Clear(viewerEye, origin + Vector(maxX, minY, zBottom))) return 1;
+    if (LOS_Clear(viewerEye, origin + Vector(minX, maxY, zBottom))) return 1;
+    if (LOS_Clear(viewerEye, origin + Vector(maxX, maxY, zBottom))) return 1;
+    if (LOS_Clear(viewerEye, origin + Vector(minX, minY, zTop)))    return 1;
+    if (LOS_Clear(viewerEye, origin + Vector(maxX, minY, zTop)))    return 1;
+    if (LOS_Clear(viewerEye, origin + Vector(minX, maxY, zTop)))    return 1;
+    if (LOS_Clear(viewerEye, origin + Vector(maxX, maxY, zTop)))    return 1;
 
-    const float minX = mins.x + 1.0f;
-    const float minY = mins.y + 1.0f;
-    const float maxX = maxs.x - 1.0f;
-    const float maxY = maxs.y - 1.0f;
-    const float zBottom = mins.z + 5.0f;
-    const float zTop = maxs.z - 2.0f;
-
-    Vector local;
-    Vector world;
-    const matrix3x4_t& mat = target->EntityToWorldTransform();
-
-    local.z = zBottom;
-    local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-    local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-    local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-    local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-
-    local.z = zTop;
-    local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-    local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-    local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-    local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-
-    return false;
+    return 0;
 }
 
 
