@@ -131,6 +131,25 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
 	return tr.fraction > 0.97f;
 }
 
+bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* target, int tIdx, float cacheSeconds)
+{
+    if (cacheSeconds > 0.0f)
+    {
+        const float now = gpGlobals->curtime;
+        if (g_LOSNext[vIdx][tIdx] > now)
+            return g_LOSVis[vIdx][tIdx] != 0;
+    }
+
+    const bool vis = VisibleByLOS_NoCache(viewer, target);
+
+    if (cacheSeconds > 0.0f)
+    {
+        g_LOSVis[vIdx][tIdx] = vis ? 1 : 0;
+        g_LOSNext[vIdx][tIdx] = gpGlobals->curtime + cacheSeconds;
+    }
+    return vis;
+}
+
 static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
 {
     if (!viewer || !target)
