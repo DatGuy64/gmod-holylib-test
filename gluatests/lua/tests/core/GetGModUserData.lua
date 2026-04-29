@@ -18,8 +18,7 @@ return {
         {
             name = "Performance",
             func = function()
-				local vec = Vector(1, 2, 3)
-                HolyLib_RunPerformanceTest("_HOLYLIB_CORE.RawGetGModVector", function() _HOLYLIB_CORE.RawGetGModVector(vec) end)
+                HolyLib_RunPerformanceTest("_HOLYLIB_CORE.RawGetGModVector", _HOLYLIB_CORE.RawGetGModVector, Vector(1, 2, 3))
             end
         },
     }

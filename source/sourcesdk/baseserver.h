@@ -224,7 +224,7 @@ public:
 	int			serverclassbits;	// log2 of serverclasses
 
 
-public:
+private:
 
 	// Gets the next user ID mod SHRT_MAX and unique (not used by any active clients).
 	int			GetNextUserID();

@@ -13,20 +13,8 @@
 #include "eiface.h"
 #include "player.h"
 
-extern "C"
-{
-	#include "../luajit/src/lj_strfmt.h"
-}
-
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
-
-Symbols::lua_pushtracablecclosure Lua::func_lua_pushtracablecclosure = nullptr;
-Symbols::lua_settracablecclosure Lua::func_lua_settracablecclosure = nullptr;
-thread_local lua_String Lua::pTempStr;
-bool Lua::g_bUsingLuaJIT = false;
-thread_local GarrysMod::Lua::ILuaInterface* Lua::pExecutingInterface = nullptr;
-thread_local bool Lua::bIsCallingASM = false;
 
 // Testing functions
 
@@ -221,13 +209,13 @@ static void SetupCoreTestFunctions(GarrysMod::Lua::ILuaInterface* pLua)
 		Util::AddFunc(pLua, _HOLYLIB_CORE_TEST__index, "__index");
 		Util::AddFunc(pLua, _HOLYLIB_CORE_TEST__newindex, "__newindex");
 		Util::AddFunc(pLua, _HOLYLIB_CORE_TEST__gc, "__gc");
-		LUA_REGISTER_JIT(pLua, _HOLYLIB_CORE_TEST_GetTable, "GetTable");
+		Util::AddFunc(pLua, _HOLYLIB_CORE_TEST_GetTable, "GetTable");
 	pLua->Pop(1);
 
 	Lua::GetLuaData(pLua)->RegisterMetaTable(Lua::_HOLYLIB_CORE_TEST_REFERENCED, pLua->CreateMetaTable("_HOLYLIB_CORE_TEST_REFERENCED"));
 		Util::AddFunc(pLua, _HOLYLIB_CORE_TEST_REFERENCED__index, "__index");
 		Util::AddFunc(pLua, _HOLYLIB_CORE_TEST_REFERENCED__newindex, "__newindex");
-		LUA_REGISTER_JIT(pLua, _HOLYLIB_CORE_TEST_REFERENCED_GetTable, "GetTable");
+		Util::AddFunc(pLua, _HOLYLIB_CORE_TEST_REFERENCED_GetTable, "GetTable");
 	pLua->Pop(1);
 
 	Lua::GetLuaData(pLua)->SetModuleData(0, new LuaCoreTestModuleData);
@@ -271,20 +259,10 @@ bool Lua::PushHook(const char* hook, GarrysMod::Lua::ILuaInterface* pLua)
 		return false;
 	}
 
-	if (!ThreadInMainThread())
+	if (!ThreadInMainThread() && pLua == g_Lua)
 	{
-		Lua::StateData* pState = Lua::GetLuaData(pLua);
-		if (!pState)
-		{
-			Warning(PROJECT_NAME ": Lua::PushHook was called in an invalid state1 (%s)\n", hook);
-			return false;
-		}
-
-		if (!pState->pThreadingMutex.isOwning())
-		{
-			Warning(PROJECT_NAME ": Lua::PushHook was called without respecting the mutex! (%s)\n", hook);
-			return false;
-		}
+		Warning(PROJECT_NAME ": Lua::PushHook was called outside of the main thread! (%s)\n", hook);
+		return false;
 	}
 
 	if (g_pModuleManager.GetModuleRealm() == Module_Realm::MENU)
@@ -297,7 +275,7 @@ bool Lua::PushHook(const char* hook, GarrysMod::Lua::ILuaInterface* pLua)
 		if (pLua->GetType(-1) != GarrysMod::Lua::Type::Table)
 		{
 			pLua->Pop(1);
-			DevMsg(PROJECT_NAME ": Missing hook table for \"%s\"!\n", hook);
+			DevMsg(PROJECT_NAME ": Missing hook table!\n");
 			return false;
 		}
 
@@ -305,7 +283,7 @@ bool Lua::PushHook(const char* hook, GarrysMod::Lua::ILuaInterface* pLua)
 			if (pLua->GetType(-1) != GarrysMod::Lua::Type::Function)
 			{
 				pLua->Pop(2);
-				DevMsg(PROJECT_NAME ": Missing hook.Run function for \"%s\"!\n", hook);
+				DevMsg(PROJECT_NAME ": Missing hook.Run function!\n");
 				return false;
 			} else {
 				pLua->Remove(-2);
@@ -314,10 +292,6 @@ bool Lua::PushHook(const char* hook, GarrysMod::Lua::ILuaInterface* pLua)
 
 	return true;
 }
-
-Lua::ThreadAccessMutex Lua::g_pThreadAccessMutex;
-thread_local unsigned int Lua::ThreadAccessMutex::shared_locks = 0;
-thread_local unsigned int Lua::ThreadAccessMutex::exclusive_locks = 0;
 
 extern void SetupUnHolyVTableForThisShit(GarrysMod::Lua::ILuaInterface* pLua);
 void Lua::Init(GarrysMod::Lua::ILuaInterface* LUA)
@@ -484,21 +458,23 @@ void Lua::SetManualShutdown()
 
 GarrysMod::Lua::ILuaInterface* Lua::GetRealm(unsigned char realm)
 {
-	return Lua::GetShared()->GetLuaInterface(realm);
+	SourceSDK::FactoryLoader luashared_loader("lua_shared");
+	GarrysMod::Lua::ILuaShared* LuaShared = (GarrysMod::Lua::ILuaShared*)luashared_loader.GetFactory()(GMOD_LUASHARED_INTERFACE, nullptr);
+	if (LuaShared == nullptr) {
+		Msg(PROJECT_NAME ": failed to get ILuaShared!\n");
+		return nullptr;
+	}
+
+	return LuaShared->GetLuaInterface(realm);
 }
 
 GarrysMod::Lua::ILuaShared* Lua::GetShared()
 {
-	static GarrysMod::Lua::ILuaShared* g_pLuaShared = nullptr;
-	if (g_pLuaShared)
-		return g_pLuaShared;
-
 	SourceSDK::FactoryLoader luashared_loader("lua_shared");
 	if ( !luashared_loader.GetFactory() )
 		Msg(PROJECT_NAME ": About to crash!\n");
 
-	g_pLuaShared = luashared_loader.GetInterface<GarrysMod::Lua::ILuaShared>(GMOD_LUASHARED_INTERFACE);
-	return g_pLuaShared;
+	return luashared_loader.GetInterface<GarrysMod::Lua::ILuaShared>(GMOD_LUASHARED_INTERFACE);
 }
 
 GarrysMod::Lua::ILuaInterface* Lua::CreateInterface()
@@ -597,67 +573,6 @@ bool Lua::CheckGModType(GarrysMod::Lua::ILuaInterface* LUA, int nStackPos, int n
 
 	*pUserData = nullptr;
 	return false;
-}
-
-const char* Lua::TValueToString(TValue* pVal)
-{
-	static thread_local char pBuffer[300];
-	char pTempBuffer[64]; // Should at minimum be STRFMT_MAXBUF_PTR
-	if (tvisbool(pVal)) {
-		snprintf(pBuffer, sizeof(pBuffer), "(bool) %s", tvistrue(pVal) ? "true" : "false");
-	} else if (tvisstr(pVal)) {
-		// We don't want to dump a 2k+ long strings, so we limit to 255! (also avoids possibly corrupted strings if the value is fked)
-		GCstr* pStr = strV(pVal);
-		char pTemp[255];
-		int nLength = MIN(pStr->len, sizeof(pTemp)-1);
-		V_strncpy(pTemp, Lua::GetGCStrData(pStr), nLength);
-
-		snprintf(pBuffer, sizeof(pBuffer), "(string) %s", pTemp);
-	} else if (tvisnil(pVal)) {
-		snprintf(pBuffer, sizeof(pBuffer), "(nil)");
-	} else if (tvisfunc(pVal)) {
-		*lj_strfmt_wptr(pTempBuffer, funcV(pVal)) = '\0';
-		snprintf(pBuffer, sizeof(pBuffer), "(function) %s", pTempBuffer);
-	} else if (tvisthread(pVal)) {
-		*lj_strfmt_wptr(pTempBuffer, threadV(pVal)) = '\0';
-		snprintf(pBuffer, sizeof(pBuffer), "(thread) %s", pTempBuffer);
-	} else if (tvisproto(pVal)) {
-		*lj_strfmt_wptr(pTempBuffer, protoV(pVal)) = '\0';
-		snprintf(pBuffer, sizeof(pBuffer), "(proto) %s", pTempBuffer);
-	} else if (tviscdata(pVal)) {
-		GCcdata* pCData = cdataV(pVal);
-		*lj_strfmt_wptr(pTempBuffer, cdataV(pVal)) = '\0';
-		snprintf(pBuffer, sizeof(pBuffer), "(cdata - type %i) %s", (int)pCData->ctypeid, pTempBuffer);
-	} else if (tvistab(pVal)) {
-		GCtab* pTab = tabV(pVal);
-		snprintf(pBuffer, sizeof(pBuffer), "(table) N/A");
-	} else if (tvisudata(pVal)) {
-		GCudata* pUD = udataV(pVal);
-
-		int nType = 0;
-		void* pData = nullptr;
-		if (pUD->udtype >= GarrysMod::Lua::Type::UserData) { // HolyLib userdata differs!
-			LuaUserData* pLuaData = (LuaUserData*)pUD;
-			pData = pLuaData->GetData();
-			nType = pLuaData->GetType();
-		} else {
-			pData = uddata(pUD);
-			if (pData)
-			{
-				GarrysMod::Lua::ILuaBase::UserData* pLuaData = (GarrysMod::Lua::ILuaBase::UserData*)pData;
-				nType = pLuaData->type;
-				pData = pLuaData->data;
-			}
-		}
-
-		snprintf(pBuffer, sizeof(pBuffer), "(userdata - type %i) %p", nType, pData);
-	} else if (tvisnan(pVal)) {
-		snprintf(pBuffer, sizeof(pBuffer), "(number) N/A");
-	} else if (tvisnum(pVal)) {
-		snprintf(pBuffer, sizeof(pBuffer), "(number) %.14g", numV(pVal));
-	}
-
-	return pBuffer;
 }
 
 // NOTE: This Only works on stack values that are on the top!!!
@@ -882,7 +797,6 @@ public:
 static std::unordered_set<Lua::StateData*> g_pLuaStates;
 void Lua::CreateLuaData(GarrysMod::Lua::ILuaInterface* LUA, bool bNullOut)
 {
-	Lua::CriticalThreadAccess pThreadScope;
 	if (bNullOut)
 	{
 		char* pathID = (char*)LUA->GetPathID();
@@ -905,12 +819,6 @@ void Lua::CreateLuaData(GarrysMod::Lua::ILuaInterface* LUA, bool bNullOut)
 	LUA->ReferencePush(pLua->m_nLuaErrorReporter);
 	data->SetErrorFunc();
 
-	if (pLua == g_Lua)
-	{
-		// The main thread is always locked and only released for a short time in Lua::ThinkMainInterface
-		data->pThreadingMutex.lock();
-	}
-
 	*reinterpret_cast<Lua::StateData**>(pathID + 24) = data;
 	g_pLuaStates.insert(data);
 	Msg("holylib - Created thread data %p (%s)\n", data, pathID);
@@ -918,7 +826,6 @@ void Lua::CreateLuaData(GarrysMod::Lua::ILuaInterface* LUA, bool bNullOut)
 
 void Lua::RemoveLuaData(GarrysMod::Lua::ILuaInterface* LUA)
 {
-	Lua::CriticalThreadAccess pThreadScope;
 	auto data = Lua::GetLuaData(LUA);
 	if (!data)
 		return;
@@ -934,18 +841,17 @@ const std::unordered_set<Lua::StateData*>& Lua::GetAllLuaData()
 	return g_pLuaStates;
 }
 
+static void LuaCheck(const CCommand& args)
+{
+	if (!g_Lua)
+		return;
+
+	Msg("holylib - Found data %p\n", Lua::GetLuaData(g_Lua));
+}
+static ConCommand luacheck("holylib_luacheck", LuaCheck, "Temp", 0);
+
 Lua::StateData::~StateData()
 {
-	for (ILuaInterfaceReference* pReference : pReferences)
-	{
-		if (pReference->OnInterfaceShutdown())
-			delete pReference;
-		else
-			pReference->InvalidateInterface();
-	}
-
-	pReferences.clear();
-
 	for (int i = 0; i < Lua::Internal::pMaxEntries; ++i)
 	{
 		Lua::ModuleData* pData = pModuleData[i];
@@ -961,60 +867,4 @@ Lua::StateData::~StateData()
 		pProxy->DeInit();
 		delete pProxy;
 	}
-
-	// If this ever happens, this will most definetly corrupt memory, so we Error!
-	// IMPORTANT: We check for g_Lua != pLua as the global lua state is always locked by default!
-	if (pThreadingMutex.isLocked() && g_Lua != pLua)
-		Error(PROJECT_NAME " - core: StateData was deleted but the threading mutex is still locked! Report this!\n");
-}
-
-void Lua::AddLuaInterfaceReference(GarrysMod::Lua::ILuaInterface* pLua, ILuaInterfaceReference* pReference)
-{
-	if (!pLua)
-		return;
-
-	pReference->m_pLua.store(pLua);
-	Lua::StateData* pData = Lua::GetLuaData(pLua);
-	if (!pData)
-		return;
-
-	auto it = pData->pReferences.find(pReference);
-	if (it == pData->pReferences.end())
-		pData->pReferences.insert(pReference);
-}
-
-void Lua::RemoveLuaInterfaceReference(ILuaInterfaceReference* pReference)
-{
-	GarrysMod::Lua::ILuaInterface* pLua = pReference->m_pLua.load();
-	if (!pLua)
-		return;
-
-	Lua::StateData* pData = Lua::GetLuaData(pLua);
-	pReference->m_pLua.store(nullptr);
-	if (!pData)
-		return;
-
-	auto it = pData->pReferences.find(pReference);
-	if (it != pData->pReferences.end())
-		pData->pReferences.erase(it);
-}
-
-// This function is responsibe for a thread calling back to the main state
-void Lua::ThinkMainInterface()
-{
-	if (!g_Lua)
-		return;
-
-	VPROF_BUDGET("HolyLib - Lua::ThinkMainInterface", VPROF_BUDGETGROUP_HOLYLIB);
-
-	Lua::ScopedThreadAccess pThreadScope;
-	Lua::StateData* pData = Lua::GetLuaData(g_Lua);
-	if (!pData || !pData->pThreadingMutex.hasWaiting())
-		return;
-
-	// Release for any threads to start working
-	pData->pThreadingMutex.unlock();
-
-	// Lock once they are done
-	pData->pThreadingMutex.lockWhenDone();
 }

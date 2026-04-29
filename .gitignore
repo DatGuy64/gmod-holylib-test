@@ -1,6 +1,3 @@
-# clangd
-.cache
-compile_commands.json
 
 Bootil/projects/obj/
 Bootil/projects/release_x64_windows/
@@ -29,8 +26,5 @@ source/_versioninfo.h
 source/_prebuildtools/http/*.txt
 source/_prebuildtools/generated_summary.md
 source/modules/_modules.cpp
-source/sourcesdk/luagc_jit.cpp
 
 projects/windows/vs2022/
-**.pdb
-luajit/src/luajit.vcxproj/**

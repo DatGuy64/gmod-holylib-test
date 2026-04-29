@@ -1,7 +1,7 @@
 ----------------------------------------------------------------------------
 -- LuaJIT ARM64 disassembler module.
 --
--- Copyright (C) 2005-2026 Mike Pall. All rights reserved.
+-- Copyright (C) 2005-2025 Mike Pall. All rights reserved.
 -- Released under the MIT license. See Copyright Notice in luajit.h
 --
 -- Contributed by Djordje Kovacevic and Stefan Pejic from RT-RK.com.
@@ -485,15 +485,15 @@ local map_ls = { -- Loads and stores.
       shift = 30, mask = 3,
       [0] = {
 	shift = 22, mask = 3,
-	[0] = "strbDwzU", "ldrbDwzU", "ldrsbDwzU", "ldrsbDxzU"
+	[0] = "strbDwzU", "ldrbDwzU"
       },
       {
 	shift = 22, mask = 3,
-	[0] = "strhDwzU", "ldrhDwzU", "ldrshDwzU", "ldrshDxzU"
+	[0] = "strhDwzU", "ldrhDwzU"
       },
       {
 	shift = 22, mask = 3,
-	[0] = "strDwzU", "ldrDwzU", "ldrswDxzU"
+	[0] = "strDwzU", "ldrDwzU"
       },
       {
 	shift = 22, mask = 3,
@@ -695,10 +695,7 @@ local map_br = { -- Branches, exception generating and system instructions.
     },
     { -- System instructions.
       shift = 0, mask = 0x3fffff,
-      [0x03201f] = "nop",
-      [0x03245f] = "bti c",
-      [0x03249f] = "bti j",
-      [0x0324df] = "bti jc",
+      [0x03201f] = "nop"
     },
     { -- Unconditional branch, register.
       shift = 0, mask = 0xfffc1f,
@@ -923,7 +920,7 @@ local function disass_ins(ctx)
     elseif p == "B" then
       local addr = ctx.addr + pos + parse_immpc(op, name)
       ctx.rel = addr
-      x = format("0x%08x", addr)
+      x = "0x"..tohex(addr)
     elseif p == "T" then
       x = bor(band(rshift(op, 26), 32), band(rshift(op, 19), 31))
     elseif p == "V" then
@@ -1174,9 +1171,6 @@ local function disass_ins(ctx)
 	end
       end
       second0 = true
-    elseif p == " " then
-      operands[#operands+1] = pat:match(" (.*)")
-      break
     else
       assert(false)
     end

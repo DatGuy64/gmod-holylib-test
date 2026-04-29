@@ -2,14 +2,8 @@
 
 #include "util.h"
 #include "bitvec.h"
-#include <atomic>
-#include <mutex>
-#include "../luajit/src/lua.h"
-#include <ankerl/unordered_dense.h>
 #if !defined(DISABLE_GMODJIT)
 #include "../gmod-luajit/luajit.h"
-#define LJ_UDATA_FLAG_USERTABLE 0x01 // from our JIT build
-#define LJ_UDATA_FLAG_USEMETAFORACCESS 0x02
 #else
 extern "C" // Our JIT build
 {
@@ -25,10 +19,7 @@ namespace GarrysMod::Lua
 // Enables support for cdata to be used as userdata
 // See the RawLua::CDataBridge to know how it works
 #define LUA_CDATA_SUPPORT 1
-namespace RawLua { 
-	// Raw Lua interface for OUR LuaJIT build!
-	// Functions like SetReadOnly only work if the LuaJIT module is enabled due to those being specific features to our version!
-
+namespace RawLua {
 	struct CDataBridge
 	{
 		// Registers the given cdata type to be treated as the given metaID
@@ -90,10 +81,6 @@ namespace RawLua {
 	extern void* AllocateCDataOrUserData(GarrysMod::Lua::ILuaInterface* pLua, int nMetaID, int nSize);
 
 	extern int GetCDataSize(lua_State* L, GCcdata* pVar);
-
-	// These versions specifically are for OUR LuaJIT version since the GCstr struct changed in versions!
-	extern const char* GetGCStrData(GCstr* str);
-	extern size_t GetGCStrLength(GCstr* str);
 }
 
 struct LuaUserData;
@@ -105,7 +92,6 @@ namespace Lua
 	extern void Shutdown();
 	extern void FinalShutdown();
 	extern void ServerInit();
-	extern void ThinkMainInterface();
 
 	/*
 	   Hooks ALWAYS run on g_Lua.
@@ -187,72 +173,8 @@ namespace Lua
 		static constexpr int pMaxEntries = 64;
 	}
 
-	// I was thinking of using a std::binary_semaphore but that's C++20
-	// and I don't wanna upgrade as it might break ABI
-	// So this is kinda some magic class to hopefully achieve the same
-	class LuaMutex
-	{
-	public:
-		void lock()
-		{
-			waiting.fetch_add(1, std::memory_order_relaxed);
-			mutex.lock();
-			waiting.fetch_sub(1, std::memory_order_relaxed);
-
-			owner.store(ThreadGetCurrentId(), std::memory_order_release);
-			++recursion;
-		}
-
-		void unlock()
-		{
-			if (--recursion == 0)
-				owner.store(0, std::memory_order_release);
-
-			mutex.unlock();
-			cv.notify_all();
-		}
-
-		bool hasWaiting()
-		{
-			return waiting.load(std::memory_order_relaxed) != 0;
-		}
-
-		bool isOwning()
-		{
-			return owner.load(std::memory_order_acquire) == ThreadGetCurrentId();
-		}
-
-		bool isLocked()
-		{
-			return owner.load(std::memory_order_acquire) != 0;
-		}
-
-		void lockWhenDone()
-		{
-			std::unique_lock<std::mutex> ulock(cvMutex);
-			cv.wait(ulock, [&]()
-			{
-				return waiting.load(std::memory_order_relaxed) == 0 && !isLocked();
-			});
-
-			lock();
-		}
-
-	private:
-		std::atomic<size_t> waiting{0}; // Hacky... there surely is a better way
-		std::recursive_mutex mutex;
-
-		std::condition_variable cv;
-		std::mutex cvMutex;
-
-		// I hate that we need to track this ourselves
-		std::atomic<ThreadId_t> owner = 0;
-		size_t recursion = 0;
-	};
-
 	// A structure in which modules can store data specific to a ILuaInterface.
 	// This will be required when we work with multiple ILuaInterface's
-	class ILuaInterfaceReference;
 	struct StateData
 	{
 		void* pOtherData[4]; // If any other plugin wants to use this, they can.
@@ -261,14 +183,12 @@ namespace Lua
 		Lua::ModuleData* pModuleData[Lua::Internal::pMaxEntries] = { nullptr };
 		LuaMetaEntry pLuaTypes[LuaTypes::TOTAL_TYPES];
 		std::unordered_map<void*, ReferencedLuaUserData*> pPushedUserData; // Would love to get rid of this
-		std::unordered_set<ILuaInterfaceReference*> pReferences;
 		GarrysMod::Lua::ILuaInterface* pLua = nullptr;
 		CLuaInterfaceProxy* pProxy;
 		GCRef nErrorFunc;
 #if LUA_CDATA_SUPPORT
 		RawLua::CDataBridge pBridge;
 #endif
-		LuaMutex pThreadingMutex;
 
 		StateData()
 		{
@@ -429,477 +349,15 @@ namespace Lua
 
 	// GMod specific fast type check
 	extern bool CheckGModType(GarrysMod::Lua::ILuaInterface* LUA, int nStackPos, int nType, void** pUserData);
-	extern const char* TValueToString(TValue* pVal);
 
-	// A recursive shared_mutex
-	// This is only meant for our g_pThreadAccessMutex
-	class ThreadAccessMutex
-	{
-	public:
-		void lock_shared()
-		{
-			if (exclusive_locks > 0)
-				return;
-
-			if (shared_locks > 0)
-			{
-				++shared_locks;
-				return;
-			}
-
-			mutex.lock_shared();
-			++shared_locks;
-		}
-
-		void unlock_shared()
-		{
-			if (exclusive_locks > 0)
-				return;
-
-			if (--shared_locks > 0)
-				return;
-
-			mutex.unlock_shared();
-		}
-
-		bool try_lock_shared()
-		{
-			if (exclusive_locks > 0)
-				return true;
-
-			if (shared_locks > 0)
-			{
-				++shared_locks;
-				return true;
-			}
-
-			bool success = mutex.try_lock_shared();
-			if (success)
-				++shared_locks;
-
-			return success;
-		}
-
-		bool isLocked()
-		{
-			return exclusive_locks > 0 || shared_locks > 0;
-		}
-
-		void lock()
-		{
-			if (exclusive_locks > 0)
-			{
-				++exclusive_locks;
-				return;
-			}
-
-			if (shared_locks > 0 && exclusive_locks == 0)
-				mutex.unlock_shared();
-
-			mutex.lock();
-			++exclusive_locks;
-		}
-
-		void unlock()
-		{
-			if (--exclusive_locks > 0)
-				return;
-
-			mutex.unlock();
-
-			if (shared_locks > 0)
-				mutex.lock_shared();
-		}
-
-	private:
-		std::shared_mutex mutex;
-
-		static thread_local unsigned int shared_locks;
-		static thread_local unsigned int exclusive_locks;
-		//std::atomic<unsigned int> locks = 0;
-		//std::atomic<bool> 
-	};
-
-	/*
-		Threading access for a lua state, weird but it should work.
-
-		You first define
-		Lua::ScopedThreadAccess pThreadScope;
-
-		Then you GET the target interface and do:
-		Lua::StateAccess pScope(pLua);
-
-		This is done as ScopedInterfaceThreadAccess will lock and ensure that the next call to GET the Lua interface is safe
-		after which you can call InterfaceThreadAccess which will lock the interface mutex allowing you to call lua functions safely
-
-		CriticalThreadAccess is meant to be used when you need to delete an interface, this will block all ScopedThreadAccess
-
-		IMPORTANT:
-		Never use Lua::CriticalThreadAccess combined with Lua::StateAccess
-		When you use Lua::CriticalThreadAccess you already hold an exclusive mutex to ALL interfaces!
-		If you use Lua::StateAccess inside there and then for example, delete the Lua state, then when StateAccess unlocks,
-		It may try to unlock the mutex even though that memory was freed, leading to memory corruption!
-	*/
-	extern ThreadAccessMutex g_pThreadAccessMutex;
-	class StateAccess
-	{
-	public:
-		StateAccess(GarrysMod::Lua::ILuaInterface* pLua)
-		{
-			if (!pLua)
-				return;
-
-			m_pState = GetLuaData(pLua);
-			// ToDo: Maybe verify the state is valid? But that would imply we'd be using an invalid interface.
-			// The Mutex of the main state is almost always kept locked except when ThinkMainInterface is called
-			if (!(ThreadInMainThread() && g_Lua == m_pLua))
-				m_pState->pThreadingMutex.lock();
-
-			m_pLua = pLua;
-		}
-
-		~StateAccess()
-		{
-			if (m_pState && !(ThreadInMainThread() && g_Lua == m_pLua))
-				m_pState->pThreadingMutex.unlock();
-		}
-
-		inline bool IsValid()
-		{
-			return m_pState != nullptr;
-		}
-
-		inline GarrysMod::Lua::ILuaInterface* GetLua()
-		{
-			if (!IsValid())
-				return nullptr;
-
-			return m_pLua;
-		}
-
-	private:
-		GarrysMod::Lua::ILuaInterface* m_pLua = nullptr;
-		StateData* m_pState = nullptr;
-	};
-
-	class ScopedThreadAccess
-	{
-	public:
-		ScopedThreadAccess() { g_pThreadAccessMutex.lock_shared(); }
-		~ScopedThreadAccess() { g_pThreadAccessMutex.unlock_shared(); }
-	};
-
-	class CriticalThreadAccess
-	{
-	public:
-		CriticalThreadAccess() { g_pThreadAccessMutex.lock(); }
-		~CriticalThreadAccess() { g_pThreadAccessMutex.unlock(); }
-	};
-
-	extern Symbols::lua_pushtracablecclosure func_lua_pushtracablecclosure;
-	extern Symbols::lua_settracablecclosure func_lua_settracablecclosure;
-
-	// BUG:
-	// This currently causes JIT to nuke something (CSE being funky) causing a crash as arguments are being screwed up - so only use this if the function has no arguments
-	// Of course, CSE probably wasn't intended for external function calls, but the possible improvement with it could be great.
-	inline lua_CFunctionInfo AllowOptOut(lua_CFunctionInfo info)
-	{
-		info.allowoptout = 1;
-		return info;
-	}
-
-	inline void AddJITFunc(GarrysMod::Lua::ILuaInterface* LUA, GarrysMod::Lua::CFunc Func, const char* Name, lua_CFunctionInfo info)
-	{
-		LUA->PushString(Name);
-
-#if MODULE_EXISTS_LUAJIT
-		if (func_lua_pushtracablecclosure) {
-			info.func = Func;
-
-			func_lua_pushtracablecclosure(LUA->GetState(), (lua_CFunctionInfo*)&info);
-		} else
-#endif
-		{
-			LUA->PushCFunction(Func);
-		}
-
-		LUA->RawSet(-3);
-	}
-
-	inline void AddJITOverload(GarrysMod::Lua::ILuaInterface* LUA, const char* Name, lua_CFunctionInfo info)
-	{
-		LUA->PushString(Name);
-		LUA->RawGet(-2);
-		if (LUA->IsType(-1, GarrysMod::Lua::Type::Function))
-		{
-#if MODULE_EXISTS_LUAJIT
-		if (func_lua_settracablecclosure) {
-			info.func = LUA->GetCFunction();
-			func_lua_settracablecclosure(LUA->GetState(), -1, (lua_CFunctionInfo*)&info);
-		}
-#endif
-		}
-
-		LUA->Pop(1);
-	}
-
-	inline GCstr* GetGCStr(GarrysMod::Lua::ILuaInterface* LUA, int iStackPos)
-	{
-		LUA->CheckType(iStackPos, GarrysMod::Lua::Type::String);
-		return strV(RawLua::index2adr(LUA->GetState(), iStackPos));
-	}
-
-	// ONLY use the two GetGCStr functions below when being inside a LUA_JIT_WRAPPED function!
-	extern bool g_bUsingLuaJIT; // Hacky workaround for the LuaJIT module- this is due to GCstr being different between old 2.1 and new
-	extern thread_local GarrysMod::Lua::ILuaInterface* pExecutingInterface; // Another hacky thingy...
-	extern thread_local bool bIsCallingASM; // Only if this value is true - then we can trust Lua::pExecutingInterface
-	// NOTE: Why don't we check for global_State::cur_L? because we know that our C tracing implementation only exists in our JIT build sooo that makes things atleast easier :)
-	inline const char* GetGCStrData(GCstr* str)
-	{
-		if (!Lua::g_bUsingLuaJIT && (Lua::bIsCallingASM && Lua::pExecutingInterface == g_Lua))
-			return strdata(str);
-
-		return RawLua::GetGCStrData(str);
-	}
-
-	inline size_t GetGCStrLength(GCstr* str)
-	{
-		if (!Lua::g_bUsingLuaJIT && (Lua::bIsCallingASM && Lua::pExecutingInterface == g_Lua))
-			return str->len;
-
-		return RawLua::GetGCStrLength(str);
-	}
-
-	/*
-		New C JIT functions
-	*/
-
-	// Temp storage to avoid scope issues
-	extern thread_local lua_String pTempStr;
-
-	template<typename T> struct LuaTypeMap;
-	template<> struct LuaTypeMap<const char*> { static constexpr auto value = TR_TYPE_CHARS; };
-	template<> struct LuaTypeMap<lua_String*> { static constexpr auto value = TR_TYPE_STRING; };
-	template<> struct LuaTypeMap<GCstr*> { static constexpr auto value = TR_TYPE_STRING; };
-	template<> struct LuaTypeMap<bool> { static constexpr auto value = TR_TYPE_BOOL; };
-	template<> struct LuaTypeMap<char> { static constexpr auto value = TR_TYPE_I8; };
-	template<> struct LuaTypeMap<unsigned char> { static constexpr auto value = TR_TYPE_U8; };
-	template<> struct LuaTypeMap<short> { static constexpr auto value = TR_TYPE_I16; };
-	template<> struct LuaTypeMap<unsigned short> { static constexpr auto value = TR_TYPE_U16; };
-	template<> struct LuaTypeMap<int> { static constexpr auto value = TR_TYPE_INT; };
-	template<> struct LuaTypeMap<unsigned int> { static constexpr auto value = TR_TYPE_U32; };
-	template<> struct LuaTypeMap<int64_t> { static constexpr auto value = TR_TYPE_I64; };
-	template<> struct LuaTypeMap<uint64_t> { static constexpr auto value = TR_TYPE_U64; };
-	template<> struct LuaTypeMap<float> { static constexpr auto value = TR_TYPE_FLOAT; };
-	template<> struct LuaTypeMap<double> { static constexpr auto value = TR_TYPE_DOUBLE; };
-	template<> struct LuaTypeMap<void> { static constexpr auto value = TR_TYPE_VOID; };
-	template<> struct LuaTypeMap<LuaUserData*> { static constexpr auto value = TR_TYPE_USERDATA; };
-
-	template<typename Ret, typename... Args>
-	constexpr lua_CFunctionInfo MakeJITInfo(void* fn)
-	{
-		lua_CFunctionInfo info{};
-		info.asmFunc = fn;
-		info.retType = LuaTypeMap<Ret>::value;
-		info.callconv = CFUNC_CALLCONV_FASTCALL;
-		info.retbool = true; // By default in case any function returns a bool, we assume it'll most likely be true
-
-		lua_TraceRecorderType types[] = { LuaTypeMap<Args>::value..., TR_TYPE_VOID };
-
-		for (size_t i = 0; i < sizeof...(Args) + 1; ++i)
-			info.argType[i] = types[i];
-
-		return info;
-	}
-
-// We set in here Lua::pExecutingInterface because why not
-#define LUA_FUNCTION_STATIC_EXEC( FUNC ) \
-static int FUNC##__Imp( GarrysMod::Lua::ILuaInterface* LUA ); \
-static int FUNC( lua_State* L ) \
-{ \
-	GarrysMod::Lua::ILuaInterface* LUA = ((lua_GmodState*)L)->luabase; \
-	LUA->SetState(L); \
-	Lua::pExecutingInterface = LUA; \
-	return FUNC##__Imp( LUA ); \
-} \
-static int FUNC##__Imp( [[maybe_unused]] GarrysMod::Lua::ILuaInterface* LUA )
-
-// R = returns! Though JITable functions can currently only return 1 value!
-#define LUA_JIT_WRAPPED_0R(name, R1, ret1, SET1) \
-static R1 FUNC_FASTCALL ASM_##name(); \
-\
-static lua_CFunctionInfo ASMINFO_##name = [] { \
-	auto info = Lua::MakeJITInfo<R1>((void*)&ASM_##name); \
-	/*info.allowoptout = 1;*/ \
-	return info; \
-}(); \
-\
-LUA_FUNCTION_STATIC_EXEC(name) \
-{ \
-	Lua::bIsCallingASM = true; \
-	R1 ret1 = ASM_##name(); \
-	Lua::bIsCallingASM = false; \
-	(SET1); \
-	return 1; \
-} \
-\
-static R1 FUNC_FASTCALL ASM_##name()
-
-#define LUA_JIT_WRAPPED_0(name) \
-static void FUNC_FASTCALL ASM_##name(); \
-\
-static lua_CFunctionInfo ASMINFO_##name = [] { \
-	auto info = Lua::MakeJITInfo<void>((void*)&ASM_##name); \
-	/*info.allowoptout = 1;*/ \
-	return info; \
-}(); \
-\
-LUA_FUNCTION_STATIC_EXEC(name) \
-{ \
-	Lua::bIsCallingASM = true; \
-	ASM_##name(); \
-	Lua::bIsCallingASM = false; \
-	return 0; \
-} \
-\
-static void FUNC_FASTCALL ASM_##name()
-
-#define LUA_JIT_ASM_0R(name, R1) \
-static R1 FUNC_FASTCALL ASM_##name(); \
-\
-static lua_CFunctionInfo ASMINFO_##name = [] { \
-	auto info = Lua::MakeJITInfo<R1>((void*)&ASM_##name); \
-	/*info.allowoptout = 1;*/ \
-	return info; \
-}(); \
-\
-static R1 FUNC_FASTCALL ASM_##name()
-
-// R = returns! Though JITable functions can currently only return 1 value!
-#define LUA_JIT_WRAPPED_1R(name, R1, ret1, SET1, T1, arg1, GET1) \
-static R1 FUNC_FASTCALL ASM_##name(T1 arg1); \
-\
-static lua_CFunctionInfo ASMINFO_##name = [] { \
-	auto info = Lua::MakeJITInfo<R1, T1>((void*)&ASM_##name); \
-	/*info.allowoptout = 1;*/ \
-	return info; \
-}(); \
-\
-LUA_FUNCTION_STATIC_EXEC(name) \
-{ \
-	T1 arg1 = GET1; \
-	Lua::bIsCallingASM = true; \
-	R1 ret1 = ASM_##name(arg1); \
-	Lua::bIsCallingASM = false; \
-	SET1; \
-	return 1; \
-} \
-\
-static R1 FUNC_FASTCALL ASM_##name(T1 arg1)
-
-#define LUA_JIT_WRAPPED_1(name, T1, arg1, GET1) \
-static void FUNC_FASTCALL ASM_##name(T1 arg1); \
-\
-static lua_CFunctionInfo ASMINFO_##name = [] { \
-	auto info = Lua::MakeJITInfo<void, T1>((void*)&ASM_##name); \
-	/*info.allowoptout = 1;*/ \
-	return info; \
-}(); \
-\
-LUA_FUNCTION_STATIC_EXEC(name) \
-{ \
-	T1 arg1 = (GET1); \
-	Lua::bIsCallingASM = true; \
-	ASM_##name(arg1); \
-	Lua::bIsCallingASM = false; \
-	return 0; \
-} \
-\
-static void FUNC_FASTCALL ASM_##name(T1 arg1)
-
-#define LUA_JIT_WRAPPED_2(name, T1, arg1, GET1, T2, arg2, GET2) \
-static void FUNC_FASTCALL ASM_##name(T1 arg1, T2 arg2); \
-\
-static lua_CFunctionInfo ASMINFO_##name = [] { \
-	auto info = Lua::MakeJITInfo<void, T1, T2>((void*)&ASM_##name); \
-	/*info.allowoptout = 1;*/ \
-	return info; \
-}(); \
-\
-LUA_FUNCTION_STATIC_EXEC(name) \
-{ \
-	T1 arg1 = GET1; \
-	T2 arg2 = GET2; \
-	Lua::bIsCallingASM = true; \
-	ASM_##name(arg1, arg2); \
-	Lua::bIsCallingASM = false; \
-	return 0; \
-} \
-\
-static void FUNC_FASTCALL ASM_##name(T1 arg1, T2 arg2)
-
-#define LUA_JIT_RAW_2(name, T1, arg1, T2, arg2) \
-static void FUNC_FASTCALL ASM_##name(T1 arg1, T2 arg2); \
-\
-static lua_CFunctionInfo ASMINFO_##name = [] { \
-	auto info = Lua::MakeJITInfo<void, T1, T2>((void*)&ASM_##name); \
-	/*info.allowoptout = 1;*/ \
-	return info; \
-}(); \
-\
-static void FUNC_FASTCALL ASM_##name(T1 arg1, T2 arg2)
-
-#define LUA_JIT_WRAPPED_3(name, T1, arg1, GET1, T2, arg2, GET2, T3, arg3, GET3) \
-static void FUNC_FASTCALL ASM_##name(T1 arg1, T2 arg2, T3 arg3); \
-\
-static lua_CFunctionInfo ASMINFO_##name = [] { \
-	auto info = Lua::MakeJITInfo<void, T1, T2, T3>((void*)&ASM_##name); \
-	/*info.allowoptout = 1;*/ \
-	return info; \
-}(); \
-\
-LUA_FUNCTION_STATIC_EXEC(name) \
-{ \
-	T1 arg1 = (GET1); \
-	T2 arg2 = (GET2); \
-	T3 arg3 = (GET3); \
-	Lua::bIsCallingASM = true; \
-	ASM_##name(arg1, arg2, arg3); \
-	Lua::bIsCallingASM = false; \
-	return 0; \
-} \
-\
-static void FUNC_FASTCALL ASM_##name(T1 arg1, T2 arg2, T3 arg3)
-
-#define LUA_REGISTER_JIT(LUA, funcName, name) \
-	Lua::AddJITFunc(LUA, funcName, name, ASMINFO_##funcName)
-
-#define LUA_REGISTER_OVERLOAD(LUA, funcName, name) \
-	Lua::AddJITOverload(LUA, name, ASMINFO_##funcName)
-
-	void AddLuaInterfaceReference(GarrysMod::Lua::ILuaInterface* pLua, ILuaInterfaceReference* pReference);
-	void RemoveLuaInterfaceReference(ILuaInterfaceReference* pReference);
-	/*
-		Helper class for keeping a reference to a lua interface.
-		In your implementation, you MUST override the deconstructor in which you unset your reference.
-	*/
-	class ILuaInterfaceReference
-	{
-	public:
-		virtual ~ILuaInterfaceReference() = default;
-		// Do NOT call delete this in here! return true instead!
-		// true = we should delete this - false = no delete!
-		virtual bool OnInterfaceShutdown() { return false; };
-		inline GarrysMod::Lua::ILuaInterface* GetLua() { return m_pLua.load(); }
-		inline void InvalidateInterface() { m_pLua.store(nullptr); }
-
-	protected:
-		friend void AddLuaInterfaceReference(GarrysMod::Lua::ILuaInterface* pLua, ILuaInterfaceReference* pReference);
-		friend void RemoveLuaInterfaceReference(ILuaInterfaceReference* pReference);
-
-	private:
-		std::atomic<GarrysMod::Lua::ILuaInterface*> m_pLua = nullptr;
-	};
+	// ToDo
+	// - EnterLockdown
+	// - LeaveLockdown
+	// What do they do?
+	// Their used when All ILuaInterfaces need to be locked in cases like a referenced userdata being deleted.
+	// This is because, a referenced userdata can be shared across threads.
+	// This sounds like a dumb idea, because it is.
+	// it would be painful to implement differently.
 }
 
 // Creates a function Get[funcName]LuaData and returns the stored module data from the given module.
@@ -913,7 +371,6 @@ static inline className* Get##funcName##LuaData(GarrysMod::Lua::ILuaInterface* p
 	return (className*)Lua::GetLuaData(pLua)->GetModuleData(id); \
 }
 
-// Normally you can expect this to never return NULL if an Lua Interface was properly initialized. BUUT in the case that something is broken, it can return NULL.
 #define LUA_GetModuleData(className, moduleName, funcName) LUA_GetModuleDataWithID(className, funcName, moduleName.m_pID)
 
 /*
@@ -937,14 +394,10 @@ constexpr int GCudata_holylib_dataoffset = sizeof(GCudata_holylib) - sizeof(void
 
 enum class udataFlags // we use bit flags so only a total of 8 are allowed.v
 {
-	// First two bits are reserved for HolyLib's LuaJIT built!
-	UDATA_EXPLICIT_DELETE = 1 << 2,
-	UDATA_NO_USERTABLE = 1 << 3,
-	UDATA_INLINED_DATA = 1 << 4,
-	UDATA_REFERENCED = 1 << 5, // This userdata is a ReferencedLuaUserData and NOT LuaUserData
-	// We use this so that LuaJIT aborts traces due to the flags having changed avoiding any possible issue (even if there are none already)
-	// This was an intentional design choice for most JIT changes to guard on the GCudata::flags so they should never change frequently!
-	UDATA_INVALID = 1 << 6,
+	UDATA_EXPLICIT_DELETE = 1 << 0,
+	UDATA_NO_USERTABLE = 1 << 1,
+	UDATA_INLINED_DATA = 1 << 2,
+	UDATA_REFERENCED = 1 << 3, // This userdata is a ReferencedLuaUserData and NOT LuaUserData
 };
 
 /*
@@ -998,17 +451,10 @@ struct LuaUserData : GCudata_holylib { // No constructor/deconstructor since its
 		// Since Lua creates our userdata, we need to set all the fields ourself!
 
 		flags = 0;
-		if (!bIsInline) {
+		if (!bIsInline)
 			data = pData;
-			if (data)
-				flags &= ~(int)udataFlags::UDATA_INVALID;
-			else
-				flags |= (int)udataFlags::UDATA_INVALID;
-		} else
+		else
 			flags |= (int)udataFlags::UDATA_INLINED_DATA;
-
-		// Always set as we do not care about __index calls.
-		flags |= LJ_UDATA_FLAG_USEMETAFORACCESS;
 
 		udtype = pMetaEntry.iType;
 		metatable = pMetaEntry.metatable;
@@ -1063,10 +509,6 @@ struct LuaUserData : GCudata_holylib { // No constructor/deconstructor since its
 		}
 
 		data = pData;
-		if (data)
-			flags &= ~(int)udataFlags::UDATA_INVALID;
-		else
-			flags |= (int)udataFlags::UDATA_INVALID;
 	}
 
 	inline void PushLuaTable(GarrysMod::Lua::ILuaInterface* pLua)
@@ -1133,9 +575,6 @@ struct LuaUserData : GCudata_holylib { // No constructor/deconstructor since its
 				pLua->Pop(1);
 			}
 		}
-
-		// Set HolyLIb's LuaJIT flag to allow __index & __newindex to be JIT'd
-		flags |= LJ_UDATA_FLAG_USERTABLE;
 	}
 
 	inline void Push(GarrysMod::Lua::ILuaInterface* pLua)
@@ -1157,10 +596,7 @@ struct LuaUserData : GCudata_holylib { // No constructor/deconstructor since its
 		g_pLuaUserData.erase(this);
 #endif
 		if (!(flags & (int)udataFlags::UDATA_INLINED_DATA))
-		{
 			data = nullptr;
-			flags |= (int)udataFlags::UDATA_INVALID;
-		}
 
 		return true;
 	}
@@ -1471,34 +907,6 @@ LUA_FUNCTION_STATIC(className ## __newindex) \
 	return 0; \
 }
 
-// A default IsValid function simply checking if the stored data is not null (With JIT support)
-#define Default__IsValid(className) \
-LUA_JIT_WRAPPED_1R(className ## _IsValid, \
-	bool, pIsValid, LUA->PushBool(pIsValid), \
-	LuaUserData*, pUD, Get_##className##_Data(LUA, 1, false) \
-) \
-{ \
-	className* pData = (className*)pUD->GetData(); \
-	if (!pData) \
-		return false; \
-\
-	return true; \
-}
-
-#define Default__IsValidEXT(className, extra) \
-LUA_JIT_WRAPPED_1R(className ## _IsValid, \
-	bool, pIsValid, LUA->PushBool(pIsValid), \
-	LuaUserData*, pUD, Get_##className##_Data(LUA, 1, false) \
-) \
-{ \
-	className* pData = (className*)pUD->GetData(); \
-	if (!pData) \
-		return false; \
-\
-	extra \
-	return true; \
-}
-
 // A default gc function for userData,
 // handles garbage collection, inside the func argument you can use pStoredData
 // Use the pStoredData variable as pData->GetData() will return NULL. Just see how it's done inside the bf_read gc definition.
@@ -1524,13 +932,8 @@ LUA_FUNCTION_STATIC(className ## __gc) \
 	return 0; \
 } \
 
-// Default function for GetTable. Simple. Uses a special TR type
+// Default function for GetTable. Simple.
 #define Default__GetTable(className) \
-static lua_CFunctionInfo ASMINFO_##className##_GetTable = [] { \
-	lua_CFunctionInfo info{}; \
-	info.retType = TR_RETURN_USERDATA_ENV; \
-	return info; \
-}(); \
 LUA_FUNCTION_STATIC(className ## _GetTable) \
 { \
 	Get_##className##_Data(LUA, 1, true)->PushLuaTable(LUA); \
@@ -1616,7 +1019,7 @@ struct EntityList // entitylist module.
 			m_pEntReferences[pEntity] = nullptr;
 	}
 
-	inline const ankerl::unordered_dense::map<CBaseEntity*, GCudata*>& GetReferences()
+	inline const std::unordered_map<CBaseEntity*, GCudata*>& GetReferences()
 	{
 		return m_pEntReferences;
 	}
@@ -1639,7 +1042,7 @@ struct EntityList // entitylist module.
 
 private:
 	// NOTE: The Entity will always be valid but the reference can be -1!
-	ankerl::unordered_dense::map<CBaseEntity*, GCudata*> m_pEntReferences;
+	std::unordered_map<CBaseEntity*, GCudata*> m_pEntReferences;
 	std::vector<CBaseEntity*> m_pEntities;
 	GarrysMod::Lua::ILuaInterface* m_pLua = nullptr;
 };
@@ -1660,10 +1063,6 @@ extern CBaseClient* Get_CBaseClient(GarrysMod::Lua::ILuaInterface* LUA, int iSta
 struct VoiceData;
 extern LuaUserData* Push_VoiceData(GarrysMod::Lua::ILuaInterface* LUA, VoiceData* tbl);
 extern VoiceData* Get_VoiceData(GarrysMod::Lua::ILuaInterface* LUA, int iStackPos, bool bError);
-#endif
-
-#if MODULE_EXISTS_HOLYLUA
-GarrysMod::Lua::ILuaInterface* GetHolyLuaInterface();
 #endif
 
 // NOTE: The angle itself is pushed, not a copy, any changes from lua will affect it!

@@ -28,7 +28,7 @@ return {
             name = "Performance",
             when = HolyLib_IsModuleEnabled("cvars"),
             func = function()
-                HolyLib_RunPerformanceTest("cvar.GetAll", function() cvar.GetAll() end)
+                HolyLib_RunPerformanceTest("cvar.GetAll", cvar.GetAll)
             end
         },
     }

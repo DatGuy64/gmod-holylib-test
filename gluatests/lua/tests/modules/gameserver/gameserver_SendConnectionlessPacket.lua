@@ -24,8 +24,7 @@ return {
             func = function()
                 hook.Add( "HolyLib:ProcessConnectionlessPacket", "ProcessResponse", function( bf, ip )
                     expect( ip ).to.equal( "loopback" )
-                    expect( bf:ReadChar() ).to.equal( 84 )
-                    expect( bf:ReadString() ).to.equal( "Source Engine Query" )
+                    expect( bf:ReadString() ).to.equal( "Hello World" )
 
                     done()
                     return true
@@ -33,8 +32,7 @@ return {
 
                 local bf = bitbuf.CreateWriteBuffer( 64 )
                 bf:WriteLong( -1 )
-                bf:WriteChar( 84 )
-                bf:WriteString( "Source Engine Query" )
+                bf:WriteString( "Hello World" )
 
                 gameserver.SendConnectionlessPacket( bf, "loopback:" .. gameserver.GetUDPPort(), false, 0 )
             end

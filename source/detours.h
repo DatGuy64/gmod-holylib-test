@@ -238,57 +238,32 @@ byte m_##name = 0;
 #define DLL_EXTENSION ".dll"
 #define LIBRARY_EXTENSION ".dll"
 #if ARCHITECTURE_IS_X86
-#ifndef NOT_DEDICATED
-#define DETOUR_SYMBOL_ID 4
-#else
 #define DETOUR_SYMBOL_ID 2
-#endif
 #define MODULE_EXTENSION "win32"
 #else
-#ifndef NOT_DEDICATED
-#define DETOUR_SYMBOL_ID 5
-#else
 #define DETOUR_SYMBOL_ID 3
-#endif
 #define MODULE_EXTENSION "win64"
 #endif
 #endif
-
-	inline const Symbol* GetSymbolForID(const std::vector<Symbol>& pSymbols)
-	{
-	#if DETOUR_SYMBOL_ID != 4 && DETOUR_SYMBOL_ID != 5
-		if (pSymbols.size() <= DETOUR_SYMBOL_ID)
-			return nullptr;
-	#else
-		if (pSymbols.size() <= DETOUR_SYMBOL_ID)
-		{
-			if (pSymbols.size() <= (DETOUR_SYMBOL_ID - 2))
-				return nullptr;
-
-			return &pSymbols[DETOUR_SYMBOL_ID - 2];
-		}
-	#endif
-
-		return &pSymbols[DETOUR_SYMBOL_ID];
-	}
 
 	template<class T>
 	inline T* ResolveSymbol(
 		SourceSDK::FactoryLoader& pLoader, const std::vector<Symbol>& pSymbols
 	)
 	{
-		const Symbol* pSymbol = GetSymbolForID(pSymbols);
-		if (!pSymbol)
+	#if DETOUR_SYMBOL_ID != 0
+		if ((pSymbols.size()-1) < DETOUR_SYMBOL_ID)
 			return nullptr;
+	#endif
 
 	#if defined SYSTEM_WINDOWS
 		auto iface = reinterpret_cast<T**>(symfinder.Resolve(
-			pLoader.GetModule(), pSymbol->name.c_str(), pSymbol->length
+			pLoader.GetModule(), pSymbols[DETOUR_SYMBOL_ID].name.c_str(), pSymbols[DETOUR_SYMBOL_ID].length
 		));
 		return iface != nullptr ? *iface : nullptr;
 	#elif defined SYSTEM_POSIX
 		return reinterpret_cast<T*>(symfinder.Resolve(
-			pLoader.GetModule(), pSymbol->name.c_str(), pSymbol->length
+			pLoader.GetModule(), pSymbols[DETOUR_SYMBOL_ID].name.c_str(), pSymbols[DETOUR_SYMBOL_ID].length
 		));
 	#endif
 	}
@@ -298,12 +273,13 @@ byte m_##name = 0;
 		SourceSDK::FactoryLoader& pLoader, const std::vector<Symbol>& pSymbols
 	)
 	{
-		const Symbol* pSymbol = GetSymbolForID(pSymbols);
-		if (!pSymbol)
+	#if DETOUR_SYMBOL_ID != 0
+		if ((pSymbols.size()-1) < DETOUR_SYMBOL_ID)
 			return nullptr;
+	#endif
 
 		return reinterpret_cast<T*>(symfinder.Resolve(
-			pLoader.GetModule(), pSymbol->name.c_str(), pSymbol->length
+			pLoader.GetModule(), pSymbols[DETOUR_SYMBOL_ID].name.c_str(), pSymbols[DETOUR_SYMBOL_ID].length
 		));
 	}
 
@@ -342,21 +318,22 @@ byte m_##name = 0;
 	template<class T>
 	inline T* ResolveSymbolWithOffset(void* pModule, const std::vector<Symbol>& pSymbols)
 	{
-		const Symbol* pSymbol = GetSymbolForID(pSymbols);
-		if (!pSymbol)
+	#if DETOUR_SYMBOL_ID != 0
+		if ((pSymbols.size()-1) < DETOUR_SYMBOL_ID)
 			return nullptr;
+	#endif
 
-		void* matchAddr = GetFunction(pModule, *pSymbol);
+		void* matchAddr = GetFunction(pModule, pSymbols[DETOUR_SYMBOL_ID]);
 		if (matchAddr == nullptr)
 		{
-			Warning(PROJECT_NAME ": Failed to get matchAddr! %s\n", pSymbol->name.c_str());
+			Warning(PROJECT_NAME ": Failed to get matchAddr! %s\n", pSymbols[DETOUR_SYMBOL_ID].name.c_str());
 			return nullptr;
 		}
 
 	#if defined(SYSTEM_WINDOWS)
-		uint8_t* ip = reinterpret_cast<uint8_t*>((char*)(matchAddr) + pSymbol->offset);
+		uint8_t* ip = reinterpret_cast<uint8_t*>((char*)(matchAddr) + pSymbols[DETOUR_SYMBOL_ID].offset);
 	#else
-		uint8_t* ip = reinterpret_cast<uint8_t*>(matchAddr + pSymbol->offset);
+		uint8_t* ip = reinterpret_cast<uint8_t*>(matchAddr + pSymbols[DETOUR_SYMBOL_ID].offset);
 	#endif
 
 		//
@@ -371,38 +348,43 @@ byte m_##name = 0;
 			symbolAddr = next + disp;                         // final address = next + disp32
 		}
 #elif defined(SYSTEM_WINDOWS) && defined(ARCHITECTURE_X86)
-		// NOTE: x86-32 uses absolute addresses in immediates (no RIP-relative addressing).
-		// The 4-byte operand IS the absolute virtual address directly.
-
-		// Primary: PUSH imm32 (0x68 + abs addr) - g_BSPData pattern
+    	// Primary: PUSH imm32 (0x68 + RVA) - g_BSPData pattern
 		if (ip[0] == 0x68)
 		{
-			uint32_t addr = *reinterpret_cast<uint32_t*>(ip + 1);
-			symbolAddr = reinterpret_cast<void*>(static_cast<uintptr_t>(addr));
+			const size_t instrLen = 5;
+			int32_t rva = *reinterpret_cast<uint32_t*>(ip + 1);
+			uint8_t* next = ip + instrLen;
+			symbolAddr = reinterpret_cast<void*>(next + rva);
 			return reinterpret_cast<T*>(symbolAddr);
 		}
-		// Fallback: PUSH ds:[imm32] (0xFF 35 + abs addr at +2) - indirect push
+		// Fallback: PUSH ds:[imm32] (0xFF 35 + RVA at +2) - indirect push
 		if (ip[0] == 0xFF && ip[1] == 0x35) {
-			uint32_t addr = *reinterpret_cast<uint32_t*>(ip + 2);
-			symbolAddr = reinterpret_cast<void*>(static_cast<uintptr_t>(addr));  // Points to the pointer; data at [*symbolAddr]
+			const size_t instrLen = 6;
+			int32_t rva = *reinterpret_cast<uint32_t*>(ip + 2);
+			uint8_t* next = ip + instrLen;
+			symbolAddr = reinterpret_cast<void*>(next + (uintptr_t)rva);  // Points to the pointer; data at [*symbolAddr]
 			return reinterpret_cast<T*>(symbolAddr);
 		}
-		// MOV ECX, offset <var> (0xB9 + abs addr) - loads address directly into ecx
-		// The immediate IS the address of the object, no dereference needed.
+		// Primary: MOV ECX, imm32 (0xB9 + RVA as imm32) - your exact pattern
 		if (ip[0] == 0xB9) {
-			uint32_t addr = *reinterpret_cast<uint32_t*>(ip + 1);
-			symbolAddr = reinterpret_cast<void*>(static_cast<uintptr_t>(addr));
-			return reinterpret_cast<T*>(symbolAddr);
+			const size_t instrLen = 5;
+			int32_t rva = *reinterpret_cast<int32_t*>(ip + 1);
+			uint8_t* next = ip + instrLen;
+			symbolAddr = reinterpret_cast<void*>(next + rva);
 		}
-		// Fallback: MOV ECX, ds:[imm32] (0x8B 0D + abs addr)
+		// Fallback: MOV ECX, ds:[imm32] (0x8B 0D + RVA as address operand)
 		else if (ip[0] == 0x8B && ip[1] == 0x0D) {
-			uint32_t addr = *reinterpret_cast<uint32_t*>(ip + 2);
-			symbolAddr = reinterpret_cast<void*>(static_cast<uintptr_t>(addr));
+			const size_t instrLen = 6;
+			int32_t rva = *reinterpret_cast<int32_t*>(ip + 2);
+			uint8_t* next = ip + instrLen;
+			symbolAddr = reinterpret_cast<void*>(next + rva);
 		}
-		// Rare variant: LEA ECX, [imm32] (0x8D 0D + abs addr)
+		// Rare variant: LEA ECX, [imm32] (0x8D 0D + RVA)
 		else if (ip[0] == 0x8D && ip[1] == 0x0D) {
-			uint32_t addr = *reinterpret_cast<uint32_t*>(ip + 2);
-			symbolAddr = reinterpret_cast<void*>(static_cast<uintptr_t>(addr));
+			const size_t instrLen = 6;
+			int32_t rva = *reinterpret_cast<int32_t*>(ip + 2);
+			uint8_t* next = ip + instrLen;
+			symbolAddr = reinterpret_cast<void*>(next + rva);
 		}
 #elif defined(SYSTEM_WINDOWS) && defined(ARCHITECTURE_X86_64)
 		// LEA RCX, [RIP+imm32] (0x48 0x8D 0x0D + RVA)
@@ -435,22 +417,24 @@ byte m_##name = 0;
 
 	inline void* GetFunction(void* pModule, std::vector<Symbol> pSymbols)
 	{
-		const Symbol* pSymbol = GetSymbolForID(pSymbols);
-		if (!pSymbol)
+#if DETOUR_SYMBOL_ID != 0
+		if ((pSymbols.size()-1) < DETOUR_SYMBOL_ID)
 			return nullptr;
+#endif
 
-		return GetFunction(pModule, *pSymbol);
+		return GetFunction(pModule, pSymbols[DETOUR_SYMBOL_ID]);
 	}
 
 	inline void Create(Detouring::Hook* pHook, const char* strName, void* pModule, std::vector<Symbol> pSymbols, void* pHookFunc, unsigned int category = 0)
 	{
-		const Symbol* pSymbol = GetSymbolForID(pSymbols);
-		if (!pSymbol)
+#if DETOUR_SYMBOL_ID != 0
+		if ((pSymbols.size()-1) < DETOUR_SYMBOL_ID)
 		{
 			CheckFunction(nullptr, strName);
 			return;
 		}
+#endif
 
-		Create(pHook, strName, pModule, *pSymbol, pHookFunc, category);
+		Create(pHook, strName, pModule, pSymbols[DETOUR_SYMBOL_ID], pHookFunc, category);
 	}
 }

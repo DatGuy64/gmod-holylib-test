@@ -22,7 +22,7 @@ return {
             name = "Performance",
             func = function()
                 local userdata = _HOLYLIB_CORE.PushTestUserData()
-                HolyLib_RunPerformanceTest("_HOLYLIB_CORE.ClearLuaTable", function() _HOLYLIB_CORE.ClearLuaTable(userdata) end)
+                HolyLib_RunPerformanceTest("_HOLYLIB_CORE.ClearLuaTable", _HOLYLIB_CORE.ClearLuaTable, userdata)
             end
         },
     }

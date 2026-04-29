@@ -123,7 +123,7 @@ GCudata* g_pEntityReferences[MAX_EDICTS] = {nullptr}; // nulled out in Util::Ini
 int g_pEntitySerialNum[MAX_EDICTS] = {-1};
 
 IModuleWrapper* Util::pEntityList;
-Symbols::CBaseEntity_GetLuaEntity func_CBaseEntity_GetLuaEntity = nullptr;
+static Symbols::CBaseEntity_GetLuaEntity func_CBaseEntity_GetLuaEntity = nullptr;
 void Util::Push_Entity(GarrysMod::Lua::ILuaInterface* LUA, CBaseEntity* pEnt)
 {
 	if (!pEnt)
@@ -384,7 +384,7 @@ void Util::ResetClusters(VisData* data)
 	Q_memset(data->cluster, 0, sizeof(data->cluster));
 }
 
-static Symbols::CM_Vis func_CM_Vis = nullptr;
+Symbols::CM_Vis func_CM_Vis = nullptr;
 Util::VisData* Util::CM_Vis(const Vector& orig, int type)
 {
 	Util::VisData* data = new Util::VisData;
@@ -573,7 +573,7 @@ static void hook_SteamGameServer_Shutdown()
 	// Previous Bug: The voicechat caused a crash because this function was called before we were shutting down which caused us to later try to release a invalid steam user.
 	ShutdownSteamUser();
 
-	// Warning("SteamGameServer_Shutdown called!\n");
+	Warning("SteamGameServer_Shutdown called!\n");
 	detour_SteamGameServer_Shutdown.GetTrampoline<Symbols::SteamGameServer_Shutdown>()();
 }
 
@@ -670,39 +670,6 @@ int Util::FindOffsetForNetworkVar(const char* pDTName, const char* pVarName)
 	return -1;
 }
 
-struct SysError_SkipInfo
-{
-	std::string msg;
-	uint32_t count;
-};
-
-static std::vector<SysError_SkipInfo> g_pErrorsToIgnore;
-void Util::SysError_IgnoreError(std::string msg, uint32_t count)
-{
-	SysError_SkipInfo& pError = g_pErrorsToIgnore.emplace_back();
-	pError.msg = msg;
-	pError.count = count;
-}
-
-static Detouring::Hook detour_Sys_Error_Internal;
-void hook_Sys_Error_Internal( bool bMinidump, const char *error, va_list argsList )
-{
-	std::string_view strError = error;
-	for (auto it = g_pErrorsToIgnore.begin(); it != g_pErrorsToIgnore.end(); ++it)
-	{
-		if (strError.find(it->msg) != std::string_view::npos)
-		{
-			if (--it->count == 0)
-			{
-				g_pErrorsToIgnore.erase(it);
-				return;
-			}
-		}
-	}
-
-	detour_Sys_Error_Internal.GetTrampoline<Symbols::Sys_Error_Internal>()(bMinidump, error, argsList);
-}
-
 #if SYSTEM_WINDOWS
 #undef CreateEvent // Where tf is that windows include >:(
 DETOUR_THISCALL_START()
@@ -727,9 +694,7 @@ Symbols::lua_type Util::func_lua_type = nullptr;
 Symbols::lua_gc Util::func_lua_gc = nullptr;
 Symbols::lua_setallocf Util::func_lua_setallocf = nullptr;
 Symbols::luaL_checklstring Util::func_luaL_checklstring = nullptr;
-Symbols::lua_call Util::func_lua_call = nullptr;
 Symbols::lua_pcall Util::func_lua_pcall = nullptr;
-Symbols::lua_cpcall Util::func_lua_cpcall = nullptr;
 Symbols::lua_insert Util::func_lua_insert = nullptr;
 Symbols::lua_toboolean Util::func_lua_toboolean = nullptr;
 void Util::AddDetour()
@@ -739,7 +704,6 @@ void Util::AddDetour()
 	else
 		engineserver = InterfacePointers::VEngineServer();
 	Detour::CheckValue("get interface", "IVEngineServer", engineserver != nullptr);
-	engine = engineserver;
 	
 	SourceSDK::FactoryLoader engine_loader("engine");
 	if (g_pModuleManager.GetAppFactory())
@@ -783,12 +747,6 @@ void Util::AddDetour()
 		(void*)DETOUR_THISCALL(hook_CGameEventManager_CreateEvent, CreateEvent), 0
 	);
 
-	Detour::Create(
-		&detour_Sys_Error_Internal, "Sys_Error_Internal",
-		engine_loader.GetModule(), Symbols::Sys_Error_InternalSym,
-		(void*)hook_Sys_Error_Internal, 0
-	);
-
 	SourceSDK::ModuleLoader steam_api_loader("steam_api");
 	Detour::Create(
 		&detour_SteamGameServer_Shutdown, "SteamGameServer_Shutdown",
@@ -796,13 +754,8 @@ void Util::AddDetour()
 		(void*)hook_SteamGameServer_Shutdown, 0
 	);
 
-	// Why must getting IServer be an inconsistent hell :sob:
-#if SYSTEM_WINDOWS
-#if ARCHITECTURE_X86_64
+#if SYSTEM_WINDOWS && ARCHITECTURE_X86_64
 	server = Detour::ResolveSymbolNoDereference<IServer>( engine_loader, Symbol::FromName( "?sv@@3VCGameServer@@A" ) );
-#else
-	server = *(IServer**)InterfacePointers::Server();
-#endif
 #else
 	server = InterfacePointers::Server();
 #endif
@@ -869,14 +822,8 @@ void Util::AddDetour()
 	func_luaL_checklstring = (Symbols::luaL_checklstring)Detour::GetFunction(lua_shared_loader.GetModule(), Symbols::luaL_checklstringSym);
 	Detour::CheckFunction((void*)func_luaL_checklstring, "luaL_checklstring");
 
-	func_lua_call = (Symbols::lua_call)Detour::GetFunction(lua_shared_loader.GetModule(), Symbols::lua_callSym);
-	Detour::CheckFunction((void*)func_lua_call, "lua_call");
-
 	func_lua_pcall = (Symbols::lua_pcall)Detour::GetFunction(lua_shared_loader.GetModule(), Symbols::lua_pcallSym);
 	Detour::CheckFunction((void*)func_lua_pcall, "lua_pcall");
-
-	func_lua_cpcall = (Symbols::lua_cpcall)Detour::GetFunction(lua_shared_loader.GetModule(), Symbols::lua_cpcallSym);
-	Detour::CheckFunction((void*)func_lua_cpcall, "lua_cpcall");
 
 	func_lua_insert = (Symbols::lua_insert)Detour::GetFunction(lua_shared_loader.GetModule(), Symbols::lua_insertSym);
 	Detour::CheckFunction((void*)func_lua_insert, "lua_insert");
@@ -890,7 +837,7 @@ void Util::AddDetour()
 	func_lj_tab_get = (Symbols::lj_tab_get)Detour::GetFunction(lua_shared_loader.GetModule(), Symbols::lj_tab_getSym);
 	Detour::CheckFunction((void*)func_lj_tab_get, "lj_tab_get");
 
-	if (!func_lua_touserdata || !func_lua_type || !func_lua_setfenv || !func_luaL_checklstring || !func_lua_call || !func_lua_pcall || !func_lua_cpcall || !func_lua_insert || !func_lua_toboolean)
+	if (!func_lua_touserdata || !func_lua_type || !func_lua_setfenv || !func_luaL_checklstring || !func_lua_pcall || !func_lua_insert || !func_lua_toboolean)
 	{
 		// This is like the ONLY dependency we have on symbols that without we cannot function.
 		Error(PROJECT_NAME " - core: Failed to load an important symbol which we utterly depend on.\n");

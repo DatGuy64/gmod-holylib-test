@@ -31,8 +31,7 @@ return {
             name = "Properly creates a buffer from a string",
             when = HolyLib_IsModuleEnabled("bitbuf"),
             func = function()
-				local callback = function() end
-                HolyLib_RunPerformanceTest("bitbuf.CreateStackReadBuffer", function() bitbuf.CreateStackReadBuffer("Test123", callback) end)
+                HolyLib_RunPerformanceTest("bitbuf.CreateStackReadBuffer", bitbuf.CreateStackReadBuffer, "Test123", function() end)
             end
         },
     }

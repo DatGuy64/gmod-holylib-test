@@ -41,7 +41,7 @@ return {
 
                 voiceData:SetData( "Hello World" )
 
-                HolyLib_RunPerformanceTest("VoiceData:SetLength", function() voiceData:SetLength(5) end)
+                HolyLib_RunPerformanceTest("VoiceData:SetLength", voiceData.SetLength, voiceData, 5)
             end
         },
     }

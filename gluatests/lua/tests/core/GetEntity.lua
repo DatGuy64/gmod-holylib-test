@@ -18,8 +18,7 @@ return {
         {
             name = "Performance",
             func = function()
-				local world = game.GetWorld()
-                HolyLib_RunPerformanceTest("_HOLYLIB_CORE.RawGetEntity", function() _HOLYLIB_CORE.RawGetEntity(world) end)
+                HolyLib_RunPerformanceTest("_HOLYLIB_CORE.RawGetEntity", _HOLYLIB_CORE.RawGetEntity, game.GetWorld())
             end
         },
     }

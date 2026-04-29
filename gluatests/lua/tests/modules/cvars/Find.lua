@@ -38,14 +38,14 @@ return {
             name = "Performance when convar exists",
             when = HolyLib_IsModuleEnabled("cvars"),
             func = function()
-                HolyLib_RunPerformanceTest("cvar.Find(Hit)", function() cvar.Find("sv_cheats") end)
+                HolyLib_RunPerformanceTest("cvar.Find(Hit)", cvar.Find, "sv_cheats")
             end
         },
         {
             name = "Performance when convar doesn't exist",
             when = HolyLib_IsModuleEnabled("cvars"),
             func = function()
-                HolyLib_RunPerformanceTest("cvar.Find(Miss)", function() cvar.Find("sv_cheatsssss") end)
+                HolyLib_RunPerformanceTest("cvar.Find(Miss)", cvar.Find, "sv_cheatsssss")
             end
         },
     }

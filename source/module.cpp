@@ -77,7 +77,7 @@ void OnModuleDebugConVarChange(IConVar* convar, const char* pOldValue, float flO
 
 bool CModule::IsEnabled()
 {
-	return m_bEnabled && !m_bIsShutdown;
+	return m_bEnabled;
 }
 
 void CModule::SetupConfig()
@@ -184,13 +184,6 @@ void CModule::SetEnabled(bool bEnabled, bool bForced)
 					return;
 			}
 
-			if (!m_bStartup && !m_pModule->CanEnableAtRuntime())
-			{
-				Warning(PROJECT_NAME ": module %s cannot be enabled at runtime!\n", m_pModule->Name());
-				return;
-			}
-
-			m_bIsShutdown = false;
 			int status = g_pModuleManager.GetStatus();
 			if (status & LoadStatus_PreDetourInit)
 				m_pModule->InitDetour(true); // I want every module to be able to be disabled/enabled properly
@@ -210,9 +203,6 @@ void CModule::SetEnabled(bool bEnabled, bool bForced)
 				}
 			}
 
-			if (status & LoadStatus_LevelInit)
-				m_pModule->LevelInit(g_pModuleManager.GetMapName());
-
 			if (status & LoadStatus_LuaServerInit)
 			{
 				for (auto& pLua : g_pModuleManager.GetLuaInterfaces())
@@ -228,24 +218,14 @@ void CModule::SetEnabled(bool bEnabled, bool bForced)
 			if (!m_bStartup)
 				Msg(PROJECT_NAME ": Enabled module %s\n", m_pModule->Name());
 		} else {
-			if (g_pModuleManager.GetServerState() != ServerState::SHUTDOWN && !m_pModule->CanDisableAtRuntime())
-			{
-				Warning(PROJECT_NAME ": module %s cannot be disabled at runtime!\n", m_pModule->Name());
-				return;
-			}
-
 			int status = g_pModuleManager.GetStatus();
-			if (status & LoadStatus_LevelInit)
-				m_pModule->LevelShutdown();
-
 			if (status & LoadStatus_LuaInit)
 			{
 				for (auto& pLua : g_pModuleManager.GetLuaInterfaces())
 					m_pModule->LuaShutdown(pLua);
 			}
 
-			// If we did any setup at all (PreDetourInit is the earliest) then we must call Shutdown
-			if (status & LoadStatus_PreDetourInit)
+			if (status & LoadStatus_Init)
 				Shutdown();
 
 			if (!m_bStartup)
@@ -258,9 +238,8 @@ void CModule::SetEnabled(bool bEnabled, bool bForced)
 
 void CModule::Shutdown()
 {
-	m_pModule->Shutdown();
 	Detour::Remove(m_pModule->m_pID);
-	m_bIsShutdown = true;
+	m_pModule->Shutdown();
 }
 
 /*
@@ -372,11 +351,10 @@ IModuleWrapper* CModuleManager::FindModuleByName(const char* name)
 
 IModuleWrapper* CModuleManager::GetModuleByID(int nIndex)
 {
-	// nIndex can be == m_pModules.size()! (since we start at 1!)
-	if (0 >= nIndex || nIndex > (int)m_pModules.size())
+	if (0 > nIndex || nIndex > m_pModules.size())
 		return nullptr;
 
-	return m_pModules[nIndex-1];
+	return m_pModules[nIndex];
 }
 
 void CModuleManager::Setup(CreateInterfaceFn appfn, CreateInterfaceFn gamefn)
@@ -407,8 +385,6 @@ void CModuleManager::Setup(CreateInterfaceFn appfn, CreateInterfaceFn gamefn)
 
 void CModuleManager::Init()
 {
-	m_nServerState = ServerState::STARTING;
-
 	if (!(m_pStatus & LoadStatus_PreDetourInit))
 	{
 		DevMsg(PROJECT_NAME ": ghostinj didn't call InitDetour! Calling it now\n");
@@ -486,21 +462,12 @@ void CModuleManager::Think(bool bSimulating)
 
 void CModuleManager::Shutdown()
 {
-	if (!(m_pStatus & LoadStatus_Init))
-	{
-		Msg(PROJECT_NAME " - Core: Refusing to call Shutdown on modules due to Init never having been called!\n");
-		return;
-	}
-
-	m_nServerState = ServerState::SHUTDOWN;
 	m_pStatus = 0;
 	CALL_ENABLED_MODULES(Shutdown());
 }
 
 void CModuleManager::ServerActivate(edict_t* pEdictList, int edictCount, int clientMax)
 {
-	m_nServerState = ServerState::RUNNING;
-
 	m_pEdictList = pEdictList;
 	m_iEdictCount = edictCount;
 	m_iClientMax = clientMax;
@@ -544,18 +511,8 @@ void CModuleManager::OnClientDisconnect(CBaseClient* pClient)
 	VCALL_ENABLED_MODULES(OnClientDisconnect(pClient));
 }
 
-void CModuleManager::LevelInit(const char* pMapName)
-{
-	m_pStatus |= LoadStatus_LevelInit;
-	m_strMapName = pMapName || "";
-
-	VCALL_ENABLED_MODULES(LevelInit(pMapName));
-}
-
 void CModuleManager::LevelShutdown()
 {
-	m_nServerState = ServerState::CHANGELEVEL;
-
 	VCALL_ENABLED_MODULES(LevelShutdown());
 }
 

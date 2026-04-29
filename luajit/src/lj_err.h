@@ -1,6 +1,6 @@
 /*
 ** Error handling.
-** Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #ifndef _LJ_ERR_H
@@ -55,10 +55,5 @@ LJ_FUNC void lj_err_verify(void);
 #else
 #define lj_err_verify()		((void)0)
 #endif
-
-// RaphaelIT7:
-// I feel like there is no good point to put this function, though this seems the most reasonable place I could think of.
-// Even though the function is actually defined in lj_api.c but there is no lj_api.h
-LJ_FUNC void lj_panic(lua_State *L);
 
 #endif

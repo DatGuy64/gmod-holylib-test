@@ -212,16 +212,6 @@ struct int24
 		return value;
 	}
 
-	bool operator==(const int24& other) const
-	{
-		return ToInt() == other.ToInt();
-	}
-
-	bool operator!=(const int24& other) const
-	{
-		return ToInt() != other.ToInt();
-	}
-
 	char val[3];
 };
 
@@ -369,13 +359,13 @@ void HolyLibCSendTablePrecalc::PrecalcSendProps()
 			case HolyLibSendPropPrecalc::DPT_BOOL:
 				break;
 			case HolyLibSendPropPrecalc::DPT_INT24:
-				nBits = sizeof(int24) * 8;
+				nBits = sizeof(int24);
 				break;
 			case HolyLibSendPropPrecalc::DPT_INT16:
-				nBits = sizeof(short) * 8;
+				nBits = sizeof(short);
 				break;
 			case HolyLibSendPropPrecalc::DPT_INT8:
-				nBits = sizeof(char) * 8;
+				nBits = sizeof(char);
 				break;
 			default:
 				Warning(PROJECT_NAME " - HolyLibCSendTablePrecalc::PrecalcSendProps: No idea for size of %s!\n", pProp->GetName());
@@ -684,7 +674,7 @@ static bool HolyLib_String_CompareDeltas( const HolyLibSendPropPrecalc* pProp, c
 	if (strlen(pStringPointerFrom) != strlen(pStringPointerTo))
 		return true;
 
-	return V_stricmp( pStringPointerFrom, pStringPointerTo ) != 0;
+    return V_stricmp( pStringPointerFrom, pStringPointerTo ) != 0;
 }
 
 static bool HolyLib_Array_IsEncodedZero( const HolyLibSendPropPrecalc* pProp, const void* pPackedData )
@@ -1069,13 +1059,6 @@ bool DVariantMismatch( DVariant& a, DVariant& b )
 
 	switch (a.m_Type)
 	{
-	case HolyLibSendPropPrecalc::DPT_INT24:
-		return (int24)a.m_Int != (int24)b.m_Int;
-	case HolyLibSendPropPrecalc::DPT_INT16:
-		return (short)a.m_Int != (short)b.m_Int;
-	case HolyLibSendPropPrecalc::DPT_INT8:
-		return (char)a.m_Int != (char)b.m_Int;
-	case HolyLibSendPropPrecalc::DPT_BOOL:
 	case SendPropType::DPT_Int:
 		return a.m_Int != b.m_Int;
 	case SendPropType::DPT_Float:
@@ -1093,6 +1076,7 @@ bool DVariantMismatch( DVariant& a, DVariant& b )
 	return false;
 }
 
+static PropTypeFns pPropTypeFns[DPT_NUMSendPropTypes];
 // This is special - why? Because we DON'T pull data from the entity, instead we use the packed data which already was passed through the proxies.
 // This allows us to possibly encode snapshots from the past as the source engine normally can't do this (the proxies would return different results)
 // BUG: This is only partially true - due to the GMODTable and how it's not really saved / fked up we can only partially do this.
@@ -1106,7 +1090,7 @@ static void HolyLib_SendTable_EncodeProp( EncodeState* pState, const HolyLibSend
 		var
 	);
 
-	DVariant var2;
+	/*DVariant var2;
 	pProp->GetProxyFn()(
 		pProp,
 		pState->m_pStructBase,
@@ -1123,7 +1107,8 @@ static void HolyLib_SendTable_EncodeProp( EncodeState* pState, const HolyLibSend
 	var2.m_Type = pProp->m_Type;
 	std::string varStr = var.ToString(); // Yes .ToString can only be used one at a time
 	if ( DVariantMismatch(var, var2) )
-		Msg("Diff: %s (%i - %i - %i) - %s | %s\n", pProp->GetName(), pProp->m_nHolyLibType, pProp->m_nNewTotalOffset, pProp->m_nNewSize, varStr.c_str(), var2.ToString());
+		Msg("Diff: %s (%i) - %s | %s\n", pProp->GetName(), pProp->m_nHolyLibType, varStr.c_str(), var2.ToString());
+	*/
 
 	// Write the index.
 	pState->WritePropIndex( iProp );
@@ -1312,13 +1297,9 @@ void NWR_SV_PackEntity(int edictIdx, edict_t* edict, ServerClass* pServerClass, 
 
 	// GMOD - m_nGMODDataTableOffset only exists on dev & 64x NOT MAIN till next update! See: https://github.com/Facepunch/garrysmod-requests/issues/2981
 	CGMODDataTable* pGMODDataTable = nullptr;
-	HolyLibSendPropPrecalc* pGMODDataTableProp = pSendTablePrecalc->m_nHolyLibGModDataTableProp;
-	if ( pGMODDataTableProp )
-	{
-		int nGMODDataTableOffset = pGMODDataTableProp->GetOffset(); // Since m_nGMODDataTableOffset isn't available
-		if ( nGMODDataTableOffset != -1 ) // We use a precalculated offset, since finding it in here is uttelry expensive!
-			pGMODDataTable = *(CGMODDataTable**)((char*)edict->GetUnknown() + nGMODDataTableOffset);
-	}
+	int nGMODDataTableOffset = pSendTablePrecalc->m_nHolyLibGModDataTableProp->GetOffset(); // Since m_nGMODDataTableOffset isn't available
+	if ( nGMODDataTableOffset != -1 ) // We use a precalculated offset, since finding it in here is uttelry expensive!
+		pGMODDataTable = *(CGMODDataTable**)((char*)edict->GetUnknown() + nGMODDataTableOffset);
 
 	// If this entity was previously in there, then it should have a valid IChangeFrameList 
 	// which we can delta against to figure out which properties have changed.
@@ -1451,7 +1432,7 @@ void PackedEntity::SetServerAndClientClass( ServerClass *pServerClass, ClientCla
 static Detouring::Hook detour_CBaseServer_WriteDeltaEntities;
 static void hook_CBaseServer_WriteDeltaEntities(CBaseServer* pServer, CBaseClient *client, CClientFrame *to, CClientFrame *from, bf_write &pBuf)
 {
-	Msg(PROJECT_NAME " - networkingreplacement: Send snapshot :3\n");
+
 }
 
 /*
@@ -1535,14 +1516,11 @@ void CNetworkingReplacementModule::InitDetour(bool bPreServer)
 	
 	func_CFrameSnapshotManager_GetPreviouslySentPacket = (Symbols::CFrameSnapshotManager_GetPreviouslySentPacket)Detour::GetFunction(engine_loader.GetModule(), Symbols::CFrameSnapshotManager_GetPreviouslySentPacketSym);
 	Detour::CheckFunction((void*)func_CFrameSnapshotManager_GetPreviouslySentPacket, "CFrameSnapshotManager::GetPreviouslySentPacket");
-
-	func_CFrameSnapshotManager_UsePreviouslySentPacket = (Symbols::CFrameSnapshotManager_UsePreviouslySentPacket)Detour::GetFunction(engine_loader.GetModule(), Symbols::CFrameSnapshotManager_UsePreviouslySentPacketSym);
-	Detour::CheckFunction((void*)func_CFrameSnapshotManager_UsePreviouslySentPacket, "CFrameSnapshotManager::UsePreviouslySentPacket");
 	
 	func_CFrameSnapshotManager_CreatePackedEntity = (Symbols::CFrameSnapshotManager_CreatePackedEntity)Detour::GetFunction(engine_loader.GetModule(), Symbols::CFrameSnapshotManager_CreatePackedEntitySym);
 	Detour::CheckFunction((void*)func_CFrameSnapshotManager_CreatePackedEntity, "CFrameSnapshotManager::CreatePackedEntity");
 
-	framesnapshotmanager = *Detour::ResolveSymbol<CFrameSnapshotManager*>(engine_loader, Symbols::g_FrameSnapshotManagerSym);
+	framesnapshotmanager = Detour::ResolveSymbol<CFrameSnapshotManager>(engine_loader, Symbols::g_FrameSnapshotManagerSym);
 	Detour::CheckValue("get class", "framesnapshotmanager", framesnapshotmanager != nullptr);
 
 #if defined(ARCHITECTURE_X86) && defined(SYSTEM_LINUX)

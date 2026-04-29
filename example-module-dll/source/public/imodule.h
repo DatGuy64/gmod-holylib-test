@@ -18,22 +18,22 @@ namespace GarrysMod::Lua
 
 namespace Bootil
 {
-	using BString = std::string;
+	typedef std::string BString;
 
 	namespace Data
 	{
 		template <typename TString>
 		class TreeT;
-		using Tree = TreeT<Bootil::BString>;
+		typedef TreeT<Bootil::BString> Tree;
 	}
 }
 
-enum class MODULE_RESULT // Same as PLUGIN_RESULT of iserverplugin.h
+typedef enum // Same as PLUGIN_RESULT of iserverplugin.h
 {
-	CONTINUE = 0, // keep going
-	TAKEOVER, // run the game dll function but use our return value instead
-	STOP, // don't run the game dll function at all
-};
+	MODULE_CONTINUE = 0, // keep going
+	MODULE_OVERRIDE, // run the game dll function but use our return value instead
+	MODULE_STOP, // don't run the game dll function at all
+} MODULE_RESULT;
 
 class ConVar;
 class KeyValues;
@@ -43,10 +43,10 @@ struct lua_State;
 class CBaseClient;
 class CCommand;
 
-enum class IModuleVersion
+typedef enum
 {
 	VERSION_1 = 1,
-};
+} IModuleVersion;
 
 class IModule
 {
@@ -95,12 +95,6 @@ public:
 	// Whether the module should be enabled by default.
 	virtual bool IsEnabledByDefault() { return true; };
 
-	// Whether the module can be enabled at runtime
-	virtual bool CanEnableAtRuntime() { return true; };
-
-	// Whether the module can be disabled at runtime
-	virtual bool CanDisableAtRuntime() { return true; };
-
 	// Called when the Server is ready to accept players.
 	virtual void ServerActivate(edict_t* pEdictList, int edictCount, int clientMax) { (void)pEdictList; (void)edictCount; (void)clientMax; };
 
@@ -137,10 +131,7 @@ public:
 	// You can load any custom fields from here.
 	virtual void OnConfigLoad(Bootil::Data::Tree& pConfig) { (void)pConfig; };
 
-	// Called on level init
-	virtual void LevelInit(const char *pMapName) { (void)pMapName; };
-
-	// Called on level shutdown (this can get called multiple times per map change)
+	// Called on level shutdown
 	virtual void LevelShutdown() {};
 
 	// Called when Lua tries to load a gmod binary module
@@ -157,13 +148,13 @@ public:
 	virtual void ClientPutInServer(edict_t* pClient, const char* pPlayerName) { (void)pClient; (void)pPlayerName; };
 
 	// called when a client connects to the servers
-	virtual MODULE_RESULT ClientConnect(bool* bAllowConnect, edict_t* pClient, const char* pszName, const char* pszAddress, char* reject, int maxrejectlen) { (void)bAllowConnect; (void)pClient; (void)pszName; (void)pszAddress; (void)reject; (void)maxrejectlen; return MODULE_RESULT::CONTINUE; };
+	virtual MODULE_RESULT ClientConnect(bool* bAllowConnect, edict_t* pClient, const char* pszName, const char* pszAddress, char* reject, int maxrejectlen) { (void)bAllowConnect; (void)pClient; (void)pszName; (void)pszAddress; (void)reject; (void)maxrejectlen; return MODULE_CONTINUE; };
 
 	// called when a client spawns into the server
-	virtual MODULE_RESULT ClientCommand(edict_t *pClient, const CCommand* args) { (void)pClient; (void)args; return MODULE_RESULT::CONTINUE; };
+	virtual MODULE_RESULT ClientCommand(edict_t *pClient, const CCommand* args) { (void)pClient; (void)args; return MODULE_CONTINUE; };
 
 	// called when a client spawns into the server
-	virtual MODULE_RESULT NetworkIDValidated(const char *pszUserName, const char *pszNetworkID) { (void)pszUserName; (void)pszNetworkID; return MODULE_RESULT::CONTINUE; };
+	virtual MODULE_RESULT NetworkIDValidated(const char *pszUserName, const char *pszNetworkID) { (void)pszUserName; (void)pszNetworkID; return MODULE_CONTINUE; };
 
 public: // I would like to remove these at some point but it's more efficient if the modules themself have them.
 	unsigned int m_pID = 0; // Set by the CModuleManager when registering it! Don't touch it.
@@ -181,7 +172,7 @@ public:
 	virtual ~IModuleWrapper() = default;
 
 	// Binds the IModuleWrapper to the IModule and Initializes itself.
-	virtual void SetModule(IModule* pModule) = 0;
+	virtual void SetModule(IModule* module) = 0;
 
 	// Returns the module that this wrapper is linked to.
 	virtual IModule* GetModule() = 0;
@@ -211,9 +202,8 @@ public:
 #define LoadStatus_LuaInit (1<<3)
 #define LoadStatus_LuaServerInit (1<<4)
 #define LoadStatus_ServerActivate (1<<5)
-#define LoadStatus_LevelInit (1<<6)
 
-enum class Module_Realm : unsigned char
+enum Module_Realm : unsigned char
 {
 	CLIENT = 0,
 	SERVER,
@@ -288,7 +278,6 @@ public:
 	virtual void OnEntityDeleted(CBaseEntity* pEntity) = 0;
 	virtual void OnClientConnect(CBaseClient* pClient) = 0;
 	virtual void OnClientDisconnect(CBaseClient* pClient) = 0;
-	virtual void LevelInit(const char *pMapName) = 0;
 	virtual void LevelShutdown() = 0;
 	virtual void PreLuaModuleLoaded(lua_State* L, const char* pFileName) = 0;
 	virtual void PostLuaModuleLoaded(lua_State* L, const char* pFileName) = 0;

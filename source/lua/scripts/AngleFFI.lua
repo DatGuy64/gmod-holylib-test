@@ -27,14 +27,6 @@ local function Angle(x, y, z)
     if isangle(ang) then
         return CreateAngle(ang.x, ang.y, ang.z)
     end
-
-    if isstring(ang) then
-        local vals = ang:Split(" ")
-        x = vals[1] or 0
-        y = vals[2] or 0
-        z = vals[3] or 0
-    end
-
     return CreateAngle(tonumber(x) or 0, tonumber(y) or 0, tonumber(z) or 0)
 end
 _G.GMOD_Angle = _G.Angle -- let's keep the original around
@@ -213,25 +205,13 @@ function methods:IsZero()
     return self.x == 0 and self.y == 0 and self.z == 0
 end
 
--- 1:1 What GMod does since it uses the SDK AngleNormalize function
-local function AngleNormalize(angle)
-    angle = math.fmod(angle, 360)
-
-    if angle > 180 then
-        angle = angle - 360
-    end
-
-    if angle < -180 then
-        angle = angle + 360
-    end
-
-    return angle
-end
-
 function methods:Normalize()
-    self.x = AngleNormalize(self.x)
-    self.y = AngleNormalize(self.y)
-    self.z = AngleNormalize(self.z)
+    local length = math.sqrt(self.x * self.x + self.y * self.y + self.z * self.z)
+    if length == 0 then return end
+
+    self.x = self.x / length
+    self.y = self.y / length
+    self.z = self.z / length
 end
 
 function methods:Random(min, max)
@@ -335,17 +315,12 @@ do
 
     debug.setblocked(CreateAngle)
 
-    _G.GMOD_isangle = _G.GMOD_isangle or _G.isangle
-    local GMOD_isangle = _G.GMOD_isangle
     function isangle(v)
-        if GMOD_isangle(v) then
-            return true
-        end
-
         return ffi.istype("GMOD_AngUserData", v)
     end
 
     debug.setblocked(isangle)
+    _G.GMOD_isangle = _G.isangle
     _G.isangle = isangle
 end
 

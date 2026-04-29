@@ -27,14 +27,14 @@ return {
             name = "Performance when file exists",
             when = HolyLib_IsModuleEnabled("filesystem"),
             func = function()
-                HolyLib_RunPerformanceTest("filesystem.Exists(Hit)", function() filesystem.Exists("garrysmod.ver", "GAME") end)
+                HolyLib_RunPerformanceTest("filesystem.Exists(Hit)", filesystem.Exists, "garrysmod.ver", "GAME")
             end
         },
         {
             name = "Performance when file is missing",
             when = HolyLib_IsModuleEnabled("filesystem"),
             func = function()
-                HolyLib_RunPerformanceTest("filesystem.Exists(Miss)", function() filesystem.Exists("garrysmod.verrrrr", "GAME") end)
+                HolyLib_RunPerformanceTest("filesystem.Exists(Miss)", filesystem.Exists, "garrysmod.verrrrr", "GAME")
             end
         },
     }

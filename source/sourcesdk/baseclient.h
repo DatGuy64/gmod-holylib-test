@@ -219,9 +219,7 @@ public:
 
 	KeyValues		*m_ConVars;			// stores all client side convars
 	bool			m_bConVarsChanged;	// true if convars updated and not changes process yet
-#if PLATFORM_64BITS
 	bool			m_bInitialConVarsSet; // Has the client sent their initial set of convars
-#endif
 	bool			m_bSendServerInfo;	// true if we need to send server info packet to start connect
 	CBaseServer		*m_Server;			// pointer to server object
 	bool			m_bIsHLTV;			// if this a HLTV proxy ?
@@ -285,7 +283,12 @@ public:
 	// Default time to wait for next message
 	float		  m_fSnapshotInterval;  
 
-	static constexpr uint32_t SNAPSHOT_SCRATCH_BUFFER_SIZE = 1048576;
+	enum
+	{
+		SNAPSHOT_SCRATCH_BUFFER_SIZE = 1048576,
+	};
+
+	unsigned int		m_SnapshotScratchBuffer[ SNAPSHOT_SCRATCH_BUFFER_SIZE / 4 ];
 
 	CSteamID m_OwnerSteamID; // Verify: Could be owner steamid for Player:OwnerSteamID64()
 
