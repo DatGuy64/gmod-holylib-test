@@ -49,14 +49,6 @@ uint64_t g_HolyPVS_AWHWhitelist[HOLYLIB_MAX_PLAYERS + 1][2] = { {0,0} };
 static float g_LOSNext[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
 static unsigned char g_LOSVis[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
 
-// Standard Source Engine player hull constants for LOS checks
-constexpr float g_PlayerBBoxMinX   = -15.0f;
-constexpr float g_PlayerBBoxMinY   = -15.0f;
-constexpr float g_PlayerBBoxMaxX   =  15.0f;
-constexpr float g_PlayerBBoxMaxY   =  15.0f;
-constexpr float g_PlayerBBoxBottom =   5.0f;
-constexpr float g_PlayerBBoxTop    =  70.0f;
-
 void HolyPVS_ResetAWHSlot(int idx)
 {
     g_HolyPVS_AWHJustEnabled[idx] = false;
@@ -148,30 +140,21 @@ bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* t
 
         if (g_LOSNext[vIdx][tIdx] == 0.0f)
         {
-            Msg("[AWH] WithSlot %i->%i: first grace tick\n", vIdx, tIdx);
             g_LOSVis[vIdx][tIdx] = 1;
             g_LOSNext[vIdx][tIdx] = now + cacheSeconds;
             return true;
         }
 
         if (g_LOSNext[vIdx][tIdx] > now)
-        {
-            Msg("[AWH] WithSlot %i->%i: cache hit vis=%i\n", vIdx, tIdx, (int)g_LOSVis[vIdx][tIdx]);
             return g_LOSVis[vIdx][tIdx] != 0;
-        }
-
-        Msg("[AWH] WithSlot %i->%i: cache expired, doing LOS\n", vIdx, tIdx);
     }
 
     const int result = VisibleByLOS_NoCache(viewer, target);
-    Msg("[AWH] WithSlot %i->%i: LOS result=%i\n", vIdx, tIdx, result);
 
     if (cacheSeconds > 0.0f)
     {
         if (result < 0)
         {
-            // Entity unstable (bot with no collision, mid-teleport etc.)
-            // Mark as permanently visible so we never hide it
             g_LOSVis[vIdx][tIdx] = 1;
             g_LOSNext[vIdx][tIdx] = gpGlobals->curtime + 99999.0f;
             return true;
@@ -203,20 +186,15 @@ static int VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
 
     const Vector& origin = target->GetAbsOrigin();
 
-    Msg("[AWH] LOS_NoCache: viewerEye=(%.1f,%.1f,%.1f) targetOrigin=(%.1f,%.1f,%.1f)\n",
-        viewerEye.x, viewerEye.y, viewerEye.z,
-        origin.x, origin.y, origin.z);
+    if (LOS_Clear(viewerEye, origin + Vector(-15.0f, -15.0f,  5.0f))) return 1;
+    if (LOS_Clear(viewerEye, origin + Vector( 15.0f, -15.0f,  5.0f))) return 1;
+    if (LOS_Clear(viewerEye, origin + Vector(-15.0f,  15.0f,  5.0f))) return 1;
+    if (LOS_Clear(viewerEye, origin + Vector( 15.0f,  15.0f,  5.0f))) return 1;
+    if (LOS_Clear(viewerEye, origin + Vector(-15.0f, -15.0f, 70.0f))) return 1;
+    if (LOS_Clear(viewerEye, origin + Vector( 15.0f, -15.0f, 70.0f))) return 1;
+    if (LOS_Clear(viewerEye, origin + Vector(-15.0f,  15.0f, 70.0f))) return 1;
+    if (LOS_Clear(viewerEye, origin + Vector( 15.0f,  15.0f, 70.0f))) return 1;
 
-    if (LOS_Clear(viewerEye, origin + Vector(g_PlayerBBoxMinX, g_PlayerBBoxMinY, g_PlayerBBoxBottom))) { Msg("[AWH] LOS corner 1 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector(g_PlayerBBoxMaxX, g_PlayerBBoxMinY, g_PlayerBBoxBottom))) { Msg("[AWH] LOS corner 2 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector(g_PlayerBBoxMinX, g_PlayerBBoxMaxY, g_PlayerBBoxBottom))) { Msg("[AWH] LOS corner 3 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector(g_PlayerBBoxMaxX, g_PlayerBBoxMaxY, g_PlayerBBoxBottom))) { Msg("[AWH] LOS corner 4 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector(g_PlayerBBoxMinX, g_PlayerBBoxMinY, g_PlayerBBoxTop)))    { Msg("[AWH] LOS corner 5 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector(g_PlayerBBoxMaxX, g_PlayerBBoxMinY, g_PlayerBBoxTop)))    { Msg("[AWH] LOS corner 6 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector(g_PlayerBBoxMinX, g_PlayerBBoxMaxY, g_PlayerBBoxTop)))    { Msg("[AWH] LOS corner 7 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector(g_PlayerBBoxMaxX, g_PlayerBBoxMaxY, g_PlayerBBoxTop)))    { Msg("[AWH] LOS corner 8 clear\n"); return 1; }
-
-    Msg("[AWH] LOS_NoCache: ALL corners blocked\n");
     return 0;
 }
 
