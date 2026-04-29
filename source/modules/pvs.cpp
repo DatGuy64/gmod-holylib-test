@@ -133,27 +133,35 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
 
 // Version with pre-computed viewer eye position — avoids ANY vtable call on viewer.
 // Called from ApplyAntiWallhackFastTransmit where viewer validity is uncertain.
-static inline bool VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* target, edict_t* targetEdict)
+// Returns: 1 = visible, 0 = hidden, -1 = entity unstable (retry later)
+static inline int VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* target, edict_t* targetEdict)
 {
     if (!target || !targetEdict || targetEdict->IsFree())
     {
         Msg("[AWH] WithEye: early bail - target=%p edict=%p free=%s\n", (void*)target, (void*)targetEdict, (targetEdict && targetEdict->IsFree()) ? "yes" : "no");
-        return false;
+        return -1;
     }
 
-    // Verify edict and entity are still in sync
     CBaseEntity* edictEnt = (CBaseEntity*)targetEdict->GetUnknown();
     if (!edictEnt || edictEnt != target)
     {
         Msg("[AWH] WithEye: edict/ent mismatch edict=%i edictEnt=%p target=%p\n", targetEdict->m_EdictIndex, (void*)edictEnt, (void*)target);
-        return false;
+        return -1;
     }
 
     Msg("[AWH] WithEye: calling CollisionProp edict=%i target=%p\n", targetEdict->m_EdictIndex, (void*)target);
     auto* col = target->CollisionProp();
     Msg("[AWH] WithEye: CollisionProp=%p\n", (void*)col);
     if (!col)
-        return false;
+        return -1;
+
+    uintptr_t colVtable = *(uintptr_t*)col;
+    Msg("[AWH] WithEye: col vtable=0x%x\n", colVtable);
+    if (colVtable < 0x10000)
+    {
+        Msg("[AWH] WithEye: corrupted col vtable 0x%x on edict=%i\n", colVtable, targetEdict->m_EdictIndex);
+        return -1;
+    }
 
     Msg("[AWH] WithEye: calling OBBMins\n");
     const Vector mins = col->OBBMins();
@@ -173,18 +181,18 @@ static inline bool VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* ta
     const matrix3x4_t& mat = target->EntityToWorldTransform();
 
     local.z = zBottom;
-    local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-    local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-    local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-    local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+    local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
+    local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
+    local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
+    local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
 
     local.z = zTop;
-    local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-    local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-    local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
-    local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+    local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
+    local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
+    local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
+    local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return 1;
 
-    return false;
+    return 0;
 }
 
 // Version with known slots and pre-computed eye — called from networking AWH path.
@@ -212,15 +220,23 @@ bool HolyPVS_VisibleByLOS_WithSlot(const Vector& viewerEye, int vIdx, CBaseEntit
         Msg("[AWH] WithSlot: cache expired, doing real LOS check\n");
     }
 
-    const bool vis = VisibleByLOS_WithEye(viewerEye, target, targetEdict);
-    Msg("[AWH] WithSlot: LOS result=%s\n", vis ? "visible" : "hidden");
+    const int result = VisibleByLOS_WithEye(viewerEye, target, targetEdict);
+    Msg("[AWH] WithSlot: LOS result=%i\n", result);
 
     if (cacheSeconds > 0.0f)
     {
-        g_LOSVis[vIdx][tIdx] = vis ? 1 : 0;
+        if (result == -1)
+        {
+            // Entity unstable (corrupted vtable, mid-teleport etc.)
+            // Reset cache to 0 so grace tick fires again next call
+            Msg("[AWH] WithSlot: entity unstable, resetting LOS cache to trigger grace tick\n");
+            g_LOSNext[vIdx][tIdx] = 0.0f;
+            return true; // assume visible — don't hide a player we can't check
+        }
+        g_LOSVis[vIdx][tIdx] = (result == 1) ? 1 : 0;
         g_LOSNext[vIdx][tIdx] = gpGlobals->curtime + cacheSeconds;
     }
-    return vis;
+    return result != 0;
 }
 
 static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
@@ -236,7 +252,7 @@ static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target
         return false;
 
     Vector viewerEye = viewer->EyePosition();
-    return VisibleByLOS_WithEye(viewerEye, target, targetEdict);
+    return VisibleByLOS_WithEye(viewerEye, target, targetEdict) == 1;
 }
 
 
