@@ -149,6 +149,14 @@ static inline int VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* tar
         return -1;
     }
 
+    // Validate target vtable before any virtual call
+    uintptr_t targetVtable = *(uintptr_t*)target;
+    if (targetVtable < 0x08000000 || targetVtable > 0xf8000000)
+    {
+        Msg("[AWH] WithEye: invalid target vtable 0x%x on edict=%i — entity unstable\n", targetVtable, targetEdict->m_EdictIndex);
+        return -1;
+    }
+
     Msg("[AWH] WithEye: calling CollisionProp edict=%i target=%p\n", targetEdict->m_EdictIndex, (void*)target);
     auto* col = target->CollisionProp();
     Msg("[AWH] WithEye: CollisionProp=%p\n", (void*)col);
@@ -157,9 +165,11 @@ static inline int VisibleByLOS_WithEye(const Vector& viewerEye, CBaseEntity* tar
 
     uintptr_t colVtable = *(uintptr_t*)col;
     Msg("[AWH] WithEye: col vtable=0x%x\n", colVtable);
-    if (colVtable < 0x10000)
+    // Valid .so addresses on 32-bit Linux are typically 0x08000000 - 0xf8000000
+    // Anything outside that range (including 0xffffffff, 0xb, etc.) is corrupted
+    if (colVtable < 0x08000000 || colVtable > 0xf8000000)
     {
-        Msg("[AWH] WithEye: corrupted col vtable 0x%x on edict=%i\n", colVtable, targetEdict->m_EdictIndex);
+        Msg("[AWH] WithEye: invalid col vtable 0x%x on edict=%i — entity unstable\n", colVtable, targetEdict->m_EdictIndex);
         return -1;
     }
 
