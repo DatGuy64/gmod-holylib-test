@@ -97,6 +97,7 @@ LUA_FUNCTION_STATIC(gameevent_RemoveListener)
 	return 1;
 }
 
+extern CGlobalVars *gpGlobals;
 LUA_FUNCTION_STATIC(gameevent_GetClientListeners)
 {
 	if (LUA->IsType(1, GarrysMod::Lua::Type::Entity))
@@ -128,7 +129,7 @@ LUA_FUNCTION_STATIC(gameevent_GetClientListeners)
 		}
 	} else {
 		LUA->CreateTable();
-		for (int iClient = 0; iClient<Util::server->GetMaxClients(); ++iClient)
+		for (int iClient = 0; iClient<gpGlobals->maxClients; ++iClient)
 		{
 			CBaseEntity* ent = Util::GetCBaseEntityFromEdict(Util::engineserver->PEntityOfEntIndex(iClient+1));
 			if (!ent)
@@ -327,17 +328,10 @@ LUA_FUNCTION_STATIC(IGameEvent__tostring)
 Default__index(IGameEvent);
 Default__newindex(IGameEvent);
 Default__GetTable(IGameEvent);
+Default__IsValid(IGameEvent);
 Default__gc(IGameEvent, 
 	pGameEventManager->FreeEvent((IGameEvent*)pStoredData);
 )
-
-LUA_FUNCTION_STATIC(IGameEvent_IsValid)
-{
-	IGameEvent* pEvent = Get_IGameEvent(LUA, 1, false);
-
-	LUA->PushBool(pEvent != nullptr);
-	return 1;
-}
 
 LUA_FUNCTION_STATIC(IGameEvent_IsEmpty)
 {
@@ -525,8 +519,8 @@ void CGameeventLibModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bSer
 		Util::AddFunc(pLua, IGameEvent__index, "__index");
 		Util::AddFunc(pLua, IGameEvent__newindex, "__newindex");
 		Util::AddFunc(pLua, IGameEvent__gc, "__gc");
-		Util::AddFunc(pLua, IGameEvent_IsValid, "IsValid");
-		Util::AddFunc(pLua, IGameEvent_GetTable, "GetTable");
+		LUA_REGISTER_JIT(pLua, IGameEvent_IsValid, "IsValid");
+		LUA_REGISTER_JIT(pLua, IGameEvent_GetTable, "GetTable");
 		Util::AddFunc(pLua, IGameEvent_IsEmpty, "IsEmpty");
 		Util::AddFunc(pLua, IGameEvent_IsReliable, "IsReliable");
 		Util::AddFunc(pLua, IGameEvent_IsLocal, "IsLocal");

@@ -70,6 +70,14 @@ IModule* pVoiceChatModule = &g_pVoiceChatModule;
 // IMPORTANT: When changing this struct, you also NEED to update the VoiceDataFFI.lua file!!!
 struct VoiceData
 {
+	VoiceData()
+	{
+		bProximity = true;
+		bDecompressedChanged = false;
+		bAllowLuaGC = true;
+		bTempValue = false;
+	}
+
 	~VoiceData() {
 		Empty();
 	}
@@ -86,9 +94,9 @@ struct VoiceData
 			pData = new char[iLength]; // We won't need additional space right?
 	}
 
-	inline void SetData(const char* pNewData, int iNewLength)
+	inline void SetData(const char* pNewData, uint16_t iNewLength)
 	{
-		iLength = iNewLength;
+		iLength = iDataLength = iNewLength;
 		AllocData();
 		if (pData)
 			memcpy(pData, pNewData, iLength);
@@ -183,6 +191,13 @@ struct VoiceData
 				return pData; // We failed to update. GG
 			}
 
+			// Compressed they are like 3kb soo 64kb should never be hit
+			if (bytes > USHRT_MAX)
+			{
+				Warning(PROJECT_NAME " - voicechat: Compressed voice data is too large! (%i)\n", bytes);
+				return pData;
+			}
+
 			SetData(pCompressed, bytes);
 			bDecompressedChanged = false;
 		}
@@ -234,9 +249,9 @@ struct VoiceData
 		return pDecompressedData;
 	}
 
-	inline void SetLength(int iNewLength)
+	inline void SetLength(uint16_t iNewLength)
 	{
-		iLength = iNewLength;
+		iLength = MIN(iDataLength, iNewLength);
 	}
 
 	inline int GetLength()
@@ -273,6 +288,17 @@ struct VoiceData
 		return pDecompressedData;
 	}
 
+	// We mark VoiceData as temp so that code won't possibly store a dead pointer
+	inline void MarkTemp()
+	{
+		bTempValue = true;
+	}
+
+	inline bool IsTemp()
+	{
+		return bTempValue;
+	}
+
 	inline void MarkDecompressedChanged()
 	{
 		bDecompressedChanged = true;
@@ -306,14 +332,16 @@ struct VoiceData
 		bDecompressedChanged = false;
 	}
 
-	int iPlayerSlot = 0; // What if it's an invalid one ;D (It doesn't care.......)
-	bool bProximity = true;
-	bool bDecompressedChanged = false;
-	bool bAllowLuaGC = true;
+	uint8_t iPlayerSlot = 0; // What if it's an invalid one ;D (It doesn't care.......)
+	unsigned char bProximity : 1;
+	unsigned char bDecompressedChanged : 1;
+	unsigned char bAllowLuaGC : 1;
+	unsigned char bTempValue : 1;
 
 private:
-	int iLength = 0;
-	int iDecompressedLength = 0;
+	uint16_t iLength = 0;
+	uint16_t iDataLength = 0;
+	uint32_t iDecompressedLength = 0;
 
 	char* pData = nullptr;
 	char* pDecompressedData = nullptr;
@@ -346,80 +374,84 @@ LUA_FUNCTION_STATIC(VoiceData__tostring)
 Default__index(VoiceData);
 Default__newindex(VoiceData);
 Default__GetTable(VoiceData);
+Default__IsValid(VoiceData);
 Default__gc(VoiceData,
 	VoiceData* pVoiceData = (VoiceData*)pStoredData;
 	if (pVoiceData && pVoiceData->bAllowLuaGC)
 		delete pVoiceData;
 )
 
-LUA_FUNCTION_STATIC(VoiceData_IsValid)
+LUA_JIT_WRAPPED_1R(VoiceData_GetPlayerSlot,
+	int, iPlayerSlot, LUA->PushNumber(iPlayerSlot),
+	LuaUserData*, pUD, Get_VoiceData_Data(LUA, 1, true)
+)
 {
-	VoiceData* pData = Get_VoiceData(LUA, 1, false);
+	VoiceData* pData = (VoiceData*)pUD->GetData();
+	if (!pData)
+		return -1;
 
-	LUA->PushBool(pData != nullptr);
-	return 1;
+	return pData->iPlayerSlot;
 }
 
-LUA_FUNCTION_STATIC(VoiceData_GetPlayerSlot)
+LUA_JIT_WRAPPED_1R(VoiceData_GetLength,
+	int, iPlayerSlot, LUA->PushNumber(iPlayerSlot),
+	LuaUserData*, pUD, Get_VoiceData_Data(LUA, 1, true)
+)
 {
-	VoiceData* pData = Get_VoiceData(LUA, 1, true);
+	VoiceData* pData = (VoiceData*)pUD->GetData();
+	if (!pData)
+		return -1;
 
-	LUA->PushNumber(pData->iPlayerSlot);
-
-	return 1;
+	return pData->GetLength();
 }
 
-LUA_FUNCTION_STATIC(VoiceData_GetLength)
+LUA_JIT_WRAPPED_1R(VoiceData_GetData,
+	lua_String*, pVoiceData, if (pVoiceData) { LUA->PushString(pVoiceData->data, pVoiceData->length); } else { LUA->PushNil(); },
+	LuaUserData*, pUD, Get_VoiceData_Data(LUA, 1, true)
+)
 {
-	VoiceData* pData = Get_VoiceData(LUA, 1, true);
+	VoiceData* pData = (VoiceData*)pUD->GetData();
+	if (!pData)
+		return nullptr;
 
-	LUA->PushNumber(pData->GetLength());
-
-	return 1;
+	Lua::pTempStr.data = pData->GetData();
+	Lua::pTempStr.length = pData->GetLength();
+	return &Lua::pTempStr;
 }
 
-LUA_FUNCTION_STATIC(VoiceData_GetData)
+LUA_JIT_WRAPPED_1R(VoiceData_GetUncompressedData,
+	lua_String*, pVoiceData, if (pVoiceData) { LUA->PushString(pVoiceData->data, pVoiceData->length); } else { LUA->PushNil(); },
+	LuaUserData*, pUD, Get_VoiceData_Data(LUA, 1, true); if (!Util::GetSteamUser()) {LUA->ThrowError("Failed to get SteamUser!\n");}
+)
 {
-	VoiceData* pData = Get_VoiceData(LUA, 1, true);
-
-	LUA->PushString(pData->GetData(), pData->GetLength());
-
-	return 1;
-}
-
-LUA_FUNCTION_STATIC(VoiceData_GetUncompressedData)
-{
-	VoiceData* pData = Get_VoiceData(LUA, 1, true);
-
-	ISteamUser* pSteamUser = Util::GetSteamUser();
-	if (!pSteamUser)
-		LUA->ThrowError("Failed to get SteamUser!\n");
+	VoiceData* pData = (VoiceData*)pUD->GetData();
+	if (!pData)
+		return nullptr;
 
 	int iDecompressedLength = 0;
 	char* pDecompressed = pData->GetDecompressedData(&iDecompressedLength);
 	if (iDecompressedLength <= 0)
 	{
-		LUA->PushString("");
-		return 1;
+		Lua::pTempStr.data = "";
+		Lua::pTempStr.length = 0;
+	} else {
+		Lua::pTempStr.data = pDecompressed;
+		Lua::pTempStr.length = iDecompressedLength;
 	}
 
-	LUA->PushString(pDecompressed, iDecompressedLength); // Lua creates a copy so g_pDataBuffer can be discarded.
-	return 1;
+	return &Lua::pTempStr;
 }
 
-LUA_FUNCTION_STATIC(VoiceData_SetUncompressedData)
+LUA_JIT_WRAPPED_2(VoiceData_SetUncompressedData,
+	LuaUserData*, pUD, Get_VoiceData_Data(LUA, 1, true); if (!Util::GetSteamUser()) {LUA->ThrowError("Failed to get SteamUser!\n");},
+	GCstr*, pUncompressedData, Lua::GetGCStr(LUA, 2)
+)
 {
-	VoiceData* pData = Get_VoiceData(LUA, 1, true);
+	VoiceData* pData = (VoiceData*)pUD->GetData();
+	if (!pData)
+		return;
 
-	size_t iSize;
-	const char* pUncompressedData = Util::CheckLString(LUA, 2, &iSize);
-
-	ISteamUser* pSteamUser = Util::GetSteamUser();
-	if (!pSteamUser)
-		LUA->ThrowError("Failed to get SteamUser!\n");
-
-	pData->SetDecompressedData(pUncompressedData, iSize);
-	return 1;
+	pData->SetDecompressedData(Lua::GetGCStrData(pUncompressedData), Lua::GetGCStrLength(pUncompressedData));
 }
 
 LUA_FUNCTION_STATIC(VoiceData_GetProximity)
@@ -427,44 +459,58 @@ LUA_FUNCTION_STATIC(VoiceData_GetProximity)
 	VoiceData* pData = Get_VoiceData(LUA, 1, true);
 
 	LUA->PushBool(pData->bProximity);
-
 	return 1;
 }
 
-LUA_FUNCTION_STATIC(VoiceData_SetPlayerSlot)
+LUA_JIT_WRAPPED_2(VoiceData_SetPlayerSlot,
+	LuaUserData*, pUD, Get_VoiceData_Data(LUA, 1, true),
+	int, iPlayerSlot, LUA->CheckNumber(2)
+)
 {
-	VoiceData* pData = Get_VoiceData(LUA, 1, true);
+	VoiceData* pData = (VoiceData*)pUD->GetData();
+	if (!pData)
+		return;
 
-	pData->iPlayerSlot = (int)LUA->CheckNumber(2);
-
-	return 0;
+	pData->iPlayerSlot = iPlayerSlot;
 }
 
-LUA_FUNCTION_STATIC(VoiceData_SetLength)
+LUA_JIT_WRAPPED_2(VoiceData_SetLength,
+	LuaUserData*, pUD, Get_VoiceData_Data(LUA, 1, true),
+	int, iLength, LUA->CheckNumber(2)
+)
 {
-	VoiceData* pData = Get_VoiceData(LUA, 1, true);
+	VoiceData* pData = (VoiceData*)pUD->GetData();
+	if (!pData)
+		return;
 
-	pData->SetLength((int)LUA->CheckNumber(2));
-
-	return 0;
+	pData->SetLength((uint16_t)iLength);
 }
 
-LUA_FUNCTION_STATIC(VoiceData_SetData)
+LUA_JIT_WRAPPED_3(VoiceData_SetData,
+	LuaUserData*, pUD, Get_VoiceData_Data(LUA, 1, true),
+	GCstr*, pCompressedData, Lua::GetGCStr(LUA, 2),
+	int, iNewLength, LUA->CheckNumberOpt(3, -1)
+)
 {
-	VoiceData* pData = Get_VoiceData(LUA, 1, true);
+	VoiceData* pData = (VoiceData*)pUD->GetData();
+	if (!pData || !pCompressedData)
+		return;
 
-	size_t iLength;
-	const char* pStr = Util::CheckLString(LUA, 2, &iLength);
+	pData->SetData(Lua::GetGCStrData(pCompressedData), (uint16_t)(iNewLength != -1 ? iNewLength : Lua::GetGCStrLength(pCompressedData)));
+}
 
-	if (LUA->IsType(3, GarrysMod::Lua::Type::Number))
-	{
-		int iNewLength = (int)LUA->GetNumber(3);
-		iLength = MIN(iNewLength, iLength); // Don't allow one to go beyond the strength length
-	}
+// This is the JIT version with (userdata, string) args while the above is (userdata, string, int)
+// I was thinking about allowing JIT to just for example then pass on empty arguments like (userdata, string, int = -1) but that sucked to implement sooo we do it this way
+LUA_JIT_RAW_2(VoiceData_SetData_NoLength,
+	LuaUserData*, pUD,
+	GCstr*, pCompressedData
+)
+{
+	VoiceData* pData = (VoiceData*)pUD->GetData();
+	if (!pData || !pCompressedData)
+		return;
 
-	pData->SetData(pStr, iLength);
-
-	return 0;
+	pData->SetData(Lua::GetGCStrData(pCompressedData), (uint16_t)Lua::GetGCStrLength(pCompressedData));
 }
 
 LUA_FUNCTION_STATIC(VoiceData_SetProximity)
@@ -472,7 +518,6 @@ LUA_FUNCTION_STATIC(VoiceData_SetProximity)
 	VoiceData* pData = Get_VoiceData(LUA, 1, true);
 
 	pData->bProximity = LUA->GetBool(2);
-
 	return 0;
 }
 
@@ -484,12 +529,16 @@ LUA_FUNCTION_STATIC(VoiceData_CreateCopy)
 	return 1;
 }
 
-LUA_FUNCTION_STATIC(VoiceData_Empty)
+LUA_JIT_WRAPPED_1(VoiceData_Empty,
+	LuaUserData*, pUD, Get_VoiceData_Data(LUA, 1, true)
+)
 {
-	VoiceData* pData = Get_VoiceData(LUA, 1, true);
+	VoiceData* pData = (VoiceData*)pUD->GetData();
+	if (!pData)
+		return;
 
 	pData->Empty();
-	return 0;
+	return;
 }
 
 struct WavAudioFile {
@@ -602,7 +651,8 @@ Default__gc(WavAudioFile,
 )*/
 
 static const int VOICESTREAM_VERSION_1 = 1;
-static const int VOICESTREAM_VERSION = 1; // Current version
+static const int VOICESTREAM_VERSION_2 = 2;
+static const int VOICESTREAM_VERSION = 2; // Current version
 struct VoiceStream {
 	~VoiceStream()
 	{
@@ -658,7 +708,7 @@ struct VoiceStream {
 
 		double scaleRate = 1;
 		int count = version;
-		if (version == VOICESTREAM_VERSION_1) // Were doing this to stay compatible with the older version in the 0.7 release.
+		if (version == VOICESTREAM_VERSION_1 || version == VOICESTREAM_VERSION_2) // Were doing this to stay compatible with the older version in the 0.7 release.
 		{
 			int tickRate;
 			g_pFullFileSystem->Read(&tickRate, sizeof(int), fh);
@@ -678,8 +728,22 @@ struct VoiceStream {
 			int tickNumber;
 			g_pFullFileSystem->Read(&tickNumber, sizeof(int), fh);
 
-			int length;
-			g_pFullFileSystem->Read(&length, sizeof(int), fh);
+			uint16_t length;
+			if (version == VOICESTREAM_VERSION_1)
+			{
+				int tempLength;
+				g_pFullFileSystem->Read(&tempLength, sizeof(int), fh);
+				if (tempLength > USHRT_MAX)
+				{
+					Warning(PROJECT_NAME " - voicechat: Tried to load a voice stream that had a too large voice entry! (%i)\n", tempLength);
+					delete pStream;
+					return nullptr;
+				}
+
+				length = (uint16_t)tempLength;
+			} else {
+				g_pFullFileSystem->Read(&length, sizeof(uint16_t), fh);
+			}
 
 			char* data = new char[length];
 			g_pFullFileSystem->Read(data, length, fh);
@@ -1172,19 +1236,12 @@ LUA_FUNCTION_STATIC(VoiceStream__tostring)
 Default__index(VoiceStream);
 Default__newindex(VoiceStream);
 Default__GetTable(VoiceStream);
+Default__IsValid(VoiceStream);
 Default__gc(VoiceStream,
 	VoiceStream* pVoiceData = (VoiceStream*)pStoredData;
 	if (pVoiceData)
 		delete pVoiceData;
 )
-
-LUA_FUNCTION_STATIC(VoiceStream_IsValid)
-{
-	VoiceStream* pStream = Get_VoiceStream(LUA, 1, false);
-
-	LUA->PushBool(pStream != nullptr);
-	return 1;
-}
 
 LUA_FUNCTION_STATIC(VoiceStream_GetData)
 {
@@ -1217,7 +1274,7 @@ LUA_FUNCTION_STATIC(VoiceStream_SetData)
 
 		if (data)
 		{
-			pStream->SetIndex(tick, directData ? data : data->CreateCopy());
+			pStream->SetIndex(tick, (directData && !data->IsTemp()) ? data : data->CreateCopy());
 		}
 
 		LUA->Pop(1);
@@ -1226,12 +1283,16 @@ LUA_FUNCTION_STATIC(VoiceStream_SetData)
 	return 0;
 }
 
-LUA_FUNCTION_STATIC(VoiceStream_GetCount)
+LUA_JIT_WRAPPED_1R(VoiceStream_GetCount,
+	int, iCount, LUA->PushNumber(iCount),
+	LuaUserData*, pUD, Get_VoiceStream_Data(LUA, 1, true)
+)
 {
-	VoiceStream* pStream = Get_VoiceStream(LUA, 1, true);
+	VoiceStream* pData = (VoiceStream*)pUD->GetData();
+	if (!pData)
+		return 0;
 
-	LUA->PushNumber(pStream->GetCount());
-	return 1;
+	return pData->GetCount();
 }
 
 LUA_FUNCTION_STATIC(VoiceStream_GetIndex)
@@ -1241,7 +1302,7 @@ LUA_FUNCTION_STATIC(VoiceStream_GetIndex)
 	bool directValue = LUA->GetBool(3);
 
 	VoiceData* data = pStream->GetIndex(index);
-	Push_VoiceData(LUA, data ? (directValue ? data : data->CreateCopy()) : nullptr);
+	Push_VoiceData(LUA, data ? ((directValue && !data->IsTemp()) ? data : data->CreateCopy()) : nullptr);
 	return 1;
 }
 
@@ -1252,7 +1313,7 @@ LUA_FUNCTION_STATIC(VoiceStream_SetIndex)
 	VoiceData* pData = Get_VoiceData(LUA, 3, true);
 	bool directValue = LUA->GetBool(4);
 
-	pStream->SetIndex(index, directValue ? pData : pData->CreateCopy());
+	pStream->SetIndex(index, (directValue && !pData->IsTemp()) ? pData : pData->CreateCopy());
 	return 0;
 }
 
@@ -1272,7 +1333,7 @@ LUA_FUNCTION_STATIC(VoiceStream_GetNextTick)
 	bool bDirectData = LUA->GetBool(2);
 
 	VoiceData* pData = pStream->GetNextTick();
-	Push_VoiceData(LUA, pData ? (bDirectData ? pData : pData->CreateCopy()) : nullptr);
+	Push_VoiceData(LUA, pData ? ((bDirectData && !pData->IsTemp()) ? pData : pData->CreateCopy()) : nullptr);
 	return 1;
 }
 
@@ -1282,7 +1343,7 @@ LUA_FUNCTION_STATIC(VoiceStream_GetPreviousTick)
 	bool bDirectData = LUA->GetBool(2);
 
 	VoiceData* pData = pStream->GetPreviousTick();
-	Push_VoiceData(LUA, pData ? (bDirectData ? pData : pData->CreateCopy()) : nullptr);
+	Push_VoiceData(LUA, pData ? ((bDirectData && !pData->IsTemp()) ? pData : pData->CreateCopy()) : nullptr);
 	return 1;
 }
 
@@ -1292,7 +1353,7 @@ LUA_FUNCTION_STATIC(VoiceStream_GetCurrentTick)
 	bool bDirectData = LUA->GetBool(2);
 
 	VoiceData* pData = pStream->GetCurrentTick();
-	Push_VoiceData(LUA, pData ? (bDirectData ? pData : pData->CreateCopy()) : nullptr);
+	Push_VoiceData(LUA, pData ? ((bDirectData && !pData->IsTemp()) ? pData : pData->CreateCopy()) : nullptr);
 	return 1;
 }
 
@@ -1444,6 +1505,9 @@ static void CheckTalkingState(int nPlayerSlot, bool bIsTalking)
 
 void CVoiceChatModule::ClientDisconnect(edict_t* pClient)
 {
+	if (pClient->m_EdictIndex > MAX_PLAYERS)
+		return;
+
 	// We gotta prevent the hook from firing when the player already disconnected, so we reset these here
 	g_bIsPlayerTalking[pClient->m_EdictIndex-1] = false;
 	g_bIsPlayerMuted[pClient->m_EdictIndex-1] = false;
@@ -1514,6 +1578,7 @@ static void hook_SV_BroadcastVoiceData(IClient* pClient, int nBytes, char* data,
 		VoiceData* pVoiceData = new VoiceData;
 		pVoiceData->SetData(data, nBytes);
 		pVoiceData->iPlayerSlot = pClient->GetPlayerSlot();
+		pVoiceData->MarkTemp();
 
 		CBaseEntity* pPlayer = (CBaseEntity*)Util::GetPlayerByClient((CBaseClient*)pClient);
 		Util::Push_Entity(g_Lua, pPlayer);
@@ -2086,6 +2151,8 @@ LUA_FUNCTION_STATIC(voicechat_SetPlayerDeaf)
 void CVoiceChatModule::LuaThink(GarrysMod::Lua::ILuaInterface* pLua)
 {
 	LuaVoiceModuleData* pData = GetVoiceChatLuaData(pLua);
+	if (!pData)
+		return;
 
 	for (int i=0; i<gpGlobals->maxClients; ++i)
 		CheckTalkingState(i, false);
@@ -2145,20 +2212,21 @@ void CVoiceChatModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServer
 		Util::AddFunc(pLua, VoiceData__index, "__index");
 		Util::AddFunc(pLua, VoiceData__newindex, "__newindex");
 		Util::AddFunc(pLua, VoiceData__gc, "__gc");
-		Util::AddFunc(pLua, VoiceData_GetTable, "GetTable");
-		Util::AddFunc(pLua, VoiceData_IsValid, "IsValid");
-		Util::AddFunc(pLua, VoiceData_GetData, "GetData");
-		Util::AddFunc(pLua, VoiceData_GetLength, "GetLength");
-		Util::AddFunc(pLua, VoiceData_GetPlayerSlot, "GetPlayerSlot");
-		Util::AddFunc(pLua, VoiceData_SetData, "SetData");
-		Util::AddFunc(pLua, VoiceData_SetLength, "SetLength");
-		Util::AddFunc(pLua, VoiceData_SetPlayerSlot, "SetPlayerSlot");
-		Util::AddFunc(pLua, VoiceData_GetUncompressedData, "GetUncompressedData");
-		Util::AddFunc(pLua, VoiceData_SetUncompressedData, "SetUncompressedData");
+		LUA_REGISTER_JIT(pLua, VoiceData_GetTable, "GetTable");
+		LUA_REGISTER_JIT(pLua, VoiceData_IsValid, "IsValid");
+		LUA_REGISTER_JIT(pLua, VoiceData_GetData, "GetData");
+		LUA_REGISTER_JIT(pLua, VoiceData_GetLength, "GetLength");
+		LUA_REGISTER_JIT(pLua, VoiceData_GetPlayerSlot, "GetPlayerSlot");
+		LUA_REGISTER_JIT(pLua, VoiceData_SetData, "SetData");
+		LUA_REGISTER_OVERLOAD(pLua, VoiceData_SetData_NoLength, "SetData");
+		LUA_REGISTER_JIT(pLua, VoiceData_SetLength, "SetLength");
+		LUA_REGISTER_JIT(pLua, VoiceData_SetPlayerSlot, "SetPlayerSlot");
+		LUA_REGISTER_JIT(pLua, VoiceData_GetUncompressedData, "GetUncompressedData");
+		LUA_REGISTER_JIT(pLua, VoiceData_SetUncompressedData, "SetUncompressedData");
 		Util::AddFunc(pLua, VoiceData_GetProximity, "GetProximity");
 		Util::AddFunc(pLua, VoiceData_SetProximity, "SetProximity");
 		Util::AddFunc(pLua, VoiceData_CreateCopy, "CreateCopy");
-		Util::AddFunc(pLua, VoiceData_Empty, "Empty");
+		LUA_REGISTER_JIT(pLua, VoiceData_Empty, "Empty");
 	pLua->Pop(1);
 
 	Lua::GetLuaData(pLua)->RegisterMetaTable(Lua::VoiceStream, pLua->CreateMetaTable("VoiceStream"));
@@ -2166,11 +2234,11 @@ void CVoiceChatModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServer
 		Util::AddFunc(pLua, VoiceStream__index, "__index");
 		Util::AddFunc(pLua, VoiceStream__newindex, "__newindex");
 		Util::AddFunc(pLua, VoiceStream__gc, "__gc");
-		Util::AddFunc(pLua, VoiceStream_GetTable, "GetTable");
-		Util::AddFunc(pLua, VoiceStream_IsValid, "IsValid");
+		LUA_REGISTER_JIT(pLua, VoiceStream_GetTable, "GetTable");
+		LUA_REGISTER_JIT(pLua, VoiceStream_IsValid, "IsValid");
 		Util::AddFunc(pLua, VoiceStream_GetData, "GetData");
 		Util::AddFunc(pLua, VoiceStream_SetData, "SetData");
-		Util::AddFunc(pLua, VoiceStream_GetCount, "GetCount");
+		LUA_REGISTER_JIT(pLua, VoiceStream_GetCount, "GetCount");
 		Util::AddFunc(pLua, VoiceStream_GetIndex, "GetIndex");
 		Util::AddFunc(pLua, VoiceStream_SetIndex, "SetIndex");
 
@@ -2185,7 +2253,7 @@ void CVoiceChatModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServer
 		Util::AddFunc(pLua, WavAudioFile__index, "__index");
 		Util::AddFunc(pLua, WavAudioFile__newindex, "__newindex");
 		Util::AddFunc(pLua, WavAudioFile__gc, "__gc");
-		Util::AddFunc(pLua, WavAudioFile_GetTable, "GetTable");
+		LUA_REGISTER_JIT(pLua, WavAudioFile_GetTable, "GetTable");
 	pLua->Pop(1);*/
 
 	Util::StartTable(pLua);
@@ -2257,7 +2325,7 @@ void CVoiceChatModule::InitDetour(bool bPreServer)
 		(void*)hook_CVoiceGameMgrHelper_CanPlayerHearPlayer, m_pID
 	);
 }
-	
+
 void CVoiceChatModule::PreLuaModuleLoaded(lua_State* L, const char* pFileName)
 {
 	std::string_view strFileName = pFileName;

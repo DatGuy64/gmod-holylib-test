@@ -22,6 +22,7 @@ extern IEngineTrace* enginetrace;
 #define HOLYLIB_MAX_PLAYERS 128
 
 bool g_HolyPVS_AWHJustEnabled[HOLYLIB_MAX_PLAYERS + 1];
+
 class CPVSModule : public IModule
 {
 public:
@@ -30,14 +31,12 @@ public:
 	void InitDetour(bool bPreServer) override;
 	void Shutdown() override;
 	const char* Name() override { return "pvs"; };
-	int Compatibility() override { return LINUX32; };
+	int Compatibility() override { return LINUX32 | LINUX64 | WINDOWS32; };
 	bool SupportsMultipleLuaStates() override { return true; };
 };
 
 static CPVSModule g_pPVSModule;
 IModule* pPVSModule = &g_pPVSModule;
-
-static int g_PVSModuleID = 0;
 
 static int currentPVSSize = -1;
 static unsigned char* currentPVS = nullptr;
@@ -51,10 +50,10 @@ static unsigned char g_LOSVis[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
 
 void HolyPVS_ResetAWHSlot(int idx)
 {
-    g_HolyPVS_AWHJustEnabled[idx] = false;
 	if (idx < 1 || idx > HOLYLIB_MAX_PLAYERS)
 		return;
 
+	g_HolyPVS_AWHJustEnabled[idx] = false;
 	g_HolyPVS_AWHEnabled[idx] = false;
 	g_HolyPVS_AWHCacheSeconds[idx] = 0.0f;
 
@@ -103,13 +102,18 @@ static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target
 
 bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds)
 {
+	// Fail open: invalid/half-created entities should be considered visible instead
+	// of crashing or hiding players during connect/spawn transitions.
+	if (!gpGlobals || !enginetrace || !viewer || !target)
+		return true;
+
 	if (cacheSeconds <= 0.0f)
 		return VisibleByLOS_NoCache(viewer, target);
 
 	const int vIdx = GetClientIndexFromEntity(viewer);
 	const int tIdx = GetClientIndexFromEntity(target);
 	if (vIdx < 1 || vIdx > HOLYLIB_MAX_PLAYERS || tIdx < 1 || tIdx > HOLYLIB_MAX_PLAYERS)
-		return VisibleByLOS_NoCache(viewer, target);
+		return true;
 
 	const float now = gpGlobals->curtime;
 
@@ -133,14 +137,24 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
 
 static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
 {
-    if (!viewer || !target)
-        return false;
+	// Fail open here too. Returning false would remove the player from transmit,
+	// but invalid pointers during player join are not evidence of no visibility.
+	if (!gpGlobals || !enginetrace || !viewer || !target)
+		return true;
 
-    Vector viewerEye = viewer->EyePosition();
+	edict_t* viewerEdict = viewer->edict();
+	edict_t* targetEdict = target->edict();
+	if (!viewerEdict || !targetEdict)
+		return true;
 
-    auto* col = target->CollisionProp();
-    if (!col)
-        return false;
+	if (!viewer->IsPlayer() || !target->IsPlayer())
+		return true;
+
+	Vector viewerEye = viewer->EyePosition();
+
+	auto* col = target->CollisionProp();
+	if (!col)
+		return true;
 
     const Vector mins = col->OBBMins();
     const Vector maxs = col->OBBMaxs();
@@ -171,7 +185,6 @@ static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target
     return false;
 }
 
-
 #ifndef HOLYLIB_MANUALNETWORKING
 static Detouring::Hook detour_CGMOD_Player_SetupVisibility;
 static void hook_CGMOD_Player_SetupVisibility(void* ent, unsigned char* pvs, int pvssize)
@@ -189,6 +202,8 @@ static void hook_CGMOD_Player_SetupVisibility(void* ent, unsigned char* pvs, int
 static bool bWasAddedEntityUsed = false;
 static CBitVec<MAX_EDICTS> g_pAddEntityToPVS;
 static bool bWasOverrideStateFlagsUsed = false;
+
+static CBitVec<MAX_EDICTS> g_pOverrideSet;
 static int g_pOverrideStateFlag[MAX_EDICTS];
 static int pOriginalFlags[MAX_EDICTS];
 
@@ -199,51 +214,11 @@ static bool g_bBlockAdditionToTransmit = false;
 static bool g_bEnableLuaPreTransmitHook = false;
 static bool g_bEnableLuaPostTransmitHook = false;
 
-class LuaPVSModuleData : public Lua::ModuleData
-{
-public:
-	Util::VisData* pVis = nullptr;
-};
-
-static inline LuaPVSModuleData* GetPVSData(GarrysMod::Lua::ILuaInterface* L)
-{
-	auto* luaData = Lua::GetLuaData(L);
-	return (LuaPVSModuleData*)luaData->GetModuleData(g_PVSModuleID);
-}
-
-static inline Util::VisData* GetLuaVis(GarrysMod::Lua::ILuaInterface* L)
-{
-	auto* md = GetPVSData(L);
-	return md ? md->pVis : nullptr;
-}
-
-static inline void ClearLuaVis(GarrysMod::Lua::ILuaInterface* L)
-{
-	auto* md = GetPVSData(L);
-	if (!md)
-		return;
-	if (md->pVis)
-	{
-		delete md->pVis;
-		md->pVis = nullptr;
-	}
-}
-
-static inline void SetLuaVis(GarrysMod::Lua::ILuaInterface* L, Util::VisData* data)
-{
-	auto* md = GetPVSData(L);
-	if (!md)
-		return;
-	if (md->pVis)
-		delete md->pVis;
-	md->pVis = data;
-}
-
-
 static Detouring::Hook detour_CServerGameEnts_CheckTransmit;
 #ifndef HOLYLIB_MANUALNETWORKING
 extern bool g_pReplaceCServerGameEnts_CheckTransmit;
 extern bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts);
+extern void Networking_ApplyAntiWallhack(CCheckTransmitInfo* pInfo);
 static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)
 {
 	VPROF_BUDGET("HolyLib - CServerGameEnts::CheckTransmit", VPROF_BUDGETGROUP_OTHER_NETWORKING);
@@ -263,8 +238,7 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 			{
 				if (bWasOverrideStateFlagsUsed)
 				{
-					memset(pOriginalFlags, 0, sizeof(pOriginalFlags));
-					memset(g_pOverrideStateFlag, 0, sizeof(g_pOverrideStateFlag));
+					g_pOverrideSet.ClearAll();
 					bWasOverrideStateFlagsUsed = false;
 				}
 
@@ -287,14 +261,8 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 	{
 		for (int i=0; i<g_pAddEntityToPVS.GetNumBits(); ++i)
 		{
-			if (!g_pAddEntityToPVS.IsBitSet(i))
-				continue;
-
-			CBaseEntity* pEnt = Util::servergameents->EdictToBaseEntity(&pWorld[i]);
-			if (!pEnt)
-				continue;
-
-			pEnt->SetTransmit(pInfo, true);
+			if (g_pAddEntityToPVS.IsBitSet(i))
+				Util::servergameents->EdictToBaseEntity(&pWorld[i])->SetTransmit(pInfo, true);
 		}
 	}
 
@@ -303,9 +271,14 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 		for (int i=0; i<MAX_EDICTS; ++i)
 		{
 			edict_t* pEdict = &pWorld[i];
+			if (!g_pOverrideSet.IsBitSet(i))
+				continue;
+
+			int nFlags = g_pOverrideStateFlag[i] & (FL_EDICT_DONTSEND|FL_EDICT_ALWAYS|FL_EDICT_PVSCHECK|FL_EDICT_FULLCHECK);
+
 			pOriginalFlags[i] = pEdict->m_fStateFlags;
 			if (g_pPVSModule.InDebug())
-				Msg("Overriding ent(%i) flags for snapshot (%i -> %i)\n", pEdict->m_EdictIndex, pEdict->m_fStateFlags, g_pOverrideStateFlag[i]);
+				Msg("Overriding ent(%i) flags for snapshot (%i -> %i | %s)\n", pEdict->m_EdictIndex, pEdict->m_fStateFlags, g_pOverrideStateFlag[i], (nFlags & FL_EDICT_DONTSEND) != 0 ? "true" : "false");
 		
 			pEdict->m_fStateFlags = g_pOverrideStateFlag[i];
 		}
@@ -314,14 +287,19 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 #if MODULE_EXISTS_NETWORKING
 	if (g_pReplaceCServerGameEnts_CheckTransmit)
 	{
-		if (!New_CServerGameEnts_CheckTransmit(gameents, pInfo, pEdictIndices, nEdicts))
+		const bool bNetworkingHandledTransmit = New_CServerGameEnts_CheckTransmit(gameents, pInfo, pEdictIndices, nEdicts);
+		if (!bNetworkingHandledTransmit)
 		{
 			detour_CServerGameEnts_CheckTransmit.GetTrampoline<Symbols::CServerGameEnts_CheckTransmit>()(gameents, pInfo, pEdictIndices, nEdicts);
+			Networking_ApplyAntiWallhack(pInfo);
 		}
 	} else
 #endif
 	{
 		detour_CServerGameEnts_CheckTransmit.GetTrampoline<Symbols::CServerGameEnts_CheckTransmit>()(gameents, pInfo, pEdictIndices, nEdicts);
+#if MODULE_EXISTS_NETWORKING
+		Networking_ApplyAntiWallhack(pInfo);
+#endif
 	}
 
 	if(g_bEnableLuaPostTransmitHook && Lua::PushHook("HolyLib:PostCheckTransmit"))
@@ -336,11 +314,14 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 	{
 		for (int i=0; i<MAX_EDICTS; ++i)
 		{
-			(&pWorld[i])->m_fStateFlags = pOriginalFlags[i];
+			edict_t* pEdict = &pWorld[i];
+			if (!g_pOverrideSet.IsBitSet(i))
+				continue;
+
+			pEdict->m_fStateFlags = pOriginalFlags[i];
 		}
 
-		memset(pOriginalFlags, 0, sizeof(pOriginalFlags));
-		memset(g_pOverrideStateFlag, 0, sizeof(g_pOverrideStateFlag));
+		g_pOverrideSet.ClearAll();
 		bWasOverrideStateFlagsUsed = false;
 	}
 
@@ -387,8 +368,7 @@ void PreCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned 
 			{
 				if (bWasOverrideStateFlagsUsed)
 				{
-					memset(pOriginalFlags, 0, sizeof(pOriginalFlags));
-					memset(g_pOverrideStateFlag, 0, sizeof(g_pOverrideStateFlag));
+					g_pOverrideSet.ClearAll();
 					bWasOverrideStateFlagsUsed = false;
 				}
 
@@ -411,14 +391,8 @@ void PreCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned 
 	{
 		for (int i=0; i<g_pAddEntityToPVS.GetNumBits(); ++i)
 		{
-			if (!g_pAddEntityToPVS.IsBitSet(i))
-				continue;
-
-			CBaseEntity* pEnt = Util::servergameents->EdictToBaseEntity(&pWorld[i]);
-			if (!pEnt)
-				continue;
-
-			pEnt->SetTransmit(pInfo, true);
+			if (g_pAddEntityToPVS.IsBitSet(i))
+				Util::servergameents->EdictToBaseEntity(&pWorld[i])->SetTransmit(pInfo, true);
 		}
 	}
 
@@ -427,6 +401,9 @@ void PreCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned 
 		for (int i=0; i<MAX_EDICTS; ++i)
 		{
 			edict_t* pEdict = &pWorld[i];
+			if (!g_pOverrideSet.IsBitSet(i))
+				continue;
+
 			pOriginalFlags[i] = pEdict->m_fStateFlags;
 			if (g_pPVSModule.InDebug())
 				Msg("Overriding ent(%i) flags for snapshot (%i -> %i)\n", pEdict->m_EdictIndex, pEdict->m_fStateFlags, g_pOverrideStateFlag[i]);
@@ -461,11 +438,14 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 		edict_t* pWorld = Util::engineserver->PEntityOfEntIndex(0);
 		for (int i=0; i<MAX_EDICTS; ++i)
 		{
-			(&pWorld[i])->m_fStateFlags = pOriginalFlags[i];
+			edict_t* pEdict = &pWorld[i];
+			if (!g_pOverrideSet.IsBitSet(i))
+				continue;
+
+			pEdict->m_fStateFlags = pOriginalFlags[i];
 		}
 
-		memset(pOriginalFlags, 0, sizeof(pOriginalFlags));
-		memset(g_pOverrideStateFlag, 0, sizeof(g_pOverrideStateFlag));
+		g_pOverrideSet.ClearAll();
 		bWasOverrideStateFlagsUsed = false;
 	}
 
@@ -505,6 +485,7 @@ LUA_FUNCTION_STATIC(pvs_SetAntiWallhack)
 
 	g_HolyPVS_AWHEnabled[idx] = bEnable;
 	g_HolyPVS_AWHCacheSeconds[idx] = cacheSeconds;
+	g_HolyPVS_AWHJustEnabled[idx] = bEnable;
 
 	if (!bEnable)
 	{
@@ -663,8 +644,6 @@ LUA_FUNCTION_STATIC(pvs_AWHWhitelistClear)
 	return 0;
 }
 
-
-
 LUA_FUNCTION_STATIC(pvs_ResetPVS)
 {
 	if (!currentPVS)
@@ -753,6 +732,9 @@ LUA_FUNCTION_STATIC(pvs_CheckBoxInPVS)
 	Vector* vec1 = Get_Vector(LUA, 1);
 	Vector* vec2 = Get_Vector(LUA, 2);
 
+	if (!currentPVS)
+		LUA->ThrowError("pvs: tried to call pvs.GetPVSForCluster with no active PVS!");
+
 	LUA->PushBool(engine->CheckBoxInPVS(*vec1, *vec2, currentPVS, currentPVSSize));
 	return 1;
 }
@@ -795,16 +777,12 @@ LUA_FUNCTION_STATIC(pvs_AddEntityToPVS)
 	return 0;
 }
 
-#define LUA_FL_EDICT_DONTSEND 1 << 0
-#define LUA_FL_EDICT_ALWAYS 1 << 1
-#define LUA_FL_EDICT_PVSCHECK 1 << 2
-#define LUA_FL_EDICT_FULLCHECK 1 << 3
-static void SetOverrideStateFlags(GarrysMod::Lua::ILuaInterface* pLua, CBaseEntity* ent, int flags, bool force)
+constexpr int LUA_FL_EDICT_DONTSEND = 1 << 0;
+constexpr int LUA_FL_EDICT_ALWAYS = 1 << 1; 
+constexpr int LUA_FL_EDICT_PVSCHECK = 1 << 2;
+constexpr int LUA_FL_EDICT_FULLCHECK = 1 << 3;
+static void SetOverrideStateFlagsEdict(edict_t* edict, int flags, bool force)
 {
-	edict_t* edict = ent->edict();
-	if (!edict)
-		pLua->ThrowError("Failed to get edict?");
-
 	int newFlags = flags;
 	if (!force)
 	{
@@ -812,7 +790,6 @@ static void SetOverrideStateFlags(GarrysMod::Lua::ILuaInterface* pLua, CBaseEnti
 		newFlags = newFlags & ~FL_EDICT_DONTSEND;
 		newFlags = newFlags & ~FL_EDICT_ALWAYS;
 		newFlags = newFlags & ~FL_EDICT_PVSCHECK;
-		newFlags = newFlags & ~FL_EDICT_FULLCHECK;
 
 		if (flags & LUA_FL_EDICT_DONTSEND)
 			newFlags |= FL_EDICT_DONTSEND;
@@ -824,11 +801,21 @@ static void SetOverrideStateFlags(GarrysMod::Lua::ILuaInterface* pLua, CBaseEnti
 			newFlags |= FL_EDICT_PVSCHECK;
 
 		if (flags & LUA_FL_EDICT_FULLCHECK)
-			newFlags |= FL_EDICT_FULLCHECK;
+			newFlags = FL_EDICT_FULLCHECK;
 	}
 
 	g_pOverrideStateFlag[edict->m_EdictIndex] = newFlags;
+	g_pOverrideSet.Set(edict->m_EdictIndex);
 	bWasOverrideStateFlagsUsed = true;
+}
+
+static void SetOverrideStateFlags(GarrysMod::Lua::ILuaInterface* pLua, CBaseEntity* ent, int flags, bool force)
+{
+	edict_t* edict = ent->edict();
+	if (!edict)
+		pLua->ThrowError("Failed to get edict?");
+
+	SetOverrideStateFlagsEdict(edict, flags, force);
 }
 
 LUA_FUNCTION_STATIC(pvs_OverrideStateFlags)
@@ -887,7 +874,7 @@ static void SetStateFlags(GarrysMod::Lua::ILuaInterface* pLua, CBaseEntity* ent,
 			newFlags |= FL_EDICT_PVSCHECK;
 
 		if (flags & LUA_FL_EDICT_FULLCHECK)
-			newFlags |= FL_EDICT_FULLCHECK;
+			newFlags = FL_EDICT_FULLCHECK;
 	}
 
 	edict->m_fStateFlags = newFlags;
@@ -924,16 +911,13 @@ LUA_FUNCTION_STATIC(pvs_SetStateFlags)
 	return 0;
 }
 
-static int GetStateFlags(GarrysMod::Lua::ILuaInterface* pLua, CBaseEntity* ent, bool force)
+static int GetStateFlagsEdict(edict_t* edict, bool force)
 {
-	edict_t* edict = ent->edict();
-	if (!edict)
-		pLua->ThrowError("Failed to get edict?");
-
 	int flags = edict->m_fStateFlags;
 	int newFlags = flags;
 	if (!force)
 	{
+		flags = flags & (FL_EDICT_DONTSEND|FL_EDICT_ALWAYS|FL_EDICT_PVSCHECK|FL_EDICT_FULLCHECK);
 		newFlags = 0;
 		if (flags & FL_EDICT_DONTSEND)
 			newFlags |= LUA_FL_EDICT_DONTSEND;
@@ -944,11 +928,20 @@ static int GetStateFlags(GarrysMod::Lua::ILuaInterface* pLua, CBaseEntity* ent, 
 		if (flags & FL_EDICT_PVSCHECK)
 			newFlags |= LUA_FL_EDICT_PVSCHECK;
 
-		if (flags & FL_EDICT_FULLCHECK)
-			newFlags |= LUA_FL_EDICT_FULLCHECK;
+		if (flags == FL_EDICT_FULLCHECK)
+			newFlags = LUA_FL_EDICT_FULLCHECK;
 	}
 
 	return newFlags;
+}
+
+static int GetStateFlags(GarrysMod::Lua::ILuaInterface* pLua, CBaseEntity* ent, bool force)
+{
+	edict_t* edict = ent->edict();
+	if (!edict)
+		pLua->ThrowError("Failed to get edict?");
+
+	return GetStateFlagsEdict(edict, force);
 }
 
 LUA_FUNCTION_STATIC(pvs_GetStateFlags)
@@ -1156,7 +1149,7 @@ LUA_FUNCTION_STATIC(pvs_SetPreventTransmitBulk)
 	return 0;
 }
 
-LUA_FUNCTION_STATIC(pvs_FindInPVS)
+LUA_FUNCTION_STATIC(pvs_FindInPVS) // Copy from pas.FindInPAS
 {
 	VPROF_BUDGET("pvs.FindInPVS", VPROF_BUDGETGROUP_HOLYLIB);
 
@@ -1169,9 +1162,9 @@ LUA_FUNCTION_STATIC(pvs_FindInPVS)
 		orig = (Vector*)&ent->GetAbsOrigin();
 	}
 
-	Util::VisData* pVisCluster = Util::CM_Vis(*orig, DVIS_PVS);
+	std::unique_ptr<Util::VisData> pVisCluster(Util::CM_Vis(*orig, DVIS_PVS));
 
-	LUA->PreCreateTable(MAX_EDICTS / 16, 0);
+	LUA->PreCreateTable(MAX_EDICTS / 16, 0); // Should we reduce this later? (Currently: 512)
 	int idx = 0;
 #if MODULE_EXISTS_ENTITYLIST
 	if (Util::pEntityList->IsEnabled())
@@ -1185,7 +1178,7 @@ LUA_FUNCTION_STATIC(pvs_FindInPVS)
 				Util::RawSetI(LUA, -2, ++idx);
 			}
 		}
-		delete pVisCluster;
+
 		return 1;
 	}
 #endif
@@ -1202,7 +1195,6 @@ LUA_FUNCTION_STATIC(pvs_FindInPVS)
 		pEnt = Util::NextEnt(pEnt);
 	}
 
-	delete pVisCluster;
 	return 1;
 }
 
@@ -1222,12 +1214,11 @@ LUA_FUNCTION_STATIC(pvs_TestPVS)
 		orig = (Vector*)&ent->GetAbsOrigin();
 	}
 
-	Util::VisData* pVisCluster = Util::CM_Vis(*orig, DVIS_PVS);
+	std::unique_ptr<Util::VisData> pVisCluster(Util::CM_Vis(*orig, DVIS_PVS));
 
-	LUA->CheckType(2, GarrysMod::Lua::Type::Vector);
 	if (LUA->IsType(2, GarrysMod::Lua::Type::Vector))
 	{
-		LUA->PushBool(TestPVS(pVisCluster, *Get_Vector(LUA, 2)));
+		LUA->PushBool(TestPVS(pVisCluster.get(), *Get_Vector(LUA, 2)));
 #if MODULE_EXISTS_ENTITYLIST
 	} else if (Is_EntityList(LUA, 2)) {
 		EntityList* entList = Get_EntityList(LUA, 2, true);
@@ -1235,7 +1226,7 @@ LUA_FUNCTION_STATIC(pvs_TestPVS)
 		for (auto& [pEnt, iReference] : entList->GetReferences())
 		{
 			entList->PushReference(pEnt, iReference);
-			LUA->PushBool(TestPVS(pVisCluster, pEnt->GetAbsOrigin()));
+			LUA->PushBool(TestPVS(pVisCluster.get(), pEnt->GetAbsOrigin()));
 			LUA->RawSet(-3);
 		}
 #endif
@@ -1243,10 +1234,9 @@ LUA_FUNCTION_STATIC(pvs_TestPVS)
 		LUA->CheckType(2, GarrysMod::Lua::Type::Entity);
 		CBaseEntity* ent = Util::Get_Entity(LUA, 2, false);
 
-		LUA->PushBool(TestPVS(pVisCluster, ent->GetAbsOrigin()));
+		LUA->PushBool(TestPVS(pVisCluster.get(), ent->GetAbsOrigin()));
 	}
 
-	delete pVisCluster;
 	return 1;
 }
 
@@ -1281,237 +1271,13 @@ LUA_FUNCTION_STATIC(pvs_GetEntitiesFromTransmit)
 	return 1;
 }
 
-
-LUA_FUNCTION_STATIC(pvs_GetPlayersFromTransmit)
-{
-	if (!g_pCurrentTransmitInfo)
-		LUA->ThrowError("Tried to use pvs.GetPlayersFromTransmit while not in a CheckTransmit call!");
-
-	LUA->PreCreateTable(gpGlobals->maxClients, 0);
-	int idx = 0;
-	edict_t* pBaseEdict = Util::engineserver->PEntityOfEntIndex(0);
-
-	for (int i = 0; i < g_nCurrentEdicts; ++i)
-	{
-		int iEdict = g_pCurrentEdictIndices[i];
-		if (iEdict < 1 || iEdict > gpGlobals->maxClients)
-			continue;
-
-		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(iEdict))
-			continue;
-
-		edict_t* pEdict = &pBaseEdict[iEdict];
-		CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(pEdict);
-		if (!ent)
-			continue;
-		if (!ent->IsPlayer())
-			continue;
-
-		Util::Push_Entity(LUA, ent);
-		Util::RawSetI(LUA, -2, ++idx);
-	}
-
-	return 1;
-}
-
-static inline CBasePlayer* ResolveOwningPlayer(CBaseEntity* ent)
-{
-	if (!ent)
-		return nullptr;
-	if (ent->IsPlayer())
-		return (CBasePlayer*)ent;
-
-	CBaseEntity* cur = ent;
-	for (int i = 0; i < 8 && cur; ++i)
-	{
-		CBaseEntity* owner = cur->GetOwnerEntity();
-		if (owner && owner->IsPlayer())
-			return (CBasePlayer*)owner;
-		CBaseEntity* parent = cur->GetMoveParent();
-		if (parent && parent->IsPlayer())
-			return (CBasePlayer*)parent;
-		cur = parent;
-	}
-
-	return nullptr;
-}
-
-LUA_FUNCTION_STATIC(pvs_GetPlayersOwnedEntities)
-{
-	if (!g_pCurrentTransmitInfo)
-		LUA->ThrowError("Tried to use pvs.GetPlayersOwnedEntities while not in a CheckTransmit call!");
-
-	LUA->PreCreateTable(gpGlobals->maxClients, 0);
-	LUA->CreateTable();
-
-	int ownerNext[HOLYLIB_MAX_PLAYERS + 1];
-	bool ownerSeen[HOLYLIB_MAX_PLAYERS + 1];
-	memset(ownerNext, 0, sizeof(ownerNext));
-	memset(ownerSeen, 0, sizeof(ownerSeen));
-
-	int playersIdx = 0;
-	edict_t* pBaseEdict = Util::engineserver->PEntityOfEntIndex(0);
-
-	for (int i = 0; i < g_nCurrentEdicts; ++i)
-	{
-		int iEdict = g_pCurrentEdictIndices[i];
-		if (iEdict < 1 || iEdict > MAX_EDICTS)
-			continue;
-		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(iEdict))
-			continue;
-
-		edict_t* pEdict = &pBaseEdict[iEdict];
-		CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(pEdict);
-		if (!ent)
-			continue;
-
-		CBasePlayer* owner = ResolveOwningPlayer(ent);
-		if (!owner || !owner->edict())
-			continue;
-
-		int ownerIdx = owner->edict()->m_EdictIndex;
-		if (ownerIdx < 1 || ownerIdx > gpGlobals->maxClients || ownerIdx > HOLYLIB_MAX_PLAYERS)
-			continue;
-
-		if (!ownerSeen[ownerIdx])
-		{
-			ownerSeen[ownerIdx] = true;
-			Util::Push_Entity(LUA, owner);
-			Util::RawSetI(LUA, -3, ++playersIdx);
-
-			Util::Push_Entity(LUA, owner);
-			LUA->CreateTable();
-			LUA->SetTable(-3);
-
-			Util::Push_Entity(LUA, owner);
-			LUA->GetTable(-2);
-			Util::Push_Entity(LUA, owner);
-			Util::RawSetI(LUA, -2, ++ownerNext[ownerIdx]);
-			LUA->Pop(1);
-		}
-
-		Util::Push_Entity(LUA, owner);
-		LUA->GetTable(-2);
-		Util::Push_Entity(LUA, ent);
-		Util::RawSetI(LUA, -2, ++ownerNext[ownerIdx]);
-		LUA->Pop(1);
-	}
-
-	return 2;
-}
-
-static inline bool StartsWith(const char* s, const char* p)
-{
-	if (!s || !p)
-		return false;
-	for (; *p; ++p, ++s)
-		if (*s != *p)
-			return false;
-	return true;
-}
-
-static DTVarByOffset g_m_hActiveWeapon_Offset("DT_BaseCombatCharacter", "m_hActiveWeapon");
-
-static inline CBaseEntity* GetActiveWeaponEntity(const void* pPlayer)
-{
-	if (!pPlayer)
-		return nullptr;
-	CBaseHandle* h = (CBaseHandle*)g_m_hActiveWeapon_Offset.GetPointer(pPlayer);
-	if (!h)
-		return nullptr;
-	int idx = h->GetEntryIndex();
-	if (idx <= 0 || idx >= MAX_EDICTS)
-		return nullptr;
-	edict_t* ed = Util::engineserver->PEntityOfEntIndex(idx);
-	if (!ed)
-		return nullptr;
-	return Util::servergameents->EdictToBaseEntity(ed);
-}
-
-static inline bool IsFilteredOwnedEntity(CBaseEntity* ent)
-{
-	if (!ent)
-		return true;
-	const char* cls = ent->GetClassname();
-	if (!cls)
-		return true;
-	if (StartsWith(cls, "predicted_viewmodel"))
-		return true;
-	if (StartsWith(cls, "manipulate_"))
-		return true;
-	if (!strcmp(cls, "gmod_hands"))
-		return true;
-	return false;
-}
-
-LUA_FUNCTION_STATIC(pvs_GetOwnedEntitiesFromTransmit)
-{
-	CBasePlayer* target = Util::Get_Player(LUA, 1, true);
-	if (!target)
-		LUA->ThrowError("pvs.GetOwnedEntitiesFromTransmit: invalid player");
-	if (!g_pCurrentTransmitInfo)
-		LUA->ThrowError("Tried to use pvs.GetOwnedEntitiesFromTransmit while not in a CheckTransmit call!");
-
-	LUA->CreateTable();
-	int out = 0;
-
-	CBaseEntity* activeWep = GetActiveWeaponEntity(target);
-	if (activeWep && activeWep->edict())
-	{
-		int wepEdict = activeWep->edict()->m_EdictIndex;
-		if (wepEdict > 0 && wepEdict < MAX_EDICTS && g_pCurrentTransmitInfo->m_pTransmitEdict->Get(wepEdict))
-		{
-			Util::Push_Entity(LUA, activeWep);
-			Util::RawSetI(LUA, -2, ++out);
-		}
-	}
-
-	edict_t* pBaseEdict = Util::engineserver->PEntityOfEntIndex(0);
-	for (int i = 0; i < g_nCurrentEdicts; ++i)
-	{
-		int iEdict = g_pCurrentEdictIndices[i];
-		if (iEdict < 1 || iEdict >= MAX_EDICTS)
-			continue;
-		if (!g_pCurrentTransmitInfo->m_pTransmitEdict->Get(iEdict))
-			continue;
-
-		edict_t* pEdict = &pBaseEdict[iEdict];
-		CBaseEntity* ent = Util::servergameents->EdictToBaseEntity(pEdict);
-		if (!ent || ent == target)
-			continue;
-		if (IsFilteredOwnedEntity(ent))
-			continue;
-
-		CBasePlayer* owner = ResolveOwningPlayer(ent);
-		if (owner != target)
-			continue;
-
-		const char* cls = ent->GetClassname();
-		if (cls && !strcmp(cls, "cw_gear"))
-		{
-			Util::Push_Entity(LUA, ent);
-			Util::RawSetI(LUA, -2, ++out);
-		}
-	}
-
-	return 1;
-}
-
-LUA_FUNCTION_STATIC(pvs_VisibleByLOS)
-{
-	CBaseEntity* viewer = Util::Get_Entity(LUA, 1, true);
-	CBaseEntity* target = Util::Get_Entity(LUA, 2, true);
-	float cacheSeconds = 0.0f;
-	if (LUA->IsType(3, GarrysMod::Lua::Type::Number))
-		cacheSeconds = (float)LUA->GetNumber(3);
-	LUA->PushBool(HolyPVS_VisibleByLOS(viewer, target, cacheSeconds));
-	return 1;
-}
-
 LUA_FUNCTION_STATIC(pvs_ForceWeaponTransmit)
 {
 	CBaseEntity* pWeapon = Util::Get_Entity(LUA, 1, true);
 	bool bForceTransmit = LUA->GetBool(2);
+
+	// If it isn't a weapon - we don't care.
+	// Why? Because then it simply has no effect!
 
 #if MODULE_EXISTS_NETWORKING
 	extern void Networking_ForceWeaponTransmit(int entIndex, bool bForceTransmit);
@@ -1522,6 +1288,77 @@ LUA_FUNCTION_STATIC(pvs_ForceWeaponTransmit)
 	return 0;
 }
 
+LUA_FUNCTION_STATIC(pvs_PreventTransmitAllExcept)
+{
+	if (!g_pCurrentTransmitInfo)
+		LUA->ThrowError("Tried to use pvs.RemoveEntityFromTransmit while not in a CheckTransmit call!");
+
+	int ignoreFlags = LUA->CheckNumberOpt(2, 0);
+	CBitVec<MAX_EDICTS> pEntities;
+	if (LUA->IsType(1, GarrysMod::Lua::Type::Table))
+	{
+		LUA->Push(1);
+		LUA->PushNil();
+		while (LUA->Next(-2))
+		{
+			edict_t* pEdict = Util::Get_Entity(LUA, -1, true)->edict();
+			if (pEdict)
+				pEntities.Set(pEdict->m_EdictIndex);
+
+			LUA->Pop(1);
+		}
+		LUA->Pop(1);
+#if MODULE_EXISTS_ENTITYLIST
+	} else if (Is_EntityList(LUA, 1)) {
+		EntityList* entList = Get_EntityList(LUA, 1, true);
+		for (CBaseEntity* ent : entList->GetEntities())
+		{
+			edict_t* pEdict = ent->edict();
+			if (pEdict)
+				pEntities.Set(pEdict->m_EdictIndex);
+		}
+#endif
+	} else {
+		edict_t* pEdict = Util::Get_Entity(LUA, 1, true)->edict();
+		if (pEdict)
+			pEntities.Set(pEdict->m_EdictIndex);
+	}
+
+	int idx = 0;
+	edict_t *pBaseEdict = Util::engineserver->PEntityOfEntIndex(0);
+	for (int i=0; i<g_nCurrentEdicts; ++i)
+	{
+		int iEdict = g_pCurrentEdictIndices[i];
+		edict_t *pEdict = &pBaseEdict[iEdict];
+
+		if (pEntities.IsBitSet(iEdict))
+			continue;
+
+		int flags = GetStateFlagsEdict(pEdict, false);
+		if (flags & ignoreFlags)
+			continue;
+
+		SetOverrideStateFlagsEdict(pEdict, LUA_FL_EDICT_DONTSEND, false);
+	}
+
+	return 0;
+}
+
+#if MODULE_EXISTS_NETWORKING
+extern void Networking_SetNextTransmitRange(vec_t nRange);
+#endif
+LUA_FUNCTION_STATIC(pvs_SetMaxViewDistance)
+{
+	if ((!currentPVS && !g_pCurrentTransmitInfo) || g_bBlockAdditionToTransmit)
+		LUA->ThrowError("Tried to use pvs.SetMaxViewDistance outside of HolyLib:PreCheckTransmit or GM:SetupPlayerVisibility");
+
+#if MODULE_EXISTS_NETWORKING
+	Networking_SetNextTransmitRange(LUA->CheckNumber(1));
+#else
+	MISSING_MODULE_ERROR(LUA, networking);
+#endif
+	return 0;
+}
 
 LUA_FUNCTION_STATIC(pvs_EnablePreTransmitHook)
 {
@@ -1540,25 +1377,16 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 	if (bServerInit)
 		return;
 
-	g_PVSModuleID = m_pID;
-	{
-		auto* luaData = Lua::GetLuaData(pLua);
-		if (luaData && !luaData->GetModuleData(g_PVSModuleID))
-			luaData->SetModuleData(g_PVSModuleID, new LuaPVSModuleData);
-	}
-
 	if (pLua == g_Lua)
 	{
+		// Resetting it on changelevel & such
 		g_bEnableLuaPreTransmitHook = false;
 		g_bEnableLuaPostTransmitHook = false;
-	
-		ClearLuaVis(pLua);
 	}
 
 	mapPVSSize = ceil(Util::engineserver->GetClusterCount() / 8.0f);
 
 	Util::StartTable(pLua);
-		Util::AddFunc(pLua, pvs_SetAntiWallhack, "SetAntiWallhack");
 		Util::AddFunc(pLua, pvs_ResetPVS, "ResetPVS");
 		Util::AddFunc(pLua, pvs_CheckOriginInPVS, "CheckOriginInPVS");
 		Util::AddFunc(pLua, pvs_AddOriginToPVS, "AddOriginToPVS");
@@ -1577,16 +1405,16 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 		Util::AddFunc(pLua, pvs_TestPVS, "TestPVS");
 		Util::AddFunc(pLua, pvs_ForceFullUpdate, "ForceFullUpdate");
 		Util::AddFunc(pLua, pvs_GetEntitiesFromTransmit, "GetEntitiesFromTransmit");
-		Util::AddFunc(pLua, pvs_GetPlayersFromTransmit, "GetPlayersFromTransmit");
-		Util::AddFunc(pLua, pvs_GetPlayersOwnedEntities, "GetPlayersOwnedEntities");
-		Util::AddFunc(pLua, pvs_GetOwnedEntitiesFromTransmit, "GetOwnedEntitiesFromTransmit");
-		Util::AddFunc(pLua, pvs_VisibleByLOS, "VisibleByLOS");
 		Util::AddFunc(pLua, pvs_ForceWeaponTransmit, "ForceWeaponTransmit");
+		Util::AddFunc(pLua, pvs_PreventTransmitAllExcept, "PreventTransmitAllExcept");
+		Util::AddFunc(pLua, pvs_SetMaxViewDistance, "SetMaxViewDistance");
 
+		// Use the functions below only inside the HolyLib:[Pre/Post]CheckTransmit hook.  
 		Util::AddFunc(pLua, pvs_RemoveEntityFromTransmit, "RemoveEntityFromTransmit");
 		Util::AddFunc(pLua, pvs_RemoveAllEntityFromTransmit, "RemoveAllEntityFromTransmit");
 		Util::AddFunc(pLua, pvs_AddEntityToTransmit, "AddEntityToTransmit");
 
+		Util::AddFunc(pLua, pvs_SetAntiWallhack, "SetAntiWallhack");
 		Util::AddFunc(pLua, pvs_AWHWhitelistAdd, "AWHWhitelistAdd");
 		Util::AddFunc(pLua, pvs_AWHWhitelistRemove, "AWHWhitelistRemove");
 		Util::AddFunc(pLua, pvs_AWHWhitelistClear, "AWHWhitelistClear");
@@ -1604,7 +1432,6 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 
 void CPVSModule::LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua)
 {
-	ClearLuaVis(pLua);
 	Util::NukeTable(pLua, "pvs");
 }
 
@@ -1635,22 +1462,19 @@ void CPVSModule::InitDetour(bool bPreServer)
 	);
 
 #if MODULE_EXISTS_NETWORKING
-	IModuleWrapper* pNetworking = g_pModuleManager.GetModuleByID(HOLYLIB_MODULEID_PVS);
-	if (pNetworking && !pNetworking->IsEnabled())
+	IModuleWrapper* pNetworking = g_pModuleManager.GetModuleByID(HOLYLIB_MODULEID_NETWORKING);
+	if (pNetworking && pNetworking->IsEnabled())
 		Networking_SwitchToPVSTransmit();
 #endif
 
 	Detour::Create(
-		&detour_CServerGameEnts_CheckTransmit, "CServerGameEnts::CheckTransmit",
+		&detour_CServerGameEnts_CheckTransmit, "CServerGameEnts::CheckTransmit(PVS)",
 		server_loader.GetModule(), Symbols::CServerGameEnts_CheckTransmitSym,
 		(void*)DETOUR_THISCALL(hook_CServerGameEnts_CheckTransmit, CheckTransmit), m_pID
 	);
 #endif
 }
 
-#if MODULE_EXISTS_NETWORKING
-extern void Networking_SwitchToOURTransmit();
-#endif
 void CPVSModule::Shutdown()
 {
 #if MODULE_EXISTS_NETWORKING

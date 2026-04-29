@@ -16,7 +16,6 @@
 struct edict_t;
 #include "playerinfomanager.h"
 
-#define DEDICATED
 #include "vstdlib/jobthread.h"
 #include <eiface.h>
 #include <icommandline.h>
@@ -89,6 +88,25 @@ bool CServerPlugin::Load(CreateInterfaceFn interfaceFactory, CreateInterfaceFn g
 	VPROF_BUDGET("HolyLib - CServerPlugin::Load", VPROF_BUDGETGROUP_HOLYLIB);
 
 	Msg("--- HolyLib Plugin loading ---\n");
+
+	IVEngineServer* pEngineServer = InterfacePointers::VEngineServer();
+	if (pEngineServer)
+	{
+		
+#if defined(DEDICATED)
+		if (!pEngineServer->IsDedicatedServer())
+		{
+			Msg("Tried to load a HolyLib build that wasn't made for a dedicated server!\n");
+			return false;
+		}
+#else
+		if (pEngineServer->IsDedicatedServer())
+		{
+			Msg("Tried to load a HolyLib build that wasn't for a client!\n");
+			return false;
+		}
+#endif
+	}
 
 	if (!Util::ShouldLoad())
 	{
@@ -216,6 +234,7 @@ const char* CServerPlugin::GetPluginDescription(void)
 //---------------------------------------------------------------------------------
 void CServerPlugin::LevelInit(char const *pMapName)
 {
+	g_pModuleManager.LevelInit(pMapName);
 }
 
 //---------------------------------------------------------------------------------
@@ -263,8 +282,16 @@ void CServerPlugin::ServerActivate(edict_t *pEdictList, int edictCount, int clie
 void CServerPlugin::GameFrame(bool simulating)
 {
 	VPROF_BUDGET("HolyLib - CServerPlugin::GameFrame", VPROF_BUDGETGROUP_HOLYLIB);
+
 	g_pModuleManager.Think(simulating);
-	g_pModuleManager.LuaThink(g_Lua);
+	// BUG!
+	// To a previous bug we managed to level shutdown and also not... shutdown???
+	// The WinDS server ended up running without Lua... and crashed later on (we also crashed... a lot)
+	if (g_Lua)
+	{
+		g_pModuleManager.LuaThink(g_Lua);
+		Lua::ThinkMainInterface();
+	}
 }
 
 //---------------------------------------------------------------------------------
@@ -370,6 +397,7 @@ public:
 		{
 			g_pModuleManager.Think(true);
 			g_pModuleManager.LuaThink(m_pLua);
+			Lua::ThinkMainInterface();
 		}
 
 		return m_bDone;
@@ -423,14 +451,18 @@ GMOD_MODULE_OPEN()
 
 	g_pModuleManager.MarkAsBinaryModule();
 	Lua::SetManualShutdown();
-	g_HolyLibServerPlugin.Load(nullptr, nullptr); // Yes. I don't like it but I can't get those fancy interfaces.
+	if (!g_HolyLibServerPlugin.Load(nullptr, nullptr)) // Yes. I don't like it but I can't get those fancy interfaces.
+	{
+		LUA->ThrowError("Failed to load HolyLib!");
+		return 0;
+	}
 
 	if (Util::engineserver && Util::server)
 	{
 		edict_t* pEdict = Util::engineserver->PEntityOfEntIndex(0);
 		if (Util::GetCBaseEntityFromEdict(pEdict))
 		{
-			g_pModuleManager.ServerActivate(pEdict, Util::engineserver->GetEntityCount(), Util::server->GetMaxClients());
+			g_pModuleManager.ServerActivate(pEdict, Util::engineserver->GetEntityCount(), gpGlobals->maxClients);
 		}
 	}
 
@@ -445,7 +477,8 @@ GMOD_MODULE_OPEN()
 GMOD_MODULE_CLOSE()
 {
 	pPluginThink.MarkAsDone();
-	g_Lua->Cycle(); // Just to get our ThreadedCall unloaded since when we are unloaded we expect to not leave any memory.
+	if (g_Lua)
+		g_Lua->Cycle(); // Just to get our ThreadedCall unloaded since when we are unloaded we expect to not leave any memory.
 	g_HolyLibServerPlugin.Unload();
 
 	return 0;

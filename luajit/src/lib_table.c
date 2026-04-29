@@ -1,6 +1,6 @@
 /*
 ** Table library.
-** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
 **
 ** Major portions taken verbatim or adapted from the Lua interpreter.
 ** Copyright (C) 1994-2008 Lua.org, PUC-Rio. See Copyright Notice in lua.h
@@ -8,6 +8,9 @@
 
 #define lib_table_c
 #define LUA_LIB
+
+// RaphaelIT7: Idk where else to put it
+#include <limits.h>
 
 #include "lua.h"
 #include "lauxlib.h"
@@ -54,25 +57,10 @@ LJLIB_LUA(table_getn) /*
   end
 */
 
-LJLIB_CF(table_maxn)
+LJLIB_CF(table_maxn)		LJLIB_REC(.)
 {
   GCtab *t = lj_lib_checktab(L, 1);
-  TValue *array = tvref(t->array);
-  Node *node;
-  lua_Number m = 0;
-  ptrdiff_t i;
-  for (i = (ptrdiff_t)t->asize - 1; i >= 0; i--)
-    if (!tvisnil(&array[i])) {
-      m = (lua_Number)(int32_t)i;
-      break;
-    }
-  node = noderef(t->node);
-  for (i = (ptrdiff_t)t->hmask; i >= 0; i--)
-    if (!tvisnil(&node[i].val) && tvisnumber(&node[i].key)) {
-      lua_Number n = numberVnum(&node[i].key);
-      if (n > m) m = n;
-    }
-  setnumV(L->top-1, m);
+  setnumV(L->top-1, lj_tab_maxn(t));
   return 1;
 }
 
@@ -85,7 +73,11 @@ LJLIB_CF(table_insert)		LJLIB_REC(.)
     if (nargs != 3*sizeof(TValue))
       lj_err_caller(L, LJ_ERR_TABINS);
     /* NOBARRIER: This just moves existing elements around. */
-    for (n = lj_lib_checkint(L, 2); i > n; i--) {
+    // RaphaelIT7:
+    // In Lua 5.1 using negative numbers is not prevented
+    // but it results in weird/undefined behavior and performance issues.
+    // In Lua 5.5 it'll error properly, so we do it like 5.5 and deny any out of range numbers.
+    for (n = lj_lib_checkintrange(L, 2, 1, INT_MAX); i > n; i--) {
       /* The set may invalidate the get pointer, so need to do it first! */
       TValue *dst = lj_tab_setint(L, t, i);
       cTValue *src = lj_tab_getint(t, i-1);
