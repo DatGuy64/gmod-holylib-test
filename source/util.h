@@ -27,6 +27,22 @@ extern IVEngineServer* engine;
 
 extern GarrysMod::Lua::ILuaInterface* g_Lua;
 
+enum ThreadState
+{
+	STATE_NOTRUNNING,
+	STATE_RUNNING,
+	STATE_SHOULD_SHUTDOWN,
+};
+
+namespace GarrysMod::NetworkMessage
+{
+	constexpr int LuaFileDownload = 4; // Client told us which files he needs, so we must provide (IDs are sent in shorts / 2 bytes and the last one is ID 0!)
+	constexpr int RequestLuaFiles = 3; // Calls GModDataPack::OnFilesRequested - Tells the client to check the client_lua_files stringtable and to tell us which files they need
+	constexpr int ClientLuaError = 2;
+	// 1 does not exist
+	constexpr int LuaNetMessage = 0;
+}
+
 struct edict_t;
 class IGet;
 class CBaseEntity;
@@ -230,6 +246,14 @@ namespace Util
 		return LUA->IsType(-1, iType);
 	}
 
+	inline bool CheckBoolOpt(GarrysMod::Lua::ILuaInterface* LUA, int iStackPos, bool bFallback = false)
+	{
+		if (!LUA->IsType(iStackPos, GarrysMod::Lua::Type::Bool))
+			return bFallback;
+
+		return LUA->GetBool(iStackPos);
+	}
+
 	// Blocks execution by throwing an error if you tried to call a unsafe function
 	inline void DoUnsafeCodeCheck(GarrysMod::Lua::ILuaInterface* LUA)
 	{
@@ -268,6 +292,10 @@ namespace Util
 	extern VisData* CM_Vis(const Vector& orig, int type);
 	extern bool CM_Vis(byte* cluster, int clusterSize, int clusterID, int type);
 	extern void ResetClusters(VisData* data);
+
+	// API to block Sys_Error calls
+	// Registers a message that if an error contains it it'll be skipped x times
+	extern void SysError_IgnoreError(std::string msg, uint32_t count);
 
 	extern bool ShouldLoad();
 	extern void CheckVersion(bool bAutoUpdate);
@@ -337,7 +365,9 @@ namespace Util
 	extern Symbols::lua_gc func_lua_gc;
 	extern Symbols::lua_setallocf func_lua_setallocf;
 
+	extern Symbols::lua_call func_lua_call;
 	extern Symbols::lua_pcall func_lua_pcall;
+	extern Symbols::lua_cpcall func_lua_cpcall;
 	extern Symbols::lua_insert func_lua_insert;
 	extern Symbols::lua_toboolean func_lua_toboolean;
 

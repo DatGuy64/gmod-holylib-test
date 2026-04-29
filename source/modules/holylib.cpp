@@ -81,12 +81,10 @@ LUA_FUNCTION_STATIC(FadeClientVolume)
 	return 1;
 }
 
-LUA_FUNCTION_STATIC(ServerExecute)
+LUA_JIT_WRAPPED_0(ServerExecute)
 {
 	VPROF_BUDGET("HolyLib(Lua) - HolyLib.ServerExecute", VPROF_BUDGETGROUP_HOLYLIB);
 	Util::engineserver->ServerExecute();
-
-	return 0;
 }
 
 LUA_FUNCTION_STATIC(IsMapValid)
@@ -126,10 +124,9 @@ LUA_FUNCTION_STATIC(_UserMessageBegin)
 	return 1;
 }
 
-LUA_FUNCTION_STATIC(_MessageEnd)
+LUA_JIT_WRAPPED_0(_MessageEnd)
 {
 	MessageEnd();
-	return 0;
 }
 
 static Detouring::Hook detour_GetGModServerTags;
@@ -179,12 +176,31 @@ static inline int* GetEntityEFlags(const void* pEnt)
 	return (int*)((char*)m_spawnflags_Offset.GetPointer(pEnt) + sizeof(int));
 }
 
+static std::unordered_set<CBaseEntity*> g_pMoveTypeReadyEntities;
+
+static ConVar holylib_movetype_skip_unready(
+	"holylib_movetype_skip_unready",
+	"1",
+	FCVAR_ARCHIVE,
+	"Skip HolyLib:OnMoveTypeChange for entities that have not reached CBaseEntity::PostConstructor yet."
+);
+
+static inline bool IsEntitySafeForMoveTypeHook(CBaseEntity* pEnt)
+{
+	if (!pEnt || !g_Lua)
+		return false;
+
+	if (!holylib_movetype_skip_unready.GetBool())
+		return true;
+
+	return g_pMoveTypeReadyEntities.find(pEnt) != g_pMoveTypeReadyEntities.end();
+}
+
 static Detouring::Hook detour_CBaseEntity_PostConstructor;
 static void hook_CBaseEntity_PostConstructor(CBaseEntity* pEnt, const char* szClassname)
 {
 	if (Lua::PushHook("HolyLib:PostEntityConstructor"))
 	{
-		// Util::Push_Entity(g_Lua, pEnt); // Broken since Lua sees it as NULL
 		g_Lua->PushString(szClassname);
 		if (g_Lua->CallFunctionProtected(2, 1, true))
 		{
@@ -194,21 +210,12 @@ static void hook_CBaseEntity_PostConstructor(CBaseEntity* pEnt, const char* szCl
 			if (bMakeServerOnly)
 				*GetEntityEFlags(pEnt) |= EFL_SERVER_ONLY;
 		}
-
-		/*g_Lua->PushUserType(pEnt, GarrysMod::Lua::Type::Entity);
-		g_Lua->Push(-1);
-		int iReference = Util::ReferenceCreate();
-		g_Lua->PushString(szClassname);
-
-		g_Lua->CallFunctionProtected(3, 0, true);
-
-		Util::ReferencePush(iReference);
-		Util::ReferenceFree(iReference);
-		g_Lua->SetUserType(-1, nullptr);
-		g_Lua->Pop(1)*/
 	}
 
-	detour_CBaseEntity_PostConstructor.GetTrampoline<Symbols::CBaseEntity_PostConstructor>()(pEnt, szClassname);
+	detour_CBaseEntity_PostConstructor
+		.GetTrampoline<Symbols::CBaseEntity_PostConstructor>()(pEnt, szClassname);
+
+	g_pMoveTypeReadyEntities.insert(pEnt);
 }
 
 LUA_FUNCTION_STATIC(SetSignOnState)
@@ -308,23 +315,60 @@ LUA_FUNCTION_STATIC(GetLadder)
 
 static bool bInMoveTypeCall = false; // If someone calls SetMoveType inside the hook, we don't want a black hole to form.
 static Detouring::Hook detour_CBaseEntity_SetMoveType;
+
+extern Symbols::CBaseEntity_GetLuaEntity func_CBaseEntity_GetLuaEntity;
+static inline bool HolyLib_CanPushEntityToLua(CBaseEntity* pEnt)
+{
+	if (!pEnt || !g_Lua)
+		return false;
+
+	const CBaseHandle& hEnt = pEnt->GetRefEHandle();
+	int iEntIndex = hEnt.GetEntryIndex();
+
+	// 0x3fff / 16383 tombe ici : entité pas encore enregistrée ou handle invalide.
+	if (iEntIndex < 0 || iEntIndex >= MAX_EDICTS)
+		return false;
+
+	// Vérifie que l'index pointe bien vers le même CBaseEntity.
+	CBaseEntity* pCheck = Util::GetCBaseEntityFromIndex(iEntIndex);
+	if (pCheck != pEnt)
+		return false;
+
+	return true;
+}
+
 static void hook_CBaseEntity_SetMoveType(CBaseEntity* pEnt, int iMoveType, int iMoveCollide)
 {
-	int iCurrentMoveType = pEnt->GetMoveType();
-	if (!bInMoveTypeCall && iCurrentMoveType != iMoveType && Lua::PushHook("HolyLib:OnMoveTypeChange"))
+	if (!pEnt)
 	{
-		// Uncomment the code below to see if the entity is valid. GetClassname should almost always return a valid class
-		// Msg("hook_CBaseEntity_SetMoveType: %p - %s\n", pEnt, pEnt->GetClassname());
+		detour_CBaseEntity_SetMoveType
+			.GetTrampoline<Symbols::CBaseEntity_SetMoveType>()(pEnt, iMoveType, iMoveCollide);
+		return;
+	}
+
+	int iCurrentMoveType = pEnt->GetMoveType();
+
+	if (
+		HolyLib_CanPushEntityToLua(pEnt) &&
+		!bInMoveTypeCall &&
+		iCurrentMoveType != iMoveType &&
+		Lua::PushHook("HolyLib:OnMoveTypeChange")
+	)
+	{
+		bInMoveTypeCall = true;
+
 		Util::Push_Entity(g_Lua, pEnt);
 		g_Lua->PushNumber(iCurrentMoveType);
 		g_Lua->PushNumber(iMoveType);
 		g_Lua->PushNumber(iMoveCollide);
-		bInMoveTypeCall = true;
+
 		g_Lua->CallFunctionProtected(5, 0, true);
+
 		bInMoveTypeCall = false;
 	}
 
-	detour_CBaseEntity_SetMoveType.GetTrampoline<Symbols::CBaseEntity_SetMoveType>()(pEnt, iMoveType, iMoveCollide);
+	detour_CBaseEntity_SetMoveType
+		.GetTrampoline<Symbols::CBaseEntity_SetMoveType>()(pEnt, iMoveType, iMoveCollide);
 }
 
 static std::unordered_set<std::string> g_pHideMsg;
@@ -347,6 +391,8 @@ LUA_FUNCTION_STATIC(HideMsg) // ToDo: Final logic is still missing.
 
 LUA_FUNCTION_STATIC(GetRegistry)
 {
+	Util::DoUnsafeCodeCheck(LUA);
+
 	LUA->PushSpecial(GarrysMod::Lua::SPECIAL_REG);
 	return 1;
 }
@@ -401,9 +447,18 @@ LUA_FUNCTION_STATIC(ReceiveClientMessage)
 	return 0;
 }
 
+LUA_FUNCTION_STATIC(GetEnvironmentValue)
+{
+	Util::DoUnsafeCodeCheck(LUA);
+	const char* pVarName = LUA->CheckString(1);
+	const char* pValue = getenv(pVarName);
+	LUA->PushString(pValue);
+	return 1;
+}
+
 static char pLevelName[256], pLandmarkName[256] = {0};
-static Detouring::Hook detour_CHostState_State_ChangeLevelMP;
-static void hook_CHostState_State_ChangeLevelMP(const char* levelName, const char* landmarkName)
+static Detouring::Hook detour_HostState_ChangeLevelMP;
+static void hook_HostState_ChangeLevelMP(const char* levelName, const char* landmarkName)
 {
 	if (levelName) 
 	{
@@ -417,11 +472,13 @@ static void hook_CHostState_State_ChangeLevelMP(const char* levelName, const cha
 		pLandmarkName[0] = '\0';
 	}
 
-	detour_CHostState_State_ChangeLevelMP.GetTrampoline<Symbols::CHostState_State_ChangeLevelMP>()(levelName, landmarkName);
+	detour_HostState_ChangeLevelMP.GetTrampoline<Symbols::HostState_ChangeLevelMP>()(levelName, landmarkName);
 }
 
 void CHolyLibModule::LevelShutdown()
 {
+	g_pMoveTypeReadyEntities.clear();
+
 	if (*pLevelName == '\0') {
 		return;
 	}
@@ -476,7 +533,7 @@ void CHolyLibModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerIn
 			Util::AddFunc(pLua, HideServer, "HideServer");
 			Util::AddFunc(pLua, Reconnect, "Reconnect");
 			Util::AddFunc(pLua, FadeClientVolume, "FadeClientVolume");
-			Util::AddFunc(pLua, ServerExecute, "ServerExecute");
+			LUA_REGISTER_JIT(pLua, ServerExecute, "ServerExecute");
 			Util::AddFunc(pLua, IsMapValid, "IsMapValid");
 			Util::AddFunc(pLua, InvalidateBoneCache, "InvalidateBoneCache");
 			Util::AddFunc(pLua, SetSignOnState, "SetSignOnState");
@@ -485,11 +542,12 @@ void CHolyLibModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerIn
 			Util::AddFunc(pLua, HideMsg, "HideMsg");
 			Util::AddFunc(pLua, GetRegistry, "GetRegistry");
 			Util::AddFunc(pLua, Disconnect, "Disconnect");
+			Util::AddFunc(pLua, GetEnvironmentValue, "GetEnvironmentValue");
 
 			// Networking stuff
 			Util::AddFunc(pLua, _EntityMessageBegin, "EntityMessageBegin");
 			Util::AddFunc(pLua, _UserMessageBegin, "UserMessageBegin");
-			Util::AddFunc(pLua, _MessageEnd, "MessageEnd");
+			LUA_REGISTER_JIT(pLua, _MessageEnd, "MessageEnd");
 			Util::AddFunc(pLua, ReceiveClientMessage, "ReceiveClientMessage");
 		Util::FinishTable(pLua, "HolyLib");
 	} else {
@@ -557,9 +615,9 @@ void CHolyLibModule::InitDetour(bool bPreServer)
 
 #if ARCHITECTURE_IS_X86
 	Detour::Create(
-		&detour_CHostState_State_ChangeLevelMP, "CHostState_State_ChangeLevelMP",
-		engine_loader.GetModule(), Symbols::CHostState_State_ChangeLevelMPSym,
-		(void*)hook_CHostState_State_ChangeLevelMP, m_pID
+		&detour_HostState_ChangeLevelMP, "HostState_ChangeLevelMP",
+		engine_loader.GetModule(), Symbols::HostState_ChangeLevelMPSym,
+		(void*)hook_HostState_ChangeLevelMP, m_pID
 	);
 #endif
 

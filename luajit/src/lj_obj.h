@@ -1,6 +1,6 @@
 /*
 ** LuaJIT VM tags, values and objects.
-** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
 **
 ** Portions taken verbatim or adapted from the Lua interpreter.
 ** Copyright (C) 1994-2008 Lua.org, PUC-Rio. See Copyright Notice in lua.h
@@ -324,16 +324,54 @@ typedef struct GCstr {
 
 /* -- Userdata object ----------------------------------------------------- */
 
+// If set, then the env field contains a table which is user-specific data
+// For example if you do data.myvalue = 1
+#define LJ_UDATA_FLAG_USERTABLE 0x01
+
+/*
+	If set, it will lookup functions in the metatable directly
+	Example:
+		local meta = {
+			Example = function(self)
+				print("I got called")
+			end,
+		}
+
+		local userData = newproxy()
+		debug.setmetatable(userData, meta)
+		
+		-- This works without a __index method / it won't call __index.
+		userData:Example()
+		
+		-- This would call __index if it exists as this method did not exist in the meta table
+		userData:ExampleMissing()
+*/
+#define LJ_UDATA_FLAG_USEMETAFORACCESS 0x02
+// NOTE: Both flags skip calling __index! USERTABLE skips calling __newindex! This is expected and intentional.
+// NOTE: The meta access is always looked up first and only then the userdata lookup is done!
+// Originally we looked up the usertable first to allow people to override functions per object using the usertable BUT that would be inconsistent behavior with GMod
+
 /* Userdata object. Payload follows. */
 typedef struct GCudata {
   GCHeader;
-  uint8_t udtype;	/* Userdata type. */
-  uint8_t unused2;
+  union {
+    struct {
+      uint8_t udtype;	/* Userdata type. */
+      uint8_t flags;
+    };
+    uint16_t guard; /* Useful for guarding on both type & flags */
+  };
   GCRef env;		/* Should be at same offset in GCfunc. */
   MSize len;		/* Size of payload. */
   GCRef metatable;	/* Must be at same offset in GCtab. */
-  uint32_t align1;	/* To force 8 byte alignment of the payload. */
+  uint32_t align1;	/* To force 8 byte alignment of the payload. In HolyLib we make use of this though to store data - no bytes are wasted :3 */
 } GCudata;
+
+// This is the data GMod stores for userdata, I've added it here so that our JIT build can make use of it when needed
+typedef struct GMODudata {
+  void* data;
+  unsigned char type;
+} GMODudata;
 
 /* Userdata types. */
 enum {
@@ -346,6 +384,7 @@ enum {
 
 #define uddata(u)	((void *)((u)+1))
 #define sizeudata(u)	(sizeof(struct GCudata)+(u)->len)
+#define udata_isflagset(u, flag) ((u->flags & flag))
 
 /* -- C data object ------------------------------------------------------- */
 
@@ -460,10 +499,26 @@ typedef struct GCupval {
   GCHeader; uint8_t ffid; uint8_t nupvalues; \
   GCRef env; GCRef gclist; MRef pc
 
+// Extented version of CCallInfo - See lj_ircall.h
+typedef struct CFuncCallInfo {
+  ASMFunction func;   /* Function pointer. 0 if this entire struct wasn't set yet */
+  lua_TraceRecorderFunction traceFunc;
+  uint32_t flags;   /* Number of arguments and flags. */
+  lua_TraceRecorderType argType[32]; /* argument types */
+  lua_TraceRecorderType retType;
+  uint8_t givestate : 1;
+  uint8_t allowoptout : 1;
+  uint8_t retbool : 1;
+  uint8_t exactargs : 1;
+} CFuncCallInfo;
+
+/* We allow up to 10 alternative functions */
+#define MAX_CFUNC_CALLINFOS 10
 typedef struct GCfuncC {
   GCfuncHeader;
   lua_CFunction f;	/* C function to be called. */
-  TValue upvalue[1];	/* Array of upvalues (TValue). */
+  CFuncCallInfo callinfo[MAX_CFUNC_CALLINFOS];
+  TValue upvalue[1];  /* Array of upvalues (TValue). */
 } GCfuncC;
 
 typedef struct GCfuncL {
@@ -652,6 +707,7 @@ typedef struct global_State {
   TValue tmptv, tmptv2;	/* Temporary TValues. */
   Node nilnode;		/* Fallback 1-element hash part (nil key and value). */
   TValue registrytv;	/* Anchor for registry. */
+  GCRef vmthref;	/* Link to VM thread. */
   GCupval uvhead;	/* Head of double-linked list of all open upvalues. */
   int32_t hookcount;	/* Instruction hook countdown. */
   int32_t hookcstart;	/* Start count for instruction hook counter. */
@@ -665,9 +721,11 @@ typedef struct global_State {
   MRef ctype_state;	/* Pointer to C type state. */
   PRNGState prng;	/* Global PRNG state. */
   GCRef gcroot[GCROOT_MAX];  /* GC roots. */
+  uint32_t mxcsr;
 } global_State;
 
 #define mainthread(g)	(&gcref(g->mainthref)->th)
+#define vmthread(g)	(&gcref(g->vmthref)->th)
 #define niltv(L) \
   check_exp(tvisnil(&G(L)->nilnode.val), &G(L)->nilnode.val)
 #define niltvg(g) \
@@ -986,43 +1044,68 @@ static LJ_AINLINE void copyTV(lua_State *L, TValue *o1, const TValue *o2)
 
 /* -- Number to integer conversion ---------------------------------------- */
 
-#if LJ_SOFTFP
-LJ_ASMF int32_t lj_vm_tobit(double x);
-#if LJ_TARGET_MIPS64
-LJ_ASMF int32_t lj_vm_tointg(double x);
-#endif
-#endif
-
-static LJ_AINLINE int32_t lj_num2bit(lua_Number n)
-{
-#if LJ_SOFTFP
-  return lj_vm_tobit(n);
-#else
-  TValue o;
-  o.n = n + 6755399441055744.0;  /* 2^52 + 2^51 */
-  return (int32_t)o.u32.lo;
-#endif
-}
-
-#define lj_num2int(n)   ((int32_t)(n))
-
 /*
-** This must match the JIT backend behavior. In particular for archs
-** that don't have a common hardware instruction for this conversion.
-** Note that signed FP to unsigned int conversions have an undefined
-** result and should never be relied upon in portable FFI code.
-** See also: C99 or C11 standard, 6.3.1.4, footnote of (1).
+** The C standard leaves many aspects of FP to integer conversions as
+** undefined behavior. Portability is a mess, hardware support varies,
+** and modern C compilers are like a box of chocolates -- you never know
+** what you're gonna get.
+**
+** However, we need 100% matching behavior between the interpreter (asm + C),
+** optimizations (C) and the code generated by the JIT compiler (asm).
+** Mixing Lua numbers with FFI numbers creates some extra requirements.
+**
+** These conversions have been moved to assembler code, even if they seem
+** trivial, to foil unanticipated C compiler 'optimizations' with the
+** surrounding code. Only the unchecked double to int32_t conversion
+** is still in C, because it ought to be pretty safe -- we'll see.
+**
+** These macros also serve to document all places where FP to integer
+** conversions happen.
 */
-static LJ_AINLINE uint64_t lj_num2u64(lua_Number n)
-{
-#if LJ_TARGET_X86ORX64 || LJ_TARGET_MIPS
-  int64_t i = (int64_t)n;
-  if (i < 0) i = (int64_t)(n - 18446744073709551616.0);
-  return (uint64_t)i;
-#else
-  return (uint64_t)n;
-#endif
-}
+
+/* Unchecked double to int32_t conversion. */
+#define lj_num2int(n)		((int32_t)(n))
+
+/* Unchecked double to arch/os-dependent signed integer type conversion.
+** This assumes the 32/64-bit signed conversions are NOT range-extended.
+*/
+#define lj_num2int_type(n, tp)	((tp)(n))
+
+/* Convert a double to int32_t and check for exact conversion.
+** Returns the zero-extended int32_t on success. -0 is OK, too.
+** Returns 0x8000000080000000LL on failure (simplifies range checks).
+*/
+LJ_ASMF LJ_CONSTF int64_t lj_vm_num2int_check(double x);
+
+/* Check for exact conversion only, without storing the result. */
+#define lj_num2int_ok(x)	(lj_vm_num2int_check((x)) >= 0)
+
+/* Check for exact conversion and conditionally store result.
+** Note: conditions that fail for 0x80000000 may check only the lower
+** 32 bits. This generates good code for both 32 and 64 bit archs.
+*/
+#define lj_num2int_cond(x, i64, i, cond) \
+  (i64 = lj_vm_num2int_check((x)), cond ? (i = (int32_t)i64, 1) : 0)
+
+/* This is the generic check for a full-range int32_t result. */
+#define lj_num2int_check(x, i64, i) \
+  lj_num2int_cond((x), i64, i, i64 >= 0)
+
+/* Predictable conversion from double to int64_t or uint64_t.
+** Truncates towards zero. Out-of-range values, NaN and +-Inf return
+** an arch-dependent result, but do not cause C undefined behavior.
+** The uint64_t conversion accepts the union of the unsigned + signed range.
+*/
+LJ_ASMF LJ_CONSTF int64_t lj_vm_num2i64(double x);
+LJ_ASMF LJ_CONSTF int64_t lj_vm_num2u64(double x);
+
+#define lj_num2i64(x)		(lj_vm_num2i64((x)))
+#define lj_num2u64(x)		(lj_vm_num2u64((x)))
+
+/* Lua BitOp conversion semantics use the 2^52 + 2^51 trick. */
+LJ_ASMF LJ_CONSTF int32_t lj_vm_tobit(double x);
+
+#define lj_num2bit(x)	lj_vm_tobit((x))
 
 static LJ_AINLINE int32_t numberVint(cTValue *o)
 {

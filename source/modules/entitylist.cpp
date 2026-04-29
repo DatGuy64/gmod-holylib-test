@@ -124,6 +124,7 @@ LUA_FUNCTION_STATIC(EntityList__tostring)
 Default__index(EntityList);
 Default__newindex(EntityList);
 Default__GetTable(EntityList);
+Default__IsValid(EntityList);
 Default__gc(EntityList,
 	EntityList* pList = (EntityList*)pStoredData;
 	if (pList)
@@ -134,12 +135,6 @@ Default__gc(EntityList,
 		delete pList;
 	}
 )
-
-LUA_FUNCTION_STATIC(EntityList_IsValid)
-{
-	LUA->PushBool(Get_EntityList(LUA, 1, false) != nullptr);
-	return 1;
-}
 
 LUA_FUNCTION_STATIC(EntityList_GetEntities)
 {
@@ -240,10 +235,47 @@ LUA_FUNCTION_STATIC(EntityList_RemoveEntity)
 	return 0;
 }
 
+LUA_FUNCTION_STATIC(EntityList_CreateCopy)
+{
+	EntityList* pData = Get_EntityList(LUA, 1, true);
+
+	EntityList* pNewList = new EntityList();
+	pNewList->SetLua(LUA);
+
+	auto pMap = pNewList->GetReferences();
+	auto pVec = pNewList->GetEntities();
+	for (auto& [pEnt, iReference] : pData->GetReferences())
+	{
+		pMap[pEnt] = iReference;
+		pVec.push_back(pEnt);
+	}
+
+	Push_EntityList(LUA, pNewList);
+	return 1;
+}
+
 LUA_FUNCTION_STATIC(CreateEntityList)
 {
 	EntityList* pList = new EntityList();
 	pList->SetLua(LUA);
+
+	Push_EntityList(LUA, pList);
+	return 1;
+}
+
+LUA_FUNCTION_STATIC(CreateEntityListFromGlobal)
+{
+	EntityList& pGlobalEntityList = GetGlobalEntityList(LUA);
+	EntityList* pList = new EntityList();
+	pList->SetLua(LUA);
+
+	auto pMap = pList->GetReferences();
+	auto pVec = pList->GetEntities();
+	for (auto& [pEnt, iReference] : pGlobalEntityList.GetReferences())
+	{
+		pMap[pEnt] = iReference;
+		pVec.push_back(pEnt);
+	}
 
 	Push_EntityList(LUA, pList);
 	return 1;
@@ -302,18 +334,20 @@ void CEntListModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerIn
 		Util::AddFunc(pLua, EntityList__index, "__index");
 		Util::AddFunc(pLua, EntityList__newindex, "__newindex");
 		Util::AddFunc(pLua, EntityList__gc, "__gc");
-		Util::AddFunc(pLua, EntityList_GetTable, "GetTable");
-		Util::AddFunc(pLua, EntityList_IsValid, "IsValid");
+		LUA_REGISTER_JIT(pLua, EntityList_GetTable, "GetTable");
+		LUA_REGISTER_JIT(pLua, EntityList_IsValid, "IsValid");
 		Util::AddFunc(pLua, EntityList_GetEntities, "GetEntities");
 		Util::AddFunc(pLua, EntityList_SetEntities, "SetEntities");
 		Util::AddFunc(pLua, EntityList_AddEntities, "AddEntities");
 		Util::AddFunc(pLua, EntityList_RemoveEntities, "RemoveEntities");
 		Util::AddFunc(pLua, EntityList_AddEntity, "AddEntity");
 		Util::AddFunc(pLua, EntityList_RemoveEntity, "RemoveEntity");
+		Util::AddFunc(pLua, EntityList_CreateCopy, "CreateCopy");
 	pLua->Pop(1);
 
 	pLua->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB);
 		Util::AddFunc(pLua, CreateEntityList, "CreateEntityList");
+		Util::AddFunc(pLua, CreateEntityListFromGlobal, "CreateEntityListFromGlobal");
 		Util::AddFunc(pLua, GetGlobalEntityList, "GetGlobalEntityList");
 	pLua->Pop(1);
 }

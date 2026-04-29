@@ -1,6 +1,6 @@
 /*
 ** Userdata handling.
-** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #define lj_udata_c
@@ -19,9 +19,13 @@ GCudata *lj_udata_new(lua_State *L, MSize sz, GCtab *env)
   ud->gct = ~LJ_TUDATA;
   ud->udtype = UDTYPE_USERDATA;
   ud->len = sz;
+  ud->flags = 0;
   /* NOBARRIER: The GCudata is new (marked white). */
   setgcrefnull(ud->metatable);
-  setgcref(ud->env, obj2gco(env));
+  if (env)
+    setgcref(ud->env, obj2gco(env));
+  else
+    setgcrefnull(ud->env);
   /* Chain to userdata list (after main thread). */
   setgcrefr(ud->nextgc, mainthread(g)->nextgc);
   setgcref(mainthread(g)->nextgc, obj2gco(ud));

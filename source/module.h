@@ -20,7 +20,7 @@ public:
 
 public:
 	inline IModule* FastGetModule() { return m_pModule; };
-	inline bool FastIsEnabled() { return m_bEnabled; };
+	inline bool FastIsEnabled() { return m_bEnabled && !m_bIsShutdown; };
 	inline ConVar* GetConVar() { return m_pCVar; };
 	inline ConVar* GetDebugConVar() { return m_pDebugCVar; };
 	inline bool FastIsCompatible() { return m_bCompatible; };
@@ -36,9 +36,18 @@ protected:
 	ConVar* m_pDebugCVar = nullptr;
 	char* m_pDebugCVarName = nullptr;
 	bool m_bEnabled = false;
+	bool m_bIsShutdown = false;
 	bool m_bCompatible = false;
 	bool m_bStartup = false;
 	char* m_strDebugValue; // Workaround for a crash.
+};
+
+enum class ServerState : unsigned char
+{
+	RUNNING = 0,
+	STARTING,
+	CHANGELEVEL,
+	SHUTDOWN,
 };
 
 class CModuleManager : public IModuleManager
@@ -83,6 +92,7 @@ public:
 	virtual void OnEntityDeleted(CBaseEntity* pEntity);
 	virtual void OnClientConnect(CBaseClient* pClient);
 	virtual void OnClientDisconnect(CBaseClient* pClient);
+	virtual void LevelInit(const char *pMapName);
 	virtual void LevelShutdown();
 	virtual void PreLuaModuleLoaded(lua_State* L, const char* pFileName);
 	virtual void PostLuaModuleLoaded(lua_State* L, const char* pFileName);
@@ -102,6 +112,8 @@ public:
 	inline std::vector<CModule*>& GetModules() { return m_pModules; };
 	inline std::unordered_set<GarrysMod::Lua::ILuaInterface*>& GetLuaInterfaces() { return m_pLuaInterfaces; };
 	inline IConfig* GetConfig() { return m_pConfig; };
+	inline const char* GetMapName() { return m_strMapName.c_str(); };
+	inline ServerState GetServerState() { return m_nServerState; };
 
 private:
 	std::vector<CModule*> m_pModules;
@@ -117,11 +129,13 @@ private:
 	bool m_bEnabledUnsafeCode = false;
 #endif
 	IConfig* m_pConfig = nullptr; // Can be nullptr at runtime so check for it!
+	ServerState m_nServerState = ServerState::STARTING;
 
 private: // ServerActivate stuff
 	edict_t* m_pEdictList = nullptr;
 	int m_iEdictCount = 0;
 	int m_iClientMax = 0;
+	std::string m_strMapName;
 
 private:
 	// All Lua interfaces that were loaded.

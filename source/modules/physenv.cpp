@@ -298,21 +298,6 @@ void PostPhysicsLag()
 #if PHYSENV_INCLUDEIVPFALLBACK
 static bool bIsJoltPhysics = false; // if were using jolt, a lot of things need to change.
 class IVP_Mindist;
-static thread_local bool g_bInImpactCall = false;
-static thread_local IVP_Mindist** g_pCurrentMindist;
-static thread_local bool* g_fDeferDeleteMindist;
-
-static Detouring::Hook detour_IVP_Mindist_D2;
-static void hook_IVP_Mindist_D2(IVP_Mindist* mindist)
-{
-	if (g_bInImpactCall && *g_fDeferDeleteMindist && *g_pCurrentMindist == nullptr)
-	{
-		*g_fDeferDeleteMindist = false; // The single thing missing in the physics engine that causes it to break.....
-		Warning(PROJECT_NAME " - physenv: Someone forgot to call Entity:CollisionRulesChanged!\n");
-	}
-
-	detour_IVP_Mindist_D2.GetTrampoline<Symbols::IVP_Mindist_D2>()(mindist);
-}
 
 static Detouring::Hook detour_IVP_Mindist_do_impact;
 static void hook_IVP_Mindist_do_impact(IVP_Mindist* mindist)
@@ -323,9 +308,7 @@ static void hook_IVP_Mindist_do_impact(IVP_Mindist* mindist)
 	if (pCurrentSkipType == IVP_SkipType::IVP_SkipImpact)
 		return;
 
-	g_bInImpactCall = true; // Verify: Do we actually need this?
 	detour_IVP_Mindist_do_impact.GetTrampoline<Symbols::IVP_Mindist_do_impact>()(mindist);
-	g_bInImpactCall = false;
 }
 
 static Detouring::Hook detour_IVP_Event_Manager_Standard_simulate_time_events;
@@ -443,6 +426,7 @@ static void hook_IVP_Mindist_Manager_recheck_ov_element(void* mindistManager, GM
 #endif
 
 bool g_pForceOriginalIVP = false;
+#if CUSTOM_VPHYSICS_BUILD
 static Detouring::Hook detour_CreateInterface;
 static void* hook_CreateInterface(const char *pName, int *pReturnCode)
 {
@@ -455,6 +439,7 @@ static void* hook_CreateInterface(const char *pName, int *pReturnCode)
 
 	return Sys_GetFactoryThis()(pName, pReturnCode);
 }
+#endif
 
 LUA_FUNCTION_STATIC(physenv_SetLagThreshold)
 {
@@ -780,8 +765,8 @@ static inline void UnregisterPhysicsEnvironment(IPhysicsEnvironment* pEnv)
 	auto it = g_pEnvironmentToLua.find(pEnv);
 	if (it != g_pEnvironmentToLua.end())
 	{
-		g_pEnvironmentToLua.erase(it);
 		delete it->second;
+		g_pEnvironmentToLua.erase(it);
 	}
 }
 
@@ -1195,14 +1180,7 @@ LUA_FUNCTION_STATIC(IPhysicsCollisionSet__tostring)
 Default__index(IPhysicsCollisionSet);
 Default__newindex(IPhysicsCollisionSet);
 Default__GetTable(IPhysicsCollisionSet);
-
-LUA_FUNCTION_STATIC(IPhysicsCollisionSet_IsValid)
-{
-	IPhysicsCollisionSet* pCollideSet = Get_IPhysicsCollisionSet(LUA, 1, false);
-
-	LUA->PushBool(pCollideSet != nullptr);
-	return 1;
-}
+Default__IsValid(IPhysicsCollisionSet);
 
 LUA_FUNCTION_STATIC(IPhysicsCollisionSet_EnableCollisions)
 {
@@ -1248,14 +1226,7 @@ LUA_FUNCTION_STATIC(IPhysicsEnvironment__tostring)
 Default__index(ILuaPhysicsEnvironment);
 Default__newindex(ILuaPhysicsEnvironment);
 Default__GetTable(ILuaPhysicsEnvironment);
-
-LUA_FUNCTION_STATIC(IPhysicsEnvironment_IsValid)
-{
-	IPhysicsEnvironment* pEnvironment = GetPhysicsEnvironmentFromLua(LUA, 1, false);
-
-	LUA->PushBool(pEnvironment != nullptr);
-	return 1;
-}
+Default__IsValidEXT(ILuaPhysicsEnvironment, if(!pData->pEnvironment) return false;);
 
 LUA_FUNCTION_STATIC(IPhysicsEnvironment_TransferObject)
 {
@@ -1966,17 +1937,10 @@ LUA_FUNCTION_STATIC(CPhysCollide__tostring)
 	return 1;
 }
 
-LUA_FUNCTION_STATIC(CPhysCollide_IsValid)
-{
-	CPhysCollide* pCollide = Get_CPhysCollide(LUA, 1, false);
-
-	LUA->PushBool(pCollide != nullptr);
-	return 1;
-}
-
 Default__index(CPhysCollide);
 Default__newindex(CPhysCollide);
 Default__GetTable(CPhysCollide);
+Default__IsValid(CPhysCollide);
 
 LUA_FUNCTION_STATIC(CPhysPolysoup__tostring)
 {
@@ -1989,17 +1953,10 @@ LUA_FUNCTION_STATIC(CPhysPolysoup__tostring)
 	return 1;
 }
 
-LUA_FUNCTION_STATIC(CPhysPolysoup_IsValid)
-{
-	CPhysPolysoup* pPolySoup = Get_CPhysPolysoup(LUA, 1, false);
-
-	LUA->PushBool(pPolySoup != nullptr);
-	return 1;
-}
-
 Default__index(CPhysPolysoup);
 Default__newindex(CPhysPolysoup);
 Default__GetTable(CPhysPolysoup);
+Default__IsValid(CPhysPolysoup);
 
 LUA_FUNCTION_STATIC(CPhysConvex__tostring)
 {
@@ -2012,17 +1969,10 @@ LUA_FUNCTION_STATIC(CPhysConvex__tostring)
 	return 1;
 }
 
-LUA_FUNCTION_STATIC(CPhysConvex_IsValid)
-{
-	CPhysConvex* pConvex = Get_CPhysConvex(LUA, 1, false);
-
-	LUA->PushBool(pConvex != nullptr);
-	return 1;
-}
-
 Default__index(CPhysConvex);
 Default__newindex(CPhysConvex);
 Default__GetTable(CPhysConvex);
+Default__IsValid(CPhysConvex);
 
 LUA_FUNCTION_STATIC(ICollisionQuery__tostring)
 {
@@ -2035,17 +1985,10 @@ LUA_FUNCTION_STATIC(ICollisionQuery__tostring)
 	return 1;
 }
 
-LUA_FUNCTION_STATIC(ICollisionQuery_IsValid)
-{
-	ICollisionQuery* pQuery = Get_ICollisionQuery(LUA, 1, false);
-
-	LUA->PushBool(pQuery != nullptr);
-	return 1;
-}
-
 Default__index(ICollisionQuery);
 Default__newindex(ICollisionQuery);
 Default__GetTable(ICollisionQuery);
+Default__IsValid(ICollisionQuery);
 
 LUA_FUNCTION_STATIC(ICollisionQuery_ConvexCount)
 {
@@ -2559,32 +2502,32 @@ void CPhysEnvModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerIn
 		Util::AddFunc(pLua, CPhysCollide__tostring, "__tostring");
 		Util::AddFunc(pLua, CPhysCollide__index, "__index");
 		Util::AddFunc(pLua, CPhysCollide__newindex, "__newindex");
-		Util::AddFunc(pLua, CPhysCollide_IsValid, "IsValid");
-		Util::AddFunc(pLua, CPhysCollide_GetTable, "GetTable");
+		LUA_REGISTER_JIT(pLua, CPhysCollide_IsValid, "IsValid");
+		LUA_REGISTER_JIT(pLua, CPhysCollide_GetTable, "GetTable");
 	pLua->Pop(1);
 
 	Lua::GetLuaData(pLua)->RegisterMetaTable(Lua::CPhysPolysoup, pLua->CreateMetaTable("CPhysPolysoup"));
 		Util::AddFunc(pLua, CPhysPolysoup__tostring, "__tostring");
 		Util::AddFunc(pLua, CPhysPolysoup__index, "__index");
 		Util::AddFunc(pLua, CPhysPolysoup__newindex, "__newindex");
-		Util::AddFunc(pLua, CPhysPolysoup_IsValid, "IsValid");
-		Util::AddFunc(pLua, CPhysPolysoup_GetTable, "GetTable");
+		LUA_REGISTER_JIT(pLua, CPhysPolysoup_IsValid, "IsValid");
+		LUA_REGISTER_JIT(pLua, CPhysPolysoup_GetTable, "GetTable");
 	pLua->Pop(1);
 
 	Lua::GetLuaData(pLua)->RegisterMetaTable(Lua::CPhysCollide, pLua->CreateMetaTable("CPhysCollide"));
 		Util::AddFunc(pLua, CPhysConvex__tostring, "__tostring");
 		Util::AddFunc(pLua, CPhysConvex__index, "__index");
 		Util::AddFunc(pLua, CPhysConvex__newindex, "__newindex");
-		Util::AddFunc(pLua, CPhysConvex_IsValid, "IsValid");
-		Util::AddFunc(pLua, CPhysConvex_GetTable, "GetTable");
+		LUA_REGISTER_JIT(pLua, CPhysConvex_IsValid, "IsValid");
+		LUA_REGISTER_JIT(pLua, CPhysConvex_GetTable, "GetTable");
 	pLua->Pop(1);
 
 	Lua::GetLuaData(pLua)->RegisterMetaTable(Lua::ICollisionQuery, pLua->CreateMetaTable("ICollisionQuery"));
 		Util::AddFunc(pLua, ICollisionQuery__tostring, "__tostring");
 		Util::AddFunc(pLua, ICollisionQuery__index, "__index");
 		Util::AddFunc(pLua, ICollisionQuery__newindex, "__newindex");
-		Util::AddFunc(pLua, ICollisionQuery_IsValid, "IsValid");
-		Util::AddFunc(pLua, ICollisionQuery_GetTable, "GetTable");
+		LUA_REGISTER_JIT(pLua, ICollisionQuery_IsValid, "IsValid");
+		LUA_REGISTER_JIT(pLua, ICollisionQuery_GetTable, "GetTable");
 		Util::AddFunc(pLua, ICollisionQuery_ConvexCount, "ConvexCount");
 		Util::AddFunc(pLua, ICollisionQuery_TriangleCount, "TriangleCount");
 		Util::AddFunc(pLua, ICollisionQuery_GetTriangleMaterialIndex, "GetTriangleMaterialIndex");
@@ -2597,8 +2540,8 @@ void CPhysEnvModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerIn
 		Util::AddFunc(pLua, IPhysicsCollisionSet__tostring, "__tostring");
 		Util::AddFunc(pLua, IPhysicsCollisionSet__index, "__index");
 		Util::AddFunc(pLua, IPhysicsCollisionSet__newindex, "__newindex");
-		Util::AddFunc(pLua, IPhysicsCollisionSet_IsValid, "IsValid");
-		Util::AddFunc(pLua, IPhysicsCollisionSet_GetTable, "GetTable");
+		LUA_REGISTER_JIT(pLua, IPhysicsCollisionSet_IsValid, "IsValid");
+		LUA_REGISTER_JIT(pLua, IPhysicsCollisionSet_GetTable, "GetTable");
 		Util::AddFunc(pLua, IPhysicsCollisionSet_EnableCollisions, "EnableCollisions");
 		Util::AddFunc(pLua, IPhysicsCollisionSet_DisableCollisions, "DisableCollisions");
 		Util::AddFunc(pLua, IPhysicsCollisionSet_ShouldCollide, "ShouldCollide");
@@ -2608,8 +2551,8 @@ void CPhysEnvModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerIn
 		Util::AddFunc(pLua, IPhysicsEnvironment__tostring, "__tostring");
 		Util::AddFunc(pLua, ILuaPhysicsEnvironment__index, "__index");
 		Util::AddFunc(pLua, ILuaPhysicsEnvironment__newindex, "__newindex");
-		Util::AddFunc(pLua, ILuaPhysicsEnvironment_GetTable, "GetTable");
-		Util::AddFunc(pLua, IPhysicsEnvironment_IsValid, "IsValid");
+		LUA_REGISTER_JIT(pLua, ILuaPhysicsEnvironment_GetTable, "GetTable");
+		LUA_REGISTER_JIT(pLua, ILuaPhysicsEnvironment_IsValid, "IsValid");
 		Util::AddFunc(pLua, IPhysicsEnvironment_TransferObject, "TransferObject");
 		Util::AddFunc(pLua, IPhysicsEnvironment_SetGravity, "SetGravity");
 		Util::AddFunc(pLua, IPhysicsEnvironment_GetGravity, "GetGravity");
@@ -2740,9 +2683,9 @@ DETOUR_THISCALL_FINISH();
 static DLL_Handle g_pPhysicsModule = nullptr;
 void CPhysEnvModule::InitDetour(bool bPreServer)
 {
-#if CUSTOM_VPHYSICS_BUILD
 	if (bPreServer)
 	{
+#if CUSTOM_VPHYSICS_BUILD
 		if (CommandLine()->FindParm("-holylib_replaceivp"))
 		{
 			g_pPhysicsModule = DLL_LoadModule("vphysics" DLL_EXTENSION, RTLD_LAZY); // Load it manually since rn it wasn't loaded yet.
@@ -2758,9 +2701,9 @@ void CPhysEnvModule::InitDetour(bool bPreServer)
 		} else {
 			g_pPhysicsHolyLib = nullptr;
 		}
+#endif
 		return;
 	}
-#endif
 
 	if (g_pPhysicsModule)
 	{
@@ -2802,14 +2745,6 @@ void CPhysEnvModule::InitDetour(bool bPreServer)
 			vphysics_loader.GetModule(), Symbols::IVP_Mindist_do_impactSym,
 			(void*)hook_IVP_Mindist_do_impact, m_pID
 		);
-
-#if defined(ARCHITECTURE_X86)
-		Detour::Create(
-			&detour_IVP_Mindist_D2, "IVP_Mindist::~IVP_Mindist",
-			vphysics_loader.GetModule(), Symbols::IVP_Mindist_D2Sym,
-			(void*)hook_IVP_Mindist_D2, m_pID
-		);
-#endif
 
 		Detour::Create(
 			&detour_IVP_Event_Manager_Standard_simulate_time_events, "IVP_Event_Manager_Standard::simulate_time_events",
@@ -2906,14 +2841,6 @@ void CPhysEnvModule::InitDetour(bool bPreServer)
 			vphysics_loader.GetModule(), Symbols::IVP_Mindist_Manager_recheck_ov_elementSym,
 			(void*)hook_IVP_Mindist_Manager_recheck_ov_element, m_pID
 		);
-
-#if defined(ARCHITECTURE_X86) 
-		g_pCurrentMindist = Detour::ResolveSymbol<IVP_Mindist*>(vphysics_loader, Symbols::g_pCurrentMindistSym);
-		Detour::CheckValue("get class", "g_pCurrentMindist", g_pCurrentMindist != nullptr);
-
-		g_fDeferDeleteMindist = Detour::ResolveSymbol<bool>(vphysics_loader, Symbols::g_fDeferDeleteMindistSym);
-		Detour::CheckValue("get class", "g_fDeferDeleteMindist", g_fDeferDeleteMindist != nullptr);
-#endif
 
 		func_IVP_Mindist_Base_get_objects = (Symbols::IVP_Mindist_Base_get_objects)Detour::GetFunction(vphysics_loader.GetModule(), Symbols::IVP_Mindist_Base_get_objectsSym);
 		Detour::CheckFunction((void*)func_IVP_Mindist_Base_get_objects, "IVP_Mindist_Base::get_objects");

@@ -3193,4 +3193,4 @@ static void DumpDT(const CCommand &args)
 		g_pFullFileSystem->Close(pFullList);
 	}
 }
-static ConCommand dumpdt("holylib_networking_dumpdt", DumpDT, "Dumps a lot of DT into into the holylib/dumps/dt.txt file", 0);
+static ConCommand dumpdt("holylib_networking_dumpdt", DumpDT, "Dumps a lot of DT into into the holylib/dumps/dt.txt file", 0); 
