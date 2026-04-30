@@ -99,27 +99,28 @@ static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 
 static CTraceFilterWorldOnly g_HolyLibTraceFilterWorldOnly;
 
-static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target);
+static int VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target);
 
 bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds)
 {
 	if (cacheSeconds <= 0.0f)
-		return VisibleByLOS_NoCache(viewer, target);
+		return VisibleByLOS_NoCache(viewer, target) == 1;
 
 	const int vIdx = GetClientIndexFromEntity(viewer);
 	const int tIdx = GetClientIndexFromEntity(target);
 	if (vIdx < 1 || vIdx > HOLYLIB_MAX_PLAYERS || tIdx < 1 || tIdx > HOLYLIB_MAX_PLAYERS)
-		return VisibleByLOS_NoCache(viewer, target);
+		return VisibleByLOS_NoCache(viewer, target) == 1;
 
 	const float now = gpGlobals->curtime;
 
 	if (g_LOSNext[vIdx][tIdx] > now)
 		return g_LOSVis[vIdx][tIdx] != 0;
 
-	const bool vis = VisibleByLOS_NoCache(viewer, target);
-	g_LOSVis[vIdx][tIdx] = vis ? 1 : 0;
+	const int vis = VisibleByLOS_NoCache(viewer, target);
+	if (vis < 0) return true; // unstable = assume visible
+	g_LOSVis[vIdx][tIdx] = vis;
 	g_LOSNext[vIdx][tIdx] = now + cacheSeconds;
-	return vis;
+	return vis != 0;
 }
 
 static inline bool LOS_Clear(const Vector& start, const Vector& end)
@@ -139,25 +140,28 @@ bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* t
 
         if (g_LOSNext[vIdx][tIdx] == 0.0f)
         {
-            // First time: grace tick, assume visible
+            Msg("[AWH] %i->%i: grace tick\n", vIdx, tIdx);
             g_LOSVis[vIdx][tIdx] = 1;
             g_LOSNext[vIdx][tIdx] = now + cacheSeconds;
             return true;
         }
 
         if (g_LOSNext[vIdx][tIdx] > now)
+        {
+            Msg("[AWH] %i->%i: cache hit vis=%i\n", vIdx, tIdx, (int)g_LOSVis[vIdx][tIdx]);
             return g_LOSVis[vIdx][tIdx] != 0;
+        }
+
+        Msg("[AWH] %i->%i: cache expired\n", vIdx, tIdx);
     }
 
-    // -1 = unstable (vtable invalid), 0 = hidden, 1 = visible
     const int result = VisibleByLOS_NoCache(viewer, target);
+    Msg("[AWH] %i->%i: LOS result=%i\n", vIdx, tIdx, result);
 
     if (cacheSeconds > 0.0f)
     {
         if (result < 0)
         {
-            // Entity unstable (bot with no collision, mid-teleport etc.)
-            // Mark as permanently visible so we never hide it
             g_LOSVis[vIdx][tIdx] = 1;
             g_LOSNext[vIdx][tIdx] = gpGlobals->curtime + 99999.0f;
             return true;
@@ -169,7 +173,7 @@ bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* t
 }
 
 // Returns: 1=visible, 0=hidden, -1=entity unstable (vtable invalid, treat as visible)
-static inline int VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
+static int VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
 {
     if (!viewer || !target)
         return -1;
@@ -187,28 +191,21 @@ static inline int VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
     if (*(uintptr_t*)target < 0x08000000 || *(uintptr_t*)target > 0xf8000000)
         return -1;
 
-    // CollisionProp() vtable is broken since the April 2026 GMod update.
-    // Use GetAbsOrigin() + standard player bbox instead.
-    // Standard Source Engine player hull: (-16,-16,0) to (16,16,72)
     const Vector& origin = target->GetAbsOrigin();
 
-    static const float minX = -16.0f + 1.0f;
-    static const float minY = -16.0f + 1.0f;
-    static const float maxX =  16.0f - 1.0f;
-    static const float maxY =  16.0f - 1.0f;
-    static const float zBottom = 0.0f  + 5.0f;
-    static const float zTop    = 72.0f - 2.0f;
+    Msg("[AWH] LOS eye=(%.1f,%.1f,%.1f) origin=(%.1f,%.1f,%.1f)\n",
+        viewerEye.x, viewerEye.y, viewerEye.z, origin.x, origin.y, origin.z);
 
-    // Test 8 corners of the player bbox in world space (origin-relative)
-    if (LOS_Clear(viewerEye, origin + Vector(minX, minY, zBottom))) return 1;
-    if (LOS_Clear(viewerEye, origin + Vector(maxX, minY, zBottom))) return 1;
-    if (LOS_Clear(viewerEye, origin + Vector(minX, maxY, zBottom))) return 1;
-    if (LOS_Clear(viewerEye, origin + Vector(maxX, maxY, zBottom))) return 1;
-    if (LOS_Clear(viewerEye, origin + Vector(minX, minY, zTop)))    return 1;
-    if (LOS_Clear(viewerEye, origin + Vector(maxX, minY, zTop)))    return 1;
-    if (LOS_Clear(viewerEye, origin + Vector(minX, maxY, zTop)))    return 1;
-    if (LOS_Clear(viewerEye, origin + Vector(maxX, maxY, zTop)))    return 1;
+    if (LOS_Clear(viewerEye, origin + Vector(-15.0f, -15.0f,  5.0f))) { Msg("[AWH] LOS c1 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector( 15.0f, -15.0f,  5.0f))) { Msg("[AWH] LOS c2 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector(-15.0f,  15.0f,  5.0f))) { Msg("[AWH] LOS c3 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector( 15.0f,  15.0f,  5.0f))) { Msg("[AWH] LOS c4 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector(-15.0f, -15.0f, 70.0f))) { Msg("[AWH] LOS c5 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector( 15.0f, -15.0f, 70.0f))) { Msg("[AWH] LOS c6 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector(-15.0f,  15.0f, 70.0f))) { Msg("[AWH] LOS c7 clear\n"); return 1; }
+    if (LOS_Clear(viewerEye, origin + Vector( 15.0f,  15.0f, 70.0f))) { Msg("[AWH] LOS c8 clear\n"); return 1; }
 
+    Msg("[AWH] LOS all blocked\n");
     return 0;
 }
 
