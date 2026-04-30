@@ -100,28 +100,40 @@ static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 
 static CTraceFilterWorldOnly g_HolyLibTraceFilterWorldOnly;
 
-static int VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target);
+// Bbox corners for LOS check — standard Source Engine player hull
+// Stored as file-scope offsets so they're not recreated on every call
+static const Vector g_AWHBBoxCorners[8] = {
+    Vector(-15.0f, -15.0f,  5.0f),
+    Vector( 15.0f, -15.0f,  5.0f),
+    Vector(-15.0f,  15.0f,  5.0f),
+    Vector( 15.0f,  15.0f,  5.0f),
+    Vector(-15.0f, -15.0f, 70.0f),
+    Vector( 15.0f, -15.0f, 70.0f),
+    Vector(-15.0f,  15.0f, 70.0f),
+    Vector( 15.0f,  15.0f, 70.0f),
+};
+
+static bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target);
 
 bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds)
 {
 	if (cacheSeconds <= 0.0f)
-		return VisibleByLOS_NoCache(viewer, target) == 1;
+		return VisibleByLOS_NoCache(viewer, target);
 
 	const int vIdx = GetClientIndexFromEntity(viewer);
 	const int tIdx = GetClientIndexFromEntity(target);
 	if (vIdx < 1 || vIdx > HOLYLIB_MAX_PLAYERS || tIdx < 1 || tIdx > HOLYLIB_MAX_PLAYERS)
-		return VisibleByLOS_NoCache(viewer, target) == 1;
+		return VisibleByLOS_NoCache(viewer, target);
 
 	const float now = gpGlobals->curtime;
 
 	if (g_LOSNext[vIdx][tIdx] > now)
 		return g_LOSVis[vIdx][tIdx] != 0;
 
-	const int vis = VisibleByLOS_NoCache(viewer, target);
-	if (vis < 0) return true; // unstable = assume visible
-	g_LOSVis[vIdx][tIdx] = vis;
+	const bool vis = VisibleByLOS_NoCache(viewer, target);
+	g_LOSVis[vIdx][tIdx] = vis ? 1 : 0;
 	g_LOSNext[vIdx][tIdx] = now + cacheSeconds;
-	return vis != 0;
+	return vis;
 }
 
 static inline bool LOS_Clear(const Vector& start, const Vector& end)
@@ -141,79 +153,49 @@ bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* t
 
         if (g_LOSNext[vIdx][tIdx] == 0.0f)
         {
-            Msg("[AWH] %i->%i: grace tick\n", vIdx, tIdx);
             g_LOSVis[vIdx][tIdx] = 1;
             g_LOSNext[vIdx][tIdx] = now + cacheSeconds;
             return true;
         }
 
         if (g_LOSNext[vIdx][tIdx] > now)
-        {
-            Msg("[AWH] %i->%i: cache hit vis=%i\n", vIdx, tIdx, (int)g_LOSVis[vIdx][tIdx]);
             return g_LOSVis[vIdx][tIdx] != 0;
-        }
-
-        Msg("[AWH] %i->%i: cache expired\n", vIdx, tIdx);
     }
 
-    const int result = VisibleByLOS_NoCache(viewer, target);
-    Msg("[AWH] %i->%i: LOS result=%i\n", vIdx, tIdx, result);
+    const bool vis = VisibleByLOS_NoCache(viewer, target);
 
     if (cacheSeconds > 0.0f)
     {
-        if (result < 0)
-        {
-            g_LOSVis[vIdx][tIdx] = 1;
-            g_LOSNext[vIdx][tIdx] = gpGlobals->curtime + 99999.0f;
-            return true;
-        }
-        g_LOSVis[vIdx][tIdx] = result;
+        g_LOSVis[vIdx][tIdx] = vis ? 1 : 0;
         g_LOSNext[vIdx][tIdx] = gpGlobals->curtime + cacheSeconds;
     }
-    return result != 0;
+    return vis;
 }
 
-// Returns: 1=visible, 0=hidden, -1=entity unstable (vtable invalid, treat as visible)
-static int VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
+static bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
 {
     if (!viewer || !target)
-        return -1;
+        return false;
 
     edict_t* viewerEdict = viewer->edict();
     edict_t* targetEdict = target->edict();
     if (!viewerEdict || !targetEdict || viewerEdict->IsFree() || targetEdict->IsFree())
-        return -1;
+        return false;
 
-    if (*(uintptr_t*)viewer < 0x08000000 || *(uintptr_t*)viewer > 0xf8000000)
-        return -1;
+    const Vector viewerEye = viewer->EyePosition();
 
-    Vector viewerEye = viewer->EyePosition();
-
-    if (*(uintptr_t*)target < 0x08000000 || *(uintptr_t*)target > 0xf8000000)
-        return -1;
-
-    // Read m_vecOrigin directly via DTVarByOffset to avoid broken vtable call.
     if (!g_m_vecOrigin_Offset)
         g_m_vecOrigin_Offset = new DTVarByOffset("DT_BaseEntity", "m_vecOrigin");
     const Vector* pOrigin = (const Vector*)g_m_vecOrigin_Offset->GetPointer(target);
     if (!pOrigin)
-        return -1;
-    const Vector origin = *pOrigin;
+        return false;
+    const Vector& origin = *pOrigin;
 
-    Msg("[AWH] LOS eye=(%.1f,%.1f,%.1f) origin=(%.1f,%.1f,%.1f)\n",
-        viewerEye.x, viewerEye.y, viewerEye.z, origin.x, origin.y, origin.z);
+    for (int i = 0; i < 8; ++i)
+        if (LOS_Clear(viewerEye, origin + g_AWHBBoxCorners[i]))
+            return true;
 
-    if (LOS_Clear(viewerEye, origin + Vector(-15.0f, -15.0f,  5.0f))) { Msg("[AWH] LOS c1 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector( 15.0f, -15.0f,  5.0f))) { Msg("[AWH] LOS c2 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector(-15.0f,  15.0f,  5.0f))) { Msg("[AWH] LOS c3 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector( 15.0f,  15.0f,  5.0f))) { Msg("[AWH] LOS c4 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector(-15.0f, -15.0f, 70.0f))) { Msg("[AWH] LOS c5 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector( 15.0f, -15.0f, 70.0f))) { Msg("[AWH] LOS c6 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector(-15.0f,  15.0f, 70.0f))) { Msg("[AWH] LOS c7 clear\n"); return 1; }
-    if (LOS_Clear(viewerEye, origin + Vector( 15.0f,  15.0f, 70.0f))) { Msg("[AWH] LOS c8 clear\n"); return 1; }
-
-    Msg("[AWH] LOS all blocked\n");
-    return 0;
+    return false;
 }
 
 

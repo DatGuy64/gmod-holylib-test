@@ -1980,10 +1980,8 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
             continue;
         }
 
-        Msg("[AWH] viewer=%i target=%i transmit=%s\n", viewerSlot, i, pTransmitBits->Get(i) ? "yes" : "no");
         if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))
         {
-            Msg("[AWH] viewer=%i target=%i: clearing transmit\n", viewerSlot, i);
             pTransmitBits->Clear(i);
             if (pAlwaysBits) pAlwaysBits->Clear(i);
 
