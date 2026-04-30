@@ -48,6 +48,7 @@ uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2] = { {0,0} };
 uint64_t g_HolyPVS_AWHWhitelist[HOLYLIB_MAX_PLAYERS + 1][2] = { {0,0} };
 static float g_LOSNext[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
 static unsigned char g_LOSVis[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
+static DTVarByOffset* g_m_vecOrigin_Offset = nullptr;
 
 void HolyPVS_ResetAWHSlot(int idx)
 {
@@ -191,9 +192,10 @@ static int VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
     if (*(uintptr_t*)target < 0x08000000 || *(uintptr_t*)target > 0xf8000000)
         return -1;
 
-    // GetAbsOrigin() vtable is broken since April 2026 GMod update.
-    // Read m_vecOrigin directly via DTVarByOffset to avoid vtable call.
-    const Vector* pOrigin = (const Vector*)g_m_vecOrigin_Offset.GetPointer(target);
+    // Read m_vecOrigin directly via DTVarByOffset to avoid broken vtable call.
+    if (!g_m_vecOrigin_Offset)
+        g_m_vecOrigin_Offset = new DTVarByOffset("DT_BaseEntity", "m_vecOrigin");
+    const Vector* pOrigin = (const Vector*)g_m_vecOrigin_Offset->GetPointer(target);
     if (!pOrigin)
         return -1;
     const Vector origin = *pOrigin;
@@ -1454,7 +1456,6 @@ static inline bool StartsWith(const char* s, const char* p)
 }
 
 static DTVarByOffset g_m_hActiveWeapon_Offset("DT_BaseCombatCharacter", "m_hActiveWeapon");
-static DTVarByOffset g_m_vecOrigin_Offset("DT_BaseEntity", "m_vecOrigin");
 
 static inline CBaseEntity* GetActiveWeaponEntity(const void* pPlayer)
 {
