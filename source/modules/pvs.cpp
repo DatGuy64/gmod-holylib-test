@@ -132,39 +132,6 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
 	return tr.fraction > 0.97f;
 }
 
-bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* target, int tIdx, float cacheSeconds)
-{
-    if (cacheSeconds > 0.0f)
-    {
-        const float now = gpGlobals->curtime;
-
-        if (g_LOSNext[vIdx][tIdx] == 0.0f)
-        {
-            g_LOSVis[vIdx][tIdx] = 1;
-            g_LOSNext[vIdx][tIdx] = now + cacheSeconds;
-            return true;
-        }
-
-        if (g_LOSNext[vIdx][tIdx] > now)
-            return g_LOSVis[vIdx][tIdx] != 0;
-    }
-
-    const int result = VisibleByLOS_NoCache(viewer, target);
-
-    if (cacheSeconds > 0.0f)
-    {
-        if (result < 0)
-        {
-            g_LOSVis[vIdx][tIdx] = 1;
-            g_LOSNext[vIdx][tIdx] = gpGlobals->curtime + 99999.0f;
-            return true;
-        }
-        g_LOSVis[vIdx][tIdx] = result;
-        g_LOSNext[vIdx][tIdx] = gpGlobals->curtime + cacheSeconds;
-    }
-    return result != 0;
-}
-
 // Returns: 1=visible, 0=hidden, -1=entity unstable (vtable invalid, treat as visible)
 static int VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
 {
