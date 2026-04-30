@@ -99,28 +99,27 @@ static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 
 static CTraceFilterWorldOnly g_HolyLibTraceFilterWorldOnly;
 
-static inline int VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target);
+static inline bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target);
 
 bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds)
 {
 	if (cacheSeconds <= 0.0f)
-		return VisibleByLOS_NoCache(viewer, target) == 1;
+		return VisibleByLOS_NoCache(viewer, target);
 
 	const int vIdx = GetClientIndexFromEntity(viewer);
 	const int tIdx = GetClientIndexFromEntity(target);
 	if (vIdx < 1 || vIdx > HOLYLIB_MAX_PLAYERS || tIdx < 1 || tIdx > HOLYLIB_MAX_PLAYERS)
-		return VisibleByLOS_NoCache(viewer, target) == 1;
+		return VisibleByLOS_NoCache(viewer, target);
 
 	const float now = gpGlobals->curtime;
 
 	if (g_LOSNext[vIdx][tIdx] > now)
 		return g_LOSVis[vIdx][tIdx] != 0;
 
-	const int vis = VisibleByLOS_NoCache(viewer, target);
-	if (vis < 0) return true; // unstable = assume visible
-	g_LOSVis[vIdx][tIdx] = vis;
+	const bool vis = VisibleByLOS_NoCache(viewer, target);
+	g_LOSVis[vIdx][tIdx] = vis ? 1 : 0;
 	g_LOSNext[vIdx][tIdx] = now + cacheSeconds;
-	return vis != 0;
+	return vis;
 }
 
 static inline bool LOS_Clear(const Vector& start, const Vector& end)
