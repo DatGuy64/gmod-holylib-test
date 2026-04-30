@@ -33,10 +33,9 @@ extern bool g_HolyPVS_AWHJustEnabled[HOLYLIB_MAX_PLAYERS + 1];
 extern float g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1];
 extern uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2];
 extern uint64_t g_HolyPVS_AWHWhitelist[HOLYLIB_MAX_PLAYERS + 1][2];
-extern float g_LOSNext[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
-extern unsigned char g_LOSVis[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
 
 extern bool g_bIsPlayerTalking[HOLYLIB_MAX_PLAYERS];
+extern bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* target, int tIdx, float cacheSeconds);
 
 bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds);
 
@@ -1981,33 +1980,7 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
             continue;
         }
 
-        // LOS check with cache — inlined to avoid exporting a new symbol from pvs.cpp
-        bool visible = true;
-        {
-            const float now = gpGlobals->curtime;
-            if (g_LOSNext[viewerSlot][i] == 0.0f)
-            {
-                // First time: grace tick, assume visible
-                g_LOSVis[viewerSlot][i] = 1;
-                g_LOSNext[viewerSlot][i] = now + (cacheSeconds > 0.0f ? cacheSeconds : 0.1f);
-                visible = true;
-            }
-            else if (cacheSeconds > 0.0f && g_LOSNext[viewerSlot][i] > now)
-            {
-                visible = g_LOSVis[viewerSlot][i] != 0;
-            }
-            else
-            {
-                visible = HolyPVS_VisibleByLOS(viewer, targetEnt, cacheSeconds);
-                if (cacheSeconds > 0.0f)
-                {
-                    g_LOSVis[viewerSlot][i] = visible ? 1 : 0;
-                    g_LOSNext[viewerSlot][i] = now + cacheSeconds;
-                }
-            }
-        }
-
-        if (!visible)
+        if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))
         {
             pTransmitBits->Clear(i);
             if (pAlwaysBits) pAlwaysBits->Clear(i);
