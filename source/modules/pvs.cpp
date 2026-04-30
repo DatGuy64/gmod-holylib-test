@@ -191,7 +191,12 @@ static int VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
     if (*(uintptr_t*)target < 0x08000000 || *(uintptr_t*)target > 0xf8000000)
         return -1;
 
-    const Vector& origin = target->GetAbsOrigin();
+    // GetAbsOrigin() vtable is broken since April 2026 GMod update.
+    // Read m_vecOrigin directly via DTVarByOffset to avoid vtable call.
+    const Vector* pOrigin = (const Vector*)g_m_vecOrigin_Offset.GetPointer(target);
+    if (!pOrigin)
+        return -1;
+    const Vector origin = *pOrigin;
 
     Msg("[AWH] LOS eye=(%.1f,%.1f,%.1f) origin=(%.1f,%.1f,%.1f)\n",
         viewerEye.x, viewerEye.y, viewerEye.z, origin.x, origin.y, origin.z);
@@ -1449,6 +1454,7 @@ static inline bool StartsWith(const char* s, const char* p)
 }
 
 static DTVarByOffset g_m_hActiveWeapon_Offset("DT_BaseCombatCharacter", "m_hActiveWeapon");
+static DTVarByOffset g_m_vecOrigin_Offset("DT_BaseEntity", "m_vecOrigin");
 
 static inline CBaseEntity* GetActiveWeaponEntity(const void* pPlayer)
 {
