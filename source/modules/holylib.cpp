@@ -308,31 +308,58 @@ LUA_FUNCTION_STATIC(GetLadder)
 
 static bool bInMoveTypeCall = false; // If someone calls SetMoveType inside the hook, we don't want a black hole to form.
 static Detouring::Hook detour_CBaseEntity_SetMoveType;
+
+extern Symbols::CBaseEntity_GetLuaEntity func_CBaseEntity_GetLuaEntity;
+static inline bool HolyLib_CanPushEntityToLua(CBaseEntity* pEnt)
+{
+	if (!pEnt || !g_Lua)
+		return false;
+
+	const CBaseHandle& hEnt = pEnt->GetRefEHandle();
+	int iEntIndex = hEnt.GetEntryIndex();
+
+	if (iEntIndex < 0 || iEntIndex >= MAX_EDICTS)
+		return false;
+
+	CBaseEntity* pCheck = Util::GetCBaseEntityFromIndex(iEntIndex);
+	if (pCheck != pEnt)
+		return false;
+
+	return true;
+}
+
 static void hook_CBaseEntity_SetMoveType(CBaseEntity* pEnt, int iMoveType, int iMoveCollide)
 {
-	int iCurrentMoveType = pEnt->GetMoveType();
-	CBaseHandle pEntHandle = pEnt->GetRefEHandle();
-	if (!bInMoveTypeCall && iCurrentMoveType != iMoveType && pEntHandle.IsValid() && Lua::PushHook("HolyLib:OnMoveTypeChange"))
+	if (!pEnt)
 	{
-		// Uncomment the code below to see if the entity is valid. GetClassname should almost always return a valid class
-		// Msg("hook_CBaseEntity_SetMoveType: %p - %s\n", pEnt, pEnt->GetClassname());
-		
-		EHANDLE* pHandle = g_Lua->NewUserType<EHANDLE>(GarrysMod::Lua::Type::Entity);
-		pHandle->Init(pEntHandle.GetEntryIndex(), pEntHandle.GetSerialNumber());
+		detour_CBaseEntity_SetMoveType
+			.GetTrampoline<Symbols::CBaseEntity_SetMoveType>()(pEnt, iMoveType, iMoveCollide);
+		return;
+	}
 
-		// BUG: We apparently can't push reliably to Lua when being inside the CBaseEntity::CBaseEntity constructor!
-		// See https://github.com/Facepunch/garrysmod-requests/issues/3198
-		//Util::Push_Entity(g_Lua, pEnt);
+	int iCurrentMoveType = pEnt->GetMoveType();
 
+	if (
+		HolyLib_CanPushEntityToLua(pEnt) &&
+		!bInMoveTypeCall &&
+		iCurrentMoveType != iMoveType &&
+		Lua::PushHook("HolyLib:OnMoveTypeChange")
+	)
+	{
+		bInMoveTypeCall = true;
+
+		Util::Push_Entity(g_Lua, pEnt);
 		g_Lua->PushNumber(iCurrentMoveType);
 		g_Lua->PushNumber(iMoveType);
 		g_Lua->PushNumber(iMoveCollide);
-		bInMoveTypeCall = true;
+
 		g_Lua->CallFunctionProtected(5, 0, true);
+
 		bInMoveTypeCall = false;
 	}
 
-	detour_CBaseEntity_SetMoveType.GetTrampoline<Symbols::CBaseEntity_SetMoveType>()(pEnt, iMoveType, iMoveCollide);
+	detour_CBaseEntity_SetMoveType
+		.GetTrampoline<Symbols::CBaseEntity_SetMoveType>()(pEnt, iMoveType, iMoveCollide);
 }
 
 static std::unordered_set<std::string> g_pHideMsg;
