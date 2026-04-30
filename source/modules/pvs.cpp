@@ -100,17 +100,18 @@ static inline int GetClientIndexFromEntity(CBaseEntity* ent)
 
 static CTraceFilterWorldOnly g_HolyLibTraceFilterWorldOnly;
 
-// Bbox corners for LOS check — standard Source Engine player hull
-// Stored as file-scope offsets so they're not recreated on every call
+// Bbox corners for LOS check — slightly oversized player hull to avoid false positives.
+// Order is optimized: head center first (most likely to be visible), then upper corners, then lower.
 static const Vector g_AWHBBoxCorners[8] = {
-    Vector(-15.0f, -15.0f,  5.0f),
-    Vector( 15.0f, -15.0f,  5.0f),
-    Vector(-15.0f,  15.0f,  5.0f),
-    Vector( 15.0f,  15.0f,  5.0f),
-    Vector(-15.0f, -15.0f, 70.0f),
-    Vector( 15.0f, -15.0f, 70.0f),
-    Vector(-15.0f,  15.0f, 70.0f),
-    Vector( 15.0f,  15.0f, 70.0f),
+    Vector(  0.0f,   0.0f, 72.0f), // head center — check this first, fast exit
+    Vector(-18.0f, -18.0f, 70.0f),
+    Vector( 18.0f, -18.0f, 70.0f),
+    Vector(-18.0f,  18.0f, 70.0f),
+    Vector( 18.0f,  18.0f, 70.0f),
+    Vector(-18.0f, -18.0f,  2.0f),
+    Vector( 18.0f, -18.0f,  2.0f),
+    Vector(-18.0f,  18.0f,  2.0f),
+    // skip last lower corner — 7 traces is enough, saves 1 TraceRay per check
 };
 
 static bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target);
@@ -141,7 +142,9 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
 	trace_t tr;
 	Ray_t ray;
 	ray.Init(start, end);
-	enginetrace->TraceRay(ray, MASK_OPAQUE | CONTENTS_IGNORE_NODRAW_OPAQUE, &g_HolyLibTraceFilterWorldOnly, &tr);
+	// MASK_OPAQUE_AND_NPCS covers world brushes + prop_static opaque surfaces.
+	// CTraceFilterWorldOnly ensures dynamic entities (players, props_physics) are ignored.
+	enginetrace->TraceRay(ray, MASK_OPAQUE_AND_NPCS, &g_HolyLibTraceFilterWorldOnly, &tr);
 	return tr.fraction > 0.97f;
 }
 
@@ -191,7 +194,7 @@ static bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
         return false;
     const Vector& origin = *pOrigin;
 
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 7; ++i)
         if (LOS_Clear(viewerEye, origin + g_AWHBBoxCorners[i]))
             return true;
 
