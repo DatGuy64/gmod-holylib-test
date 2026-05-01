@@ -123,42 +123,46 @@ static SOCKET g_GameSocket = INVALID_SOCKET;
 
 static void BuildStaticInfo()
 {
-	Msg(PROJECT_NAME " - playerquery: BuildStaticInfo called\n");
+    Msg(PROJECT_NAME " - playerquery: BuildStaticInfo called\n");
 
-	if (!Util::servergamedll) { Warning(PROJECT_NAME " - playerquery: servergamedll is null!\n"); return; }
-	if (!Util::engineserver) { Warning(PROJECT_NAME " - playerquery: engineserver is null!\n"); return; }
-	if (!g_pFullFileSystem) { Warning(PROJECT_NAME " - playerquery: g_pFullFileSystem is null!\n"); return; }
-	if (!Util::server) { Warning(PROJECT_NAME " - playerquery: server is null!\n"); return; }
+    if (!Util::servergamedll || !Util::engineserver || !g_pFullFileSystem || !Util::server) return;
 
-	g_GameDesc = Util::servergamedll->GetGameDescription();
-	Msg(PROJECT_NAME " - playerquery: GameDesc = %s\n", g_GameDesc.c_str());
+    g_GameDesc = Util::servergamedll->GetGameDescription();
 
-	g_GameDir.resize(256);
-	Util::engineserver->GetGameDir(&g_GameDir[0], (int)g_GameDir.size());
-	g_GameDir.resize(strlen(g_GameDir.c_str()));
-	size_t pos = g_GameDir.find_last_of("\\/");
-	if (pos != std::string::npos)
-		g_GameDir.erase(0, pos + 1);
-	Msg(PROJECT_NAME " - playerquery: GameDir = %s\n", g_GameDir.c_str());
+    char gameDir[256] = {};
+    Util::engineserver->GetGameDir(gameDir, sizeof(gameDir));
+    g_GameDir = gameDir;
+    size_t pos = g_GameDir.find_last_of("\\/");
+    if (pos != std::string::npos)
+        g_GameDir = g_GameDir.substr(pos + 1);
 
-	g_nMaxClients = Util::server->GetMaxClients();
-	g_nUDPPort = Util::server->GetUDPPort();
-	Msg(PROJECT_NAME " - playerquery: MaxClients=%i UDPPort=%i\n", g_nMaxClients, g_nUDPPort);
+    g_nMaxClients = Util::server->GetMaxClients();
+    g_nUDPPort = Util::server->GetUDPPort();
 
-	FileHandle_t file = g_pFullFileSystem->Open("steam.inf", "r", "GAME");
-	if (file)
-	{
-		std::array<char, 256> buff{};
-		if (g_pFullFileSystem->ReadLine(buff.data(), buff.size(), file))
-		{
-			g_GameVersion = &buff[13];
-			size_t p = g_GameVersion.find_first_of("\r\n");
-			if (p != std::string::npos)
-				g_GameVersion.erase(p);
-		}
-		g_pFullFileSystem->Close(file);
-	}
-	Msg(PROJECT_NAME " - playerquery: GameVersion = %s\n", g_GameVersion.c_str());
+    Msg(PROJECT_NAME " - playerquery: MaxClients=%i UDPPort=%i GameDir=%s\n",
+        g_nMaxClients, g_nUDPPort, g_GameDir.c_str());
+
+    FileHandle_t file = g_pFullFileSystem->Open("steam.inf", "r", "GAME");
+    if (file)
+    {
+        char buff[256] = {};
+        if (g_pFullFileSystem->ReadLine(buff, sizeof(buff), file))
+        {
+            // "PatchVersion=2026.04.29" -> on skip "PatchVersion="
+            const char* pVersion = strchr(buff, '=');
+            if (pVersion)
+            {
+                pVersion++; // skip '='
+                g_GameVersion = pVersion;
+                size_t p = g_GameVersion.find_first_of("\r\n");
+                if (p != std::string::npos)
+                    g_GameVersion.erase(p);
+            }
+        }
+        g_pFullFileSystem->Close(file);
+    }
+
+    Msg(PROJECT_NAME " - playerquery: GameVersion=%s\n", g_GameVersion.c_str());
 }
 
 static void BuildReplyInfo()
