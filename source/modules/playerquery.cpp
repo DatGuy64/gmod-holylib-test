@@ -461,7 +461,7 @@ void CPlayerQueryModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServ
 {
 	Msg(PROJECT_NAME " - playerquery: LuaInit called bServerInit=%s\n", bServerInit ? "true" : "false");
 
-	if (!bServerInit) return;
+	if (bServerInit) return;
 
 	Util::StartTable(pLua);
 		Util::AddFunc(pLua, playerquery_SetPlayerCount, "SetPlayerCount");
