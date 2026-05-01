@@ -350,8 +350,7 @@ void CPlayerQueryModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamef
 
 void CPlayerQueryModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 {
-	if (Util::PushTable(pLua, "playerquery"))
-	{
+	Util::StartTable(pLua);
 		Util::AddFunc(pLua, playerquery_SetPlayerCount, "SetPlayerCount");
 		Util::AddFunc(pLua, playerquery_EnableInfoCache, "EnableInfoCache");
 		Util::AddFunc(pLua, playerquery_SetInfoCacheTime, "SetInfoCacheTime");
@@ -360,8 +359,7 @@ void CPlayerQueryModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServ
 		Util::AddFunc(pLua, playerquery_SetMaxQueriesWindow, "SetMaxQueriesWindow");
 		Util::AddFunc(pLua, playerquery_SetMaxQueriesPerSecond, "SetMaxQueriesPerSecond");
 		Util::AddFunc(pLua, playerquery_SetGlobalMaxQueriesPerSecond, "SetGlobalMaxQueriesPerSecond");
-		Util::PopTable(pLua);
-	}
+	Util::FinishTable(pLua, "playerquery");
 }
 
 void CPlayerQueryModule::LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua)
@@ -370,19 +368,7 @@ void CPlayerQueryModule::LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua)
 	g_iPlayerCountOverride = -1;
 	g_bQueryLimiterEnabled = false;
 	g_RecvfromHook.Disable();
-
-	if (Util::PushTable(pLua, "playerquery"))
-	{
-		Util::RemoveField(pLua, "SetPlayerCount");
-		Util::RemoveField(pLua, "EnableInfoCache");
-		Util::RemoveField(pLua, "SetInfoCacheTime");
-		Util::RemoveField(pLua, "RefreshInfoCache");
-		Util::RemoveField(pLua, "EnableQueryLimiter");
-		Util::RemoveField(pLua, "SetMaxQueriesWindow");
-		Util::RemoveField(pLua, "SetMaxQueriesPerSecond");
-		Util::RemoveField(pLua, "SetGlobalMaxQueriesPerSecond");
-		Util::PopTable(pLua);
-	}
+	Util::NukeTable(pLua, "playerquery");
 }
 
 void CPlayerQueryModule::LevelShutdown()
