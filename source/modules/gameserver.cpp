@@ -2473,7 +2473,7 @@ static bool hook_CBaseClient_SetSignonState(CBaseClient* cl, int state, int spaw
 {
 	if (Lua::PushHook("HolyLib:OnSetSignonState"))
 	{
-		Push_CBaseClient(g_Lua, cl);
+		g_Lua->PushUserType(cl, Get_CBaseClient_TypeID());
 		g_Lua->PushNumber(state);
 		g_Lua->PushNumber(spawncount);
 		if (g_Lua->CallFunctionProtected(4, 1, true))
