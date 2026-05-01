@@ -350,8 +350,6 @@ void CPlayerQueryModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamef
 
 void CPlayerQueryModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 {
-	if (bServerInit) return;
-
 	if (Util::PushTable(pLua, "playerquery"))
 	{
 		Util::AddFunc(pLua, playerquery_SetPlayerCount, "SetPlayerCount");
