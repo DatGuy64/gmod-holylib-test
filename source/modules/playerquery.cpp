@@ -168,8 +168,6 @@ static void BuildStaticInfo()
 
 static void BuildReplyInfo()
 {
-	Msg(PROJECT_NAME " - playerquery: BuildReplyInfo START\n");
-
 	if (!Util::server) { Warning(PROJECT_NAME " - playerquery: server null!\n"); return; }
 	if (!Util::engineserver) { Warning(PROJECT_NAME " - playerquery: engineserver null!\n"); return; }
 	if (!g_pFullFileSystem) { Warning(PROJECT_NAME " - playerquery: filesystem null!\n"); return; }
@@ -297,8 +295,6 @@ static ssize_t recvfrom_detour(SOCKET s, void* buf, recvlen_t buflen, int32_t fl
 
 	if (type == 'T')
 	{
-		Msg(PROJECT_NAME " - playerquery: A2S_INFO request from %s, cache=%s\n",
-			inet_ntoa(infrom.sin_addr), g_bInfoCacheEnabled ? "enabled" : "disabled");
 
 		if (!CheckIPRate(infrom.sin_addr.s_addr))
 		{
@@ -311,7 +307,6 @@ static ssize_t recvfrom_detour(SOCKET s, void* buf, recvlen_t buflen, int32_t fl
 			double now = Plat_FloatTime();
 			if (now - g_flInfoCacheLastUpdate >= g_flInfoCacheTime)
 			{
-				Msg(PROJECT_NAME " - playerquery: Cache expired, rebuilding...\n");
 				BuildReplyInfo();
 				g_flInfoCacheLastUpdate = now;
 			}
@@ -323,7 +318,6 @@ static ssize_t recvfrom_detour(SOCKET s, void* buf, recvlen_t buflen, int32_t fl
 				(const sockaddr*)&infrom,
 				sizeof(infrom));
 
-			Msg(PROJECT_NAME " - playerquery: Sent cached response\n");
 			errno = EWOULDBLOCK;
 			return -1;
 		}
