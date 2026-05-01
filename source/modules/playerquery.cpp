@@ -121,6 +121,9 @@ static std::string g_LastGamemodeCategory;
 static std::string g_LastTags;
 static int32_t g_LastNumClients = 0;
 
+// Gamemode name set from Lua (overrides C++ detection)
+static std::string g_GamemodeName = "";
+
 static void BuildStaticInfo()
 {
 	Msg(PROJECT_NAME " - playerquery: BuildStaticInfo called\n");
@@ -207,12 +210,15 @@ static void BuildReplyInfo()
 	std::string gm_name;
 	std::string tags;
 	try {
-		if (pGamemode && !pGamemode->name.empty())
-		{
-			g_LastGamemodeName = pGamemode->name;
-			g_LastGamemodeCategory = pGamemode->category;
+		// Utilise le nom défini depuis Lua en priorité, sinon celui du C++
+		std::string raw_name = !g_GamemodeName.empty() ? g_GamemodeName : (pGamemode ? pGamemode->name : "");
 
-			gm_name = pGamemode->name;
+		if (!raw_name.empty())
+		{
+			g_LastGamemodeName = raw_name;
+			if (pGamemode) g_LastGamemodeCategory = pGamemode->category;
+
+			gm_name = raw_name;
 			static const std::string suffix = "_modded";
 			if (gm_name.size() > suffix.size() &&
 				gm_name.substr(gm_name.size() - suffix.size()) == suffix)
@@ -383,6 +389,13 @@ LUA_FUNCTION_STATIC(playerquery_SetGlobalMaxQueriesPerSecond)
 	return 0;
 }
 
+LUA_FUNCTION_STATIC(playerquery_SetGamemode)
+{
+	g_GamemodeName = LUA->CheckString(1);
+	Msg(PROJECT_NAME " - playerquery: SetGamemode = %s\n", g_GamemodeName.c_str());
+	return 0;
+}
+
 LUA_FUNCTION_STATIC(playerquery_GetDebugInfo)
 {
 	LUA->CreateTable();
@@ -485,6 +498,7 @@ void CPlayerQueryModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServ
 		Util::AddFunc(pLua, playerquery_SetMaxQueriesWindow, "SetMaxQueriesWindow");
 		Util::AddFunc(pLua, playerquery_SetMaxQueriesPerSecond, "SetMaxQueriesPerSecond");
 		Util::AddFunc(pLua, playerquery_SetGlobalMaxQueriesPerSecond, "SetGlobalMaxQueriesPerSecond");
+		Util::AddFunc(pLua, playerquery_SetGamemode, "SetGamemode");
 		Util::AddFunc(pLua, playerquery_GetDebugInfo, "GetDebugInfo");
 	Util::FinishTable(pLua, "playerquery");
 }
@@ -495,6 +509,7 @@ void CPlayerQueryModule::LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua)
 	g_bInfoCacheEnabled = false;
 	g_iPlayerCountOverride = -1;
 	g_bQueryLimiterEnabled = false;
+	g_GamemodeName = "";
 	g_RecvfromHook.Disable();
 	Util::NukeTable(pLua, "playerquery");
 }
