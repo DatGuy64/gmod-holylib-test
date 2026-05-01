@@ -116,7 +116,8 @@ static bool hook_CSteam3Server_NotifyClientConnect(CSteam3Server* srv, CBaseClie
 				g_pApprovedSteamIDs.insert(ulNewSteamID);
 			}
 
-			bRet = bOverride;
+			if (!bRet)
+				bRet = bOverride;
 
 			g_Lua->Pop(1);
 		}
