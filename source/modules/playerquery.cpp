@@ -163,14 +163,18 @@ static void BuildStaticInfo()
     }
 
     Msg(PROJECT_NAME " - playerquery: GameVersion=%s\n", g_GameVersion.c_str());
+	Msg(PROJECT_NAME " - playerquery: BuildStaticInfo DONE\n");
 }
 
 static void BuildReplyInfo()
 {
-	if (!Util::server) { Warning(PROJECT_NAME " - playerquery: BuildReplyInfo - server null!\n"); return; }
-	if (!Util::engineserver) { Warning(PROJECT_NAME " - playerquery: BuildReplyInfo - engineserver null!\n"); return; }
-	if (!g_pFullFileSystem) { Warning(PROJECT_NAME " - playerquery: BuildReplyInfo - filesystem null!\n"); return; }
+	Msg(PROJECT_NAME " - playerquery: BuildReplyInfo START\n");
 
+	if (!Util::server) { Warning(PROJECT_NAME " - playerquery: server null!\n"); return; }
+	if (!Util::engineserver) { Warning(PROJECT_NAME " - playerquery: engineserver null!\n"); return; }
+	if (!g_pFullFileSystem) { Warning(PROJECT_NAME " - playerquery: filesystem null!\n"); return; }
+
+	Msg(PROJECT_NAME " - playerquery: getting server info\n");
 	const char* server_name = Util::server->GetName();
 	const char* map_name = Util::server->GetMapName();
 	int32_t appid = Util::engineserver->GetAppID();
@@ -179,8 +183,8 @@ static void BuildReplyInfo()
 		? g_iPlayerCountOverride
 		: Util::server->GetNumClients();
 
-	Msg(PROJECT_NAME " - playerquery: BuildReplyInfo - name=%s map=%s clients=%i\n",
-		server_name, map_name, num_clients);
+	Msg(PROJECT_NAME " - playerquery: name=%s map=%s clients=%i appid=%i\n",
+		server_name, map_name, num_clients, appid);
 
 	int32_t max_players = sv_visiblemaxplayers ? sv_visiblemaxplayers->GetInt() : -1;
 	if (max_players <= 0 || max_players > g_nMaxClients)
@@ -189,27 +193,49 @@ static void BuildReplyInfo()
 	int32_t num_fake = Util::server->GetNumFakeClients();
 	bool has_password = Util::server->GetPassword() != nullptr;
 
+	Msg(PROJECT_NAME " - playerquery: max=%i fake=%i pass=%i\n", max_players, num_fake, has_password);
+
 	ISteamGameServer* gs = SteamGameServer();
 	bool vac_secure = gs ? gs->BSecure() : false;
 
+	Msg(PROJECT_NAME " - playerquery: getting steamid\n");
 	const CSteamID* sid = Util::engineserver->GetGameServerSteamID();
 	uint64_t steamid = sid ? sid->ConvertToUint64() : 0;
 
+	Msg(PROJECT_NAME " - playerquery: steamid=%llu vac=%i\n", steamid, vac_secure);
+
 	std::string loc = sv_location ? sv_location->GetString() : "";
 
+	Msg(PROJECT_NAME " - playerquery: dynamic_cast\n");
 	CFileSystem_Stdio* pFileSystem = dynamic_cast<CFileSystem_Stdio*>(g_pFullFileSystem);
-	if (!pFileSystem) { Warning(PROJECT_NAME " - playerquery: BuildReplyInfo - dynamic_cast failed!\n"); return; }
+	if (!pFileSystem) { Warning(PROJECT_NAME " - playerquery: dynamic_cast failed!\n"); return; }
 
-	const IGamemodeSystem::Information& gamemode = pFileSystem->Gamemodes()->Active();
+	Msg(PROJECT_NAME " - playerquery: getting gamemode\n");
+	const IGamemodeSystem::Information* pGamemode = nullptr;
+	try {
+		pGamemode = &pFileSystem->Gamemodes()->Active();
+	} catch (...) {
+		Warning(PROJECT_NAME " - playerquery: exception getting gamemode!\n");
+		return;
+	}
 
+	Msg(PROJECT_NAME " - playerquery: building tags\n");
 	std::string tags;
-	if (!gamemode.name.empty()) { tags += "gm:" + gamemode.name; }
-	if (gamemode.workshopid != 0) { if (!tags.empty()) tags += " "; tags += "gmws:" + std::to_string(gamemode.workshopid); }
-	if (!gamemode.category.empty()) { if (!tags.empty()) tags += " "; tags += "gmc:" + gamemode.category; }
-	if (!loc.empty()) { if (!tags.empty()) tags += " "; tags += "loc:" + loc; }
+	try {
+		if (pGamemode && !pGamemode->name.empty()) { tags += "gm:" + pGamemode->name; }
+		if (pGamemode && pGamemode->workshopid != 0) { if (!tags.empty()) tags += " "; tags += "gmws:" + std::to_string(pGamemode->workshopid); }
+		if (pGamemode && !pGamemode->category.empty()) { if (!tags.empty()) tags += " "; tags += "gmc:" + pGamemode->category; }
+		if (!loc.empty()) { if (!tags.empty()) tags += " "; tags += "loc:" + loc; }
+	} catch (...) {
+		Warning(PROJECT_NAME " - playerquery: exception building tags!\n");
+		tags = "";
+	}
+
+	Msg(PROJECT_NAME " - playerquery: tags=%s\n", tags.c_str());
 
 	bool has_tags = !tags.empty();
 
+	Msg(PROJECT_NAME " - playerquery: writing packet\n");
 	g_InfoCachePacket.Reset();
 	g_InfoCachePacket.WriteLong(-1);
 	g_InfoCachePacket.WriteByte('I');
@@ -418,6 +444,7 @@ void CPlayerQueryModule::ServerActivate(edict_t* pEdictList, int edictCount, int
 	}
 
 	BuildStaticInfo();
+	Msg(PROJECT_NAME " - playerquery: ServerActivate done\n");
 }
 
 void CPlayerQueryModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
