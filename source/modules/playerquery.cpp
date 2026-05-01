@@ -157,7 +157,7 @@ static ISteamGameServer* g_pGameServer = nullptr;
 
 // Comme serversecure : BuildStaticReplyInfo calcule les infos statiques
 // incluant gm, gmws, gmc
-static void BuildStaticReplyInfo(bool bWithGamemode = false)
+static void BuildStaticReplyInfo()
 {
 	if (!Util::servergamedll || !Util::engineserver || !g_pFullFileSystem || !Util::server) return;
 
@@ -190,31 +190,7 @@ static void BuildStaticReplyInfo(bool bWithGamemode = false)
 	else
 		g_ReplyInfo.game_version = "2020.10.14";
 
-	// Gamemode tags seulement si demandé (depuis Lua, pas depuis ServerActivate)
-	if (!bWithGamemode) return;
 
-	CFileSystem_Stdio* pFileSystem = dynamic_cast<CFileSystem_Stdio*>(g_pFullFileSystem);
-	if (!pFileSystem) return;
-
-	try {
-		const IGamemodeSystem::Information& gamemode = pFileSystem->Gamemodes()->Active();
-		if (!gamemode.name.empty())
-		{
-			static const std::string_view suffix = "_modded";
-			std::string_view gm_name = gamemode.name;
-			if (gm_name.size() > suffix.size() && gm_name.substr(gm_name.size() - suffix.size()) == suffix)
-				gm_name = gm_name.substr(0, gm_name.size() - suffix.size());
-			g_ReplyInfo.tags.gm = gm_name;
-		}
-		else g_ReplyInfo.tags.gm.clear();
-
-		g_ReplyInfo.tags.gmws = gamemode.workshopid != 0 ? std::to_string(gamemode.workshopid) : "";
-		g_ReplyInfo.tags.gmc = !gamemode.category.empty() ? gamemode.category : "";
-	} catch (...) {
-		g_ReplyInfo.tags.gm.clear();
-		g_ReplyInfo.tags.gmws.clear();
-		g_ReplyInfo.tags.gmc.clear();
-	}
 }
 
 // Comme serversecure : BuildReplyInfo est appelé souvent, utilise les infos statiques
@@ -362,7 +338,7 @@ LUA_FUNCTION_STATIC(playerquery_RefreshInfoCache)
 		Warning(PROJECT_NAME " - playerquery: RefreshInfoCache - interfaces not ready!\n");
 		return 0;
 	}
-	BuildStaticReplyInfo(true);
+	BuildStaticReplyInfo();
 	BuildReplyInfo();
 	g_flInfoCacheLastUpdate = Plat_FloatTime();
 	return 0;
@@ -396,8 +372,6 @@ LUA_FUNCTION_STATIC(playerquery_SetGlobalMaxQueriesPerSecond)
 	return 0;
 }
 
-// SetGamemode permet de forcer gm et gmc depuis Lua
-// exactement comme serversecure.RefreshInfoCache() mais sans recalculer tout
 LUA_FUNCTION_STATIC(playerquery_SetGamemode)
 {
 	const char* name = LUA->CheckString(1);
@@ -507,7 +481,7 @@ void CPlayerQueryModule::ServerActivate(edict_t* pEdictList, int edictCount, int
 		Msg(PROJECT_NAME " - playerquery: recvfrom hooked successfully\n");
 	}
 
-	BuildStaticReplyInfo(false);
+	BuildStaticReplyInfo();
 	Msg(PROJECT_NAME " - playerquery: ServerActivate done\n");
 }
 
