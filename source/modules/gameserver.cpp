@@ -2800,6 +2800,12 @@ static int FindFreeClientSlot()
 static Detouring::Hook detour_CGameClient_SpawnPlayer;
 static void hook_CGameClient_SpawnPlayer(CGameClient* client)
 {
+	if (!client->IsConnected())
+	{
+		Warning(PROJECT_NAME ": SpawnPlayer called on non-connected client, ignoring! (slot %i)\n", client->m_nClientSlot);
+		return;
+	}
+
 	if (client->m_nClientSlot <= MAX_PLAYERS && !gameserver_disablespawnsafety.GetBool())
 	{
 		detour_CGameClient_SpawnPlayer.GetTrampoline<Symbols::CGameClient_SpawnPlayer>()(client);
@@ -2816,13 +2822,11 @@ static void hook_CGameClient_SpawnPlayer(CGameClient* client)
 	CGameClient* pClient = (CGameClient*)Util::GetClientByIndex(nextFreeEntity - 1);
 	if (pClient->m_nSignonState != SIGNONSTATE_NONE)
 	{
-		// It really didn't like what we had planned.
 		Warning(PROJECT_NAME ": Client collision! fk. Client will be refused to spawn! (%i - %s, %i - %s)\n", pClient->m_nClientSlot, pClient->GetClientName(), client->m_nClientSlot, client->GetClientName());
 		return;
 	}
 
 	MoveCGameClientIntoCGameClient(client, pClient);
-	//detour_CGameClient_SpawnPlayer.GetTrampoline<Symbols::CGameClient_SpawnPlayer>()(pClient);
 }
 
 // Called by Util from CSteam3Server::NotifyClientDisconnect
