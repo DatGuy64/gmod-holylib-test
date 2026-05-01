@@ -85,33 +85,39 @@ static bool hook_CSteam3Server_NotifyClientConnect(CSteam3Server* srv, CBaseClie
 		}
 		g_Lua->PushNumber(status);
 
-		if (g_Lua->CallFunctionProtected(5, 1, true))
+	if (g_Lua->CallFunctionProtected(5, 1, true))
+	{
+		bool bOverride = false;
+		uint64 ulNewSteamID = ulSteamID;
+
+		if (g_Lua->IsType(-1, GarrysMod::Lua::Type::Bool))
 		{
-			if (g_Lua->IsType(-1, GarrysMod::Lua::Type::Bool))
-			{
-				bool bOverride = g_Lua->GetBool(-1);
-
-				if (!bRet && bOverride)
-				{
-					client->SetSteamID(steamID);
-
-					func_CSteam3Server_SendUpdatedServerDetails(srv);
-
-					// BUG: Gmod by default refuses to send the ServerInfo since it has some additional checks in CBaseServer::SendPendingServerInfo that prevent it.
-					client->m_bSendServerInfo = true;
-					g_pApprovedClients.push_back(client);
-				}
-
-				if (bOverride) // Steam may not always deny a connection but a steamID may still already be in use.
-				{
-					g_pApprovedSteamIDs.insert(ulSteamID);
-				}
-
-				bRet = bOverride;
-			}
-
-			g_Lua->Pop(1);
+			bOverride = g_Lua->GetBool(-1);
 		}
+		else if (g_Lua->IsType(-1, GarrysMod::Lua::Type::String))
+		{
+			const char* newSteamStr = g_Lua->GetString(-1);
+			ulNewSteamID = strtoull(newSteamStr, nullptr, 0);
+			bOverride = true;
+		}
+
+		if (!bRet && bOverride)
+		{
+			CSteamID newSteamID(ulNewSteamID);
+			client->SetSteamID(newSteamID);
+			func_CSteam3Server_SendUpdatedServerDetails(srv);
+			client->m_bSendServerInfo = true;
+			g_pApprovedClients.push_back(client);
+		}
+
+		if (bOverride)
+		{
+			g_pApprovedSteamIDs.insert(ulNewSteamID);
+		}
+
+		bRet = bOverride;
+
+		g_Lua->Pop(1);
 	}
 
 	return bRet;
