@@ -2524,6 +2524,7 @@ void PackEntities_Normal(int clientCount, CGameClient **clients, CFrameSnapshot 
 		for (int iClient = 0; iClient < clientCount; ++iClient)
 		{
 			const CClientFrame *frame = clients[iClient]->m_pCurrentFrame;
+			if (!frame) continue;
 			for (int iValidEdict = 0; iValidEdict < snapshot->m_nValidEntities; ++iValidEdict)
 			{
 				const int index = snapshot->m_pValidEntities[iValidEdict];
