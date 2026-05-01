@@ -219,10 +219,26 @@ static void BuildReplyInfo()
 		return;
 	}
 
+	Msg(PROJECT_NAME " - playerquery: gamemode name=%s category=%s workshopid=%llu\n",
+		pGamemode ? pGamemode->name.c_str() : "null",
+		pGamemode ? pGamemode->category.c_str() : "null",
+		pGamemode ? pGamemode->workshopid : 0);
+
 	Msg(PROJECT_NAME " - playerquery: building tags\n");
 	std::string tags;
 	try {
-		if (pGamemode && !pGamemode->name.empty()) { tags += "gm:" + pGamemode->name; }
+		if (pGamemode && !pGamemode->name.empty())
+		{
+			std::string_view gm_name = pGamemode->name;
+			static const std::string_view suffix = "_modded";
+			if (gm_name.size() > suffix.size() &&
+				gm_name.substr(gm_name.size() - suffix.size()) == suffix)
+			{
+				gm_name = gm_name.substr(0, gm_name.size() - suffix.size());
+			}
+			tags += "gm:";
+			tags += gm_name;
+		}
 		if (pGamemode && pGamemode->workshopid != 0) { if (!tags.empty()) tags += " "; tags += "gmws:" + std::to_string(pGamemode->workshopid); }
 		if (pGamemode && !pGamemode->category.empty()) { if (!tags.empty()) tags += " "; tags += "gmc:" + pGamemode->category; }
 		if (!loc.empty()) { if (!tags.empty()) tags += " "; tags += "loc:" + loc; }
