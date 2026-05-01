@@ -2504,25 +2504,18 @@ static Detouring::Hook detour_PackEntities_Normal;
 void PackEntities_Normal(int clientCount, CGameClient **clients, CFrameSnapshot *snapshot)
 {
 	Assert( snapshot->m_nValidEntities >= 0 && snapshot->m_nValidEntities <= MAX_EDICTS );
-	// tmZoneFiltered( TELEMETRY_LEVEL0, 50, TMZF_NONE, "%s %d", __FUNCTION__, snapshot->m_nValidEntities );
 
 	g_nEntityTransmitCache.FinishNetworking();
 
 	int workItemCount = 0;
 	static PackWork_t workItems[MAX_EDICTS];
-	/*
-		Formerly used CUtlVectorFixed< PackWork_t, MAX_EDICTS > workItems(0, snapshot->m_nValidEntities);
-		But there is no point in allocating the entire thing every time we call, instead we can keep it static and keep track of the count.
-
-		Entries from previous frames will remain but that shouldn't be a issue,
-		since we use workItemCount to keep track of how many entries we actually have for this update.
-	*/
 
 	if (!gpGlobals || (g_pGlobalTransmitTickCache.IsNewTick(gpGlobals->tickcount)))
 	{
 		bool seen[MAX_EDICTS] = {false};
 		for (int iClient = 0; iClient < clientCount; ++iClient)
 		{
+			if (!clients[iClient]) continue;
 			const CClientFrame *frame = clients[iClient]->m_pCurrentFrame;
 			if (!frame) continue;
 			for (int iValidEdict = 0; iValidEdict < snapshot->m_nValidEntities; ++iValidEdict)
