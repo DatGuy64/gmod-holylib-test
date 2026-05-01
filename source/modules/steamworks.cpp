@@ -114,6 +114,7 @@ static bool hook_CSteam3Server_NotifyClientConnect(CSteam3Server* srv, CBaseClie
 			if (bOverride)
 			{
 				g_pApprovedSteamIDs.insert(ulNewSteamID);
+				func_CSteam3Server_SendUpdatedServerDetails(srv);
 			}
 
 			if (!bRet)
