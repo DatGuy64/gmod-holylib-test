@@ -14,7 +14,6 @@
 #include <map>
 #include <array>
 #include <string>
-#include <string_view>
 
 #if defined SYSTEM_POSIX
 #include <arpa/inet.h>
@@ -79,7 +78,10 @@ static bool CheckIPRate(uint32_t addr)
 	{
 		g_nGlobalCount++;
 		if (g_nGlobalCount / g_flMaxQueriesWindow >= g_flGlobalMaxQueriesPerSecond)
+		{
+			Msg(PROJECT_NAME " - playerquery: Global rate limit hit\n");
 			return false;
+		}
 	}
 
 	auto& info = g_ClientRates[addr];
@@ -92,7 +94,10 @@ static bool CheckIPRate(uint32_t addr)
 	{
 		info.count++;
 		if (info.count / g_flMaxQueriesWindow >= g_flMaxQueriesPerSecond)
+		{
+			Msg(PROJECT_NAME " - playerquery: Per-IP rate limit hit\n");
 			return false;
+		}
 	}
 
 	return true;
@@ -118,52 +123,58 @@ static SOCKET g_GameSocket = INVALID_SOCKET;
 
 static void BuildStaticInfo()
 {
-	Msg(PROJECT_NAME " - playerquery: BuildStaticInfo called\n");
+    Msg(PROJECT_NAME " - playerquery: BuildStaticInfo called\n");
 
-	if (!Util::servergamedll || !Util::engineserver || !g_pFullFileSystem || !Util::server) return;
+    if (!Util::servergamedll || !Util::engineserver || !g_pFullFileSystem || !Util::server) return;
 
-	g_GameDesc = Util::servergamedll->GetGameDescription();
+    g_GameDesc = Util::servergamedll->GetGameDescription();
 
-	char gameDir[256] = {};
-	Util::engineserver->GetGameDir(gameDir, sizeof(gameDir));
-	g_GameDir = gameDir;
-	size_t pos = g_GameDir.find_last_of("\\/");
-	if (pos != std::string::npos)
-		g_GameDir = g_GameDir.substr(pos + 1);
+    char gameDir[256] = {};
+    Util::engineserver->GetGameDir(gameDir, sizeof(gameDir));
+    g_GameDir = gameDir;
+    size_t pos = g_GameDir.find_last_of("\\/");
+    if (pos != std::string::npos)
+        g_GameDir = g_GameDir.substr(pos + 1);
 
-	g_nMaxClients = Util::server->GetMaxClients();
-	g_nUDPPort = Util::server->GetUDPPort();
+    g_nMaxClients = Util::server->GetMaxClients();
+    g_nUDPPort = Util::server->GetUDPPort();
 
-	Msg(PROJECT_NAME " - playerquery: MaxClients=%i UDPPort=%i GameDir=%s\n",
-		g_nMaxClients, g_nUDPPort, g_GameDir.c_str());
+    Msg(PROJECT_NAME " - playerquery: MaxClients=%i UDPPort=%i GameDir=%s\n",
+        g_nMaxClients, g_nUDPPort, g_GameDir.c_str());
 
-	FileHandle_t file = g_pFullFileSystem->Open("steam.inf", "r", "GAME");
-	if (file)
-	{
-		char buff[256] = {};
-		if (g_pFullFileSystem->ReadLine(buff, sizeof(buff), file))
-		{
-			const char* pVersion = strchr(buff, '=');
-			if (pVersion)
-			{
-				pVersion++;
-				g_GameVersion = pVersion;
-				size_t p = g_GameVersion.find_first_of("\r\n");
-				if (p != std::string::npos)
-					g_GameVersion.erase(p);
-			}
-		}
-		g_pFullFileSystem->Close(file);
-	}
+    FileHandle_t file = g_pFullFileSystem->Open("steam.inf", "r", "GAME");
+    if (file)
+    {
+        char buff[256] = {};
+        if (g_pFullFileSystem->ReadLine(buff, sizeof(buff), file))
+        {
+            // "PatchVersion=2026.04.29" -> on skip "PatchVersion="
+            const char* pVersion = strchr(buff, '=');
+            if (pVersion)
+            {
+                pVersion++; // skip '='
+                g_GameVersion = pVersion;
+                size_t p = g_GameVersion.find_first_of("\r\n");
+                if (p != std::string::npos)
+                    g_GameVersion.erase(p);
+            }
+        }
+        g_pFullFileSystem->Close(file);
+    }
 
-	Msg(PROJECT_NAME " - playerquery: GameVersion=%s\n", g_GameVersion.c_str());
+    Msg(PROJECT_NAME " - playerquery: GameVersion=%s\n", g_GameVersion.c_str());
 	Msg(PROJECT_NAME " - playerquery: BuildStaticInfo DONE\n");
 }
 
 static void BuildReplyInfo()
 {
-	if (!Util::server || !Util::engineserver || !g_pFullFileSystem) return;
+	Msg(PROJECT_NAME " - playerquery: BuildReplyInfo START\n");
 
+	if (!Util::server) { Warning(PROJECT_NAME " - playerquery: server null!\n"); return; }
+	if (!Util::engineserver) { Warning(PROJECT_NAME " - playerquery: engineserver null!\n"); return; }
+	if (!g_pFullFileSystem) { Warning(PROJECT_NAME " - playerquery: filesystem null!\n"); return; }
+
+	Msg(PROJECT_NAME " - playerquery: getting server info\n");
 	const char* server_name = Util::server->GetName();
 	const char* map_name = Util::server->GetMapName();
 	int32_t appid = Util::engineserver->GetAppID();
@@ -172,6 +183,9 @@ static void BuildReplyInfo()
 		? g_iPlayerCountOverride
 		: Util::server->GetNumClients();
 
+	Msg(PROJECT_NAME " - playerquery: name=%s map=%s clients=%i appid=%i\n",
+		server_name, map_name, num_clients, appid);
+
 	int32_t max_players = sv_visiblemaxplayers ? sv_visiblemaxplayers->GetInt() : -1;
 	if (max_players <= 0 || max_players > g_nMaxClients)
 		max_players = g_nMaxClients;
@@ -179,47 +193,61 @@ static void BuildReplyInfo()
 	int32_t num_fake = Util::server->GetNumFakeClients();
 	bool has_password = Util::server->GetPassword() != nullptr;
 
+	Msg(PROJECT_NAME " - playerquery: max=%i fake=%i pass=%i\n", max_players, num_fake, has_password);
+
 	ISteamGameServer* gs = SteamGameServer();
 	bool vac_secure = gs ? gs->BSecure() : false;
 
+	Msg(PROJECT_NAME " - playerquery: getting steamid\n");
 	const CSteamID* sid = Util::engineserver->GetGameServerSteamID();
 	uint64_t steamid = sid ? sid->ConvertToUint64() : 0;
 
+	Msg(PROJECT_NAME " - playerquery: steamid=%llu vac=%i\n", steamid, vac_secure);
+
 	std::string loc = sv_location ? sv_location->GetString() : "";
 
+	Msg(PROJECT_NAME " - playerquery: dynamic_cast\n");
 	CFileSystem_Stdio* pFileSystem = dynamic_cast<CFileSystem_Stdio*>(g_pFullFileSystem);
-	if (!pFileSystem) return;
+	if (!pFileSystem) { Warning(PROJECT_NAME " - playerquery: dynamic_cast failed!\n"); return; }
 
+	Msg(PROJECT_NAME " - playerquery: getting gamemode\n");
 	const IGamemodeSystem::Information* pGamemode = nullptr;
 	try {
 		pGamemode = &pFileSystem->Gamemodes()->Active();
 	} catch (...) {
+		Warning(PROJECT_NAME " - playerquery: exception getting gamemode!\n");
 		return;
 	}
 
+	Msg(PROJECT_NAME " - playerquery: building tags\n");
 	std::string tags;
 	try {
 		if (pGamemode && !pGamemode->name.empty())
 		{
-			std::string_view gm_name = pGamemode->name;
-			static const std::string_view suffix = "_modded";
+			std::string gm_name = pGamemode->name;
+			static const std::string suffix = "_modded";
 			if (gm_name.size() > suffix.size() &&
 				gm_name.substr(gm_name.size() - suffix.size()) == suffix)
 			{
 				gm_name = gm_name.substr(0, gm_name.size() - suffix.size());
 			}
-			tags += "gm:";
-			tags += gm_name;
+			tags += "gm:" + gm_name;
+
+			if (!tags.empty()) tags += " ";
+			tags += "gmc:" + gm_name;
 		}
 		if (pGamemode && pGamemode->workshopid != 0) { if (!tags.empty()) tags += " "; tags += "gmws:" + std::to_string(pGamemode->workshopid); }
-		if (pGamemode && !pGamemode->category.empty()) { if (!tags.empty()) tags += " "; tags += "gmc:" + pGamemode->category; }
 		if (!loc.empty()) { if (!tags.empty()) tags += " "; tags += "loc:" + loc; }
 	} catch (...) {
+		Warning(PROJECT_NAME " - playerquery: exception building tags!\n");
 		tags = "";
 	}
 
+	Msg(PROJECT_NAME " - playerquery: tags=%s\n", tags.c_str());
+
 	bool has_tags = !tags.empty();
 
+	Msg(PROJECT_NAME " - playerquery: writing packet\n");
 	g_InfoCachePacket.Reset();
 	g_InfoCachePacket.WriteLong(-1);
 	g_InfoCachePacket.WriteByte('I');
@@ -243,6 +271,9 @@ static void BuildReplyInfo()
 	if (has_tags)
 		g_InfoCachePacket.WriteString(tags.c_str());
 	g_InfoCachePacket.WriteLongLong(appid);
+
+	Msg(PROJECT_NAME " - playerquery: BuildReplyInfo done, packet size=%i\n",
+		g_InfoCachePacket.GetNumBytesWritten());
 }
 
 // ---- Recvfrom hook ----
@@ -268,6 +299,9 @@ static ssize_t recvfrom_detour(SOCKET s, void* buf, recvlen_t buflen, int32_t fl
 
 	if (type == 'T')
 	{
+		Msg(PROJECT_NAME " - playerquery: A2S_INFO request from %s, cache=%s\n",
+			inet_ntoa(infrom.sin_addr), g_bInfoCacheEnabled ? "enabled" : "disabled");
+
 		if (!CheckIPRate(infrom.sin_addr.s_addr))
 		{
 			errno = EWOULDBLOCK;
@@ -279,6 +313,7 @@ static ssize_t recvfrom_detour(SOCKET s, void* buf, recvlen_t buflen, int32_t fl
 			double now = Plat_FloatTime();
 			if (now - g_flInfoCacheLastUpdate >= g_flInfoCacheTime)
 			{
+				Msg(PROJECT_NAME " - playerquery: Cache expired, rebuilding...\n");
 				BuildReplyInfo();
 				g_flInfoCacheLastUpdate = now;
 			}
@@ -290,6 +325,7 @@ static ssize_t recvfrom_detour(SOCKET s, void* buf, recvlen_t buflen, int32_t fl
 				(const sockaddr*)&infrom,
 				sizeof(infrom));
 
+			Msg(PROJECT_NAME " - playerquery: Sent cached response\n");
 			errno = EWOULDBLOCK;
 			return -1;
 		}
@@ -426,8 +462,6 @@ void CPlayerQueryModule::ServerActivate(edict_t* pEdictList, int edictCount, int
 void CPlayerQueryModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 {
 	Msg(PROJECT_NAME " - playerquery: LuaInit called bServerInit=%s\n", bServerInit ? "true" : "false");
-
-	if (bServerInit) return;
 
 	Util::StartTable(pLua);
 		Util::AddFunc(pLua, playerquery_SetPlayerCount, "SetPlayerCount");
