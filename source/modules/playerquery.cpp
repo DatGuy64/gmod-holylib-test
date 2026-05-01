@@ -208,8 +208,8 @@ static void BuildReplyInfo()
 
 	if (pGamemode)
 	{
-		Msg(PROJECT_NAME " - playerquery: gamemode name='%s' category='%s' workshopid=%llu\n",
-			pGamemode->name.c_str(), pGamemode->category.c_str(), pGamemode->workshopid);
+		Msg(PROJECT_NAME " - playerquery: gamemode name='%s' category='%s' workshopid=%u\n",
+			pGamemode->name.c_str(), pGamemode->category.c_str(), (uint32_t)pGamemode->workshopid);
 	}
 
 	std::string gm_name;
