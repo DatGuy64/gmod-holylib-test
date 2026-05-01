@@ -14,6 +14,7 @@
 #include <map>
 #include <array>
 #include <string>
+#include <string_view>
 
 #if defined SYSTEM_POSIX
 #include <arpa/inet.h>
@@ -123,46 +124,45 @@ static SOCKET g_GameSocket = INVALID_SOCKET;
 
 static void BuildStaticInfo()
 {
-    Msg(PROJECT_NAME " - playerquery: BuildStaticInfo called\n");
+	Msg(PROJECT_NAME " - playerquery: BuildStaticInfo called\n");
 
-    if (!Util::servergamedll || !Util::engineserver || !g_pFullFileSystem || !Util::server) return;
+	if (!Util::servergamedll || !Util::engineserver || !g_pFullFileSystem || !Util::server) return;
 
-    g_GameDesc = Util::servergamedll->GetGameDescription();
+	g_GameDesc = Util::servergamedll->GetGameDescription();
 
-    char gameDir[256] = {};
-    Util::engineserver->GetGameDir(gameDir, sizeof(gameDir));
-    g_GameDir = gameDir;
-    size_t pos = g_GameDir.find_last_of("\\/");
-    if (pos != std::string::npos)
-        g_GameDir = g_GameDir.substr(pos + 1);
+	char gameDir[256] = {};
+	Util::engineserver->GetGameDir(gameDir, sizeof(gameDir));
+	g_GameDir = gameDir;
+	size_t pos = g_GameDir.find_last_of("\\/");
+	if (pos != std::string::npos)
+		g_GameDir = g_GameDir.substr(pos + 1);
 
-    g_nMaxClients = Util::server->GetMaxClients();
-    g_nUDPPort = Util::server->GetUDPPort();
+	g_nMaxClients = Util::server->GetMaxClients();
+	g_nUDPPort = Util::server->GetUDPPort();
 
-    Msg(PROJECT_NAME " - playerquery: MaxClients=%i UDPPort=%i GameDir=%s\n",
-        g_nMaxClients, g_nUDPPort, g_GameDir.c_str());
+	Msg(PROJECT_NAME " - playerquery: MaxClients=%i UDPPort=%i GameDir=%s\n",
+		g_nMaxClients, g_nUDPPort, g_GameDir.c_str());
 
-    FileHandle_t file = g_pFullFileSystem->Open("steam.inf", "r", "GAME");
-    if (file)
-    {
-        char buff[256] = {};
-        if (g_pFullFileSystem->ReadLine(buff, sizeof(buff), file))
-        {
-            // "PatchVersion=2026.04.29" -> on skip "PatchVersion="
-            const char* pVersion = strchr(buff, '=');
-            if (pVersion)
-            {
-                pVersion++; // skip '='
-                g_GameVersion = pVersion;
-                size_t p = g_GameVersion.find_first_of("\r\n");
-                if (p != std::string::npos)
-                    g_GameVersion.erase(p);
-            }
-        }
-        g_pFullFileSystem->Close(file);
-    }
+	FileHandle_t file = g_pFullFileSystem->Open("steam.inf", "r", "GAME");
+	if (file)
+	{
+		char buff[256] = {};
+		if (g_pFullFileSystem->ReadLine(buff, sizeof(buff), file))
+		{
+			const char* pVersion = strchr(buff, '=');
+			if (pVersion)
+			{
+				pVersion++;
+				g_GameVersion = pVersion;
+				size_t p = g_GameVersion.find_first_of("\r\n");
+				if (p != std::string::npos)
+					g_GameVersion.erase(p);
+			}
+		}
+		g_pFullFileSystem->Close(file);
+	}
 
-    Msg(PROJECT_NAME " - playerquery: GameVersion=%s\n", g_GameVersion.c_str());
+	Msg(PROJECT_NAME " - playerquery: GameVersion=%s\n", g_GameVersion.c_str());
 	Msg(PROJECT_NAME " - playerquery: BuildStaticInfo DONE\n");
 }
 
@@ -174,7 +174,6 @@ static void BuildReplyInfo()
 	if (!Util::engineserver) { Warning(PROJECT_NAME " - playerquery: engineserver null!\n"); return; }
 	if (!g_pFullFileSystem) { Warning(PROJECT_NAME " - playerquery: filesystem null!\n"); return; }
 
-	Msg(PROJECT_NAME " - playerquery: getting server info\n");
 	const char* server_name = Util::server->GetName();
 	const char* map_name = Util::server->GetMapName();
 	int32_t appid = Util::engineserver->GetAppID();
@@ -198,7 +197,6 @@ static void BuildReplyInfo()
 	ISteamGameServer* gs = SteamGameServer();
 	bool vac_secure = gs ? gs->BSecure() : false;
 
-	Msg(PROJECT_NAME " - playerquery: getting steamid\n");
 	const CSteamID* sid = Util::engineserver->GetGameServerSteamID();
 	uint64_t steamid = sid ? sid->ConvertToUint64() : 0;
 
@@ -206,11 +204,9 @@ static void BuildReplyInfo()
 
 	std::string loc = sv_location ? sv_location->GetString() : "";
 
-	Msg(PROJECT_NAME " - playerquery: dynamic_cast\n");
 	CFileSystem_Stdio* pFileSystem = dynamic_cast<CFileSystem_Stdio*>(g_pFullFileSystem);
 	if (!pFileSystem) { Warning(PROJECT_NAME " - playerquery: dynamic_cast failed!\n"); return; }
 
-	Msg(PROJECT_NAME " - playerquery: getting gamemode\n");
 	const IGamemodeSystem::Information* pGamemode = nullptr;
 	try {
 		pGamemode = &pFileSystem->Gamemodes()->Active();
@@ -224,7 +220,6 @@ static void BuildReplyInfo()
 		pGamemode ? pGamemode->category.c_str() : "null",
 		pGamemode ? pGamemode->workshopid : 0);
 
-	Msg(PROJECT_NAME " - playerquery: building tags\n");
 	std::string tags;
 	try {
 		if (pGamemode && !pGamemode->name.empty())
@@ -251,7 +246,6 @@ static void BuildReplyInfo()
 
 	bool has_tags = !tags.empty();
 
-	Msg(PROJECT_NAME " - playerquery: writing packet\n");
 	g_InfoCachePacket.Reset();
 	g_InfoCachePacket.WriteLong(-1);
 	g_InfoCachePacket.WriteByte('I');
@@ -466,6 +460,8 @@ void CPlayerQueryModule::ServerActivate(edict_t* pEdictList, int edictCount, int
 void CPlayerQueryModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 {
 	Msg(PROJECT_NAME " - playerquery: LuaInit called bServerInit=%s\n", bServerInit ? "true" : "false");
+
+	if (!bServerInit) return;
 
 	Util::StartTable(pLua);
 		Util::AddFunc(pLua, playerquery_SetPlayerCount, "SetPlayerCount");
