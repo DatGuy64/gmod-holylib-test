@@ -168,13 +168,10 @@ static void BuildStaticInfo()
 
 static void BuildReplyInfo()
 {
-	Msg(PROJECT_NAME " - playerquery: BuildReplyInfo START\n");
-
 	if (!Util::server) { Warning(PROJECT_NAME " - playerquery: server null!\n"); return; }
 	if (!Util::engineserver) { Warning(PROJECT_NAME " - playerquery: engineserver null!\n"); return; }
 	if (!g_pFullFileSystem) { Warning(PROJECT_NAME " - playerquery: filesystem null!\n"); return; }
 
-	Msg(PROJECT_NAME " - playerquery: getting server info\n");
 	const char* server_name = Util::server->GetName();
 	const char* map_name = Util::server->GetMapName();
 	int32_t appid = Util::engineserver->GetAppID();
@@ -183,9 +180,6 @@ static void BuildReplyInfo()
 		? g_iPlayerCountOverride
 		: Util::server->GetNumClients();
 
-	Msg(PROJECT_NAME " - playerquery: name=%s map=%s clients=%i appid=%i\n",
-		server_name, map_name, num_clients, appid);
-
 	int32_t max_players = sv_visiblemaxplayers ? sv_visiblemaxplayers->GetInt() : -1;
 	if (max_players <= 0 || max_players > g_nMaxClients)
 		max_players = g_nMaxClients;
@@ -193,24 +187,17 @@ static void BuildReplyInfo()
 	int32_t num_fake = Util::server->GetNumFakeClients();
 	bool has_password = Util::server->GetPassword() != nullptr;
 
-	Msg(PROJECT_NAME " - playerquery: max=%i fake=%i pass=%i\n", max_players, num_fake, has_password);
-
 	ISteamGameServer* gs = SteamGameServer();
 	bool vac_secure = gs ? gs->BSecure() : false;
 
-	Msg(PROJECT_NAME " - playerquery: getting steamid\n");
 	const CSteamID* sid = Util::engineserver->GetGameServerSteamID();
 	uint64_t steamid = sid ? sid->ConvertToUint64() : 0;
 
-	Msg(PROJECT_NAME " - playerquery: steamid=%llu vac=%i\n", steamid, vac_secure);
-
 	std::string loc = sv_location ? sv_location->GetString() : "";
 
-	Msg(PROJECT_NAME " - playerquery: dynamic_cast\n");
 	CFileSystem_Stdio* pFileSystem = dynamic_cast<CFileSystem_Stdio*>(g_pFullFileSystem);
 	if (!pFileSystem) { Warning(PROJECT_NAME " - playerquery: dynamic_cast failed!\n"); return; }
 
-	Msg(PROJECT_NAME " - playerquery: getting gamemode\n");
 	const IGamemodeSystem::Information* pGamemode = nullptr;
 	try {
 		pGamemode = &pFileSystem->Gamemodes()->Active();
@@ -219,35 +206,48 @@ static void BuildReplyInfo()
 		return;
 	}
 
-	Msg(PROJECT_NAME " - playerquery: building tags\n");
+	if (pGamemode)
+	{
+		Msg(PROJECT_NAME " - playerquery: gamemode name='%s' category='%s' workshopid=%llu\n",
+			pGamemode->name.c_str(), pGamemode->category.c_str(), pGamemode->workshopid);
+	}
+
+	std::string gm_name;
 	std::string tags;
 	try {
 		if (pGamemode && !pGamemode->name.empty())
 		{
-			std::string gm_name = pGamemode->name;
+			gm_name = pGamemode->name;
 			static const std::string suffix = "_modded";
 			if (gm_name.size() > suffix.size() &&
 				gm_name.substr(gm_name.size() - suffix.size()) == suffix)
 			{
 				gm_name = gm_name.substr(0, gm_name.size() - suffix.size());
 			}
-			tags += "gm:" + gm_name;
+			Msg(PROJECT_NAME " - playerquery: gm_name after strip='%s'\n", gm_name.c_str());
 
-			if (!tags.empty()) tags += " ";
-			tags += "gmc:" + gm_name;
+			tags += "gm:" + gm_name;
+			tags += " gmc:" + gm_name;
 		}
-		if (pGamemode && pGamemode->workshopid != 0) { if (!tags.empty()) tags += " "; tags += "gmws:" + std::to_string(pGamemode->workshopid); }
-		if (!loc.empty()) { if (!tags.empty()) tags += " "; tags += "loc:" + loc; }
+		if (pGamemode && pGamemode->workshopid != 0)
+		{
+			if (!tags.empty()) tags += " ";
+			tags += "gmws:" + std::to_string(pGamemode->workshopid);
+		}
+		if (!loc.empty())
+		{
+			if (!tags.empty()) tags += " ";
+			tags += "loc:" + loc;
+		}
 	} catch (...) {
 		Warning(PROJECT_NAME " - playerquery: exception building tags!\n");
 		tags = "";
 	}
 
-	Msg(PROJECT_NAME " - playerquery: tags=%s\n", tags.c_str());
+	Msg(PROJECT_NAME " - playerquery: final tags='%s'\n", tags.c_str());
 
 	bool has_tags = !tags.empty();
 
-	Msg(PROJECT_NAME " - playerquery: writing packet\n");
 	g_InfoCachePacket.Reset();
 	g_InfoCachePacket.WriteLong(-1);
 	g_InfoCachePacket.WriteByte('I');
