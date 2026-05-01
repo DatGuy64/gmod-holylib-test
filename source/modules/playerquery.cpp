@@ -157,10 +157,8 @@ static ISteamGameServer* g_pGameServer = nullptr;
 
 // Comme serversecure : BuildStaticReplyInfo calcule les infos statiques
 // incluant gm, gmws, gmc
-static void BuildStaticReplyInfo()
+static void BuildStaticReplyInfo(bool bWithGamemode = false)
 {
-	Msg(PROJECT_NAME " - playerquery: BuildStaticReplyInfo called\n");
-
 	if (!Util::servergamedll || !Util::engineserver || !g_pFullFileSystem || !Util::server) return;
 
 	g_ReplyInfo.game_desc = Util::servergamedll->GetGameDescription();
@@ -177,78 +175,46 @@ static void BuildStaticReplyInfo()
 	g_ReplyInfo.max_clients = Util::server->GetMaxClients();
 	g_ReplyInfo.udp_port = Util::server->GetUDPPort();
 
-	Msg(PROJECT_NAME " - playerquery: MaxClients=%i UDPPort=%i GameDir=%s\n",
-		g_ReplyInfo.max_clients, g_ReplyInfo.udp_port, g_ReplyInfo.game_dir.c_str());
-
-	// Gamemode tags - exactement comme serversecure
-	{
-		CFileSystem_Stdio* pFileSystem = dynamic_cast<CFileSystem_Stdio*>(g_pFullFileSystem);
-		if (pFileSystem)
-		{
-			try {
-				const IGamemodeSystem::Information& gamemode = pFileSystem->Gamemodes()->Active();
-
-				if (!gamemode.name.empty())
-				{
-					static const std::string_view suffix = "_modded";
-					std::string_view gm_name = gamemode.name;
-					if (gm_name.size() > suffix.size() &&
-						gm_name.substr(gm_name.size() - suffix.size()) == suffix)
-					{
-						gm_name = gm_name.substr(0, gm_name.size() - suffix.size());
-					}
-					g_ReplyInfo.tags.gm = gm_name;
-				}
-				else
-					g_ReplyInfo.tags.gm.clear();
-
-				if (gamemode.workshopid != 0)
-					g_ReplyInfo.tags.gmws = std::to_string(gamemode.workshopid);
-				else
-					g_ReplyInfo.tags.gmws.clear();
-
-				if (!gamemode.category.empty())
-					g_ReplyInfo.tags.gmc = gamemode.category;
-				else
-					g_ReplyInfo.tags.gmc.clear();
-
-			} catch (...) {
-				g_ReplyInfo.tags.gm.clear();
-				g_ReplyInfo.tags.gmws.clear();
-				g_ReplyInfo.tags.gmc.clear();
-			}
-		}
-	}
-
 	// Version
+	FileHandle_t file = g_pFullFileSystem->Open("steam.inf", "r", "GAME");
+	if (file)
 	{
-		FileHandle_t file = g_pFullFileSystem->Open("steam.inf", "r", "GAME");
-		if (file)
+		char buff[256] = {};
+		if (g_pFullFileSystem->ReadLine(buff, sizeof(buff), file))
 		{
-			char buff[256] = {};
-			if (g_pFullFileSystem->ReadLine(buff, sizeof(buff), file))
-			{
-				const char* pVersion = strchr(buff, '=');
-				if (pVersion)
-				{
-					pVersion++;
-					g_ReplyInfo.game_version = pVersion;
-					size_t p = g_ReplyInfo.game_version.find_first_of("\r\n");
-					if (p != std::string::npos)
-						g_ReplyInfo.game_version.erase(p);
-				}
-			}
-			g_pFullFileSystem->Close(file);
+			const char* pVersion = strchr(buff, '=');
+			if (pVersion) { pVersion++; g_ReplyInfo.game_version = pVersion; size_t p = g_ReplyInfo.game_version.find_first_of("\r\n"); if (p != std::string::npos) g_ReplyInfo.game_version.erase(p); }
 		}
-		else
-			g_ReplyInfo.game_version = "2020.10.14";
+		g_pFullFileSystem->Close(file);
 	}
+	else
+		g_ReplyInfo.game_version = "2020.10.14";
 
-	Msg(PROJECT_NAME " - playerquery: GameVersion=%s gm=%s gmws=%s gmc=%s\n",
-		g_ReplyInfo.game_version.c_str(),
-		g_ReplyInfo.tags.gm.c_str(),
-		g_ReplyInfo.tags.gmws.c_str(),
-		g_ReplyInfo.tags.gmc.c_str());
+	// Gamemode tags seulement si demandé (depuis Lua, pas depuis ServerActivate)
+	if (!bWithGamemode) return;
+
+	CFileSystem_Stdio* pFileSystem = dynamic_cast<CFileSystem_Stdio*>(g_pFullFileSystem);
+	if (!pFileSystem) return;
+
+	try {
+		const IGamemodeSystem::Information& gamemode = pFileSystem->Gamemodes()->Active();
+		if (!gamemode.name.empty())
+		{
+			static const std::string_view suffix = "_modded";
+			std::string_view gm_name = gamemode.name;
+			if (gm_name.size() > suffix.size() && gm_name.substr(gm_name.size() - suffix.size()) == suffix)
+				gm_name = gm_name.substr(0, gm_name.size() - suffix.size());
+			g_ReplyInfo.tags.gm = gm_name;
+		}
+		else g_ReplyInfo.tags.gm.clear();
+
+		g_ReplyInfo.tags.gmws = gamemode.workshopid != 0 ? std::to_string(gamemode.workshopid) : "";
+		g_ReplyInfo.tags.gmc = !gamemode.category.empty() ? gamemode.category : "";
+	} catch (...) {
+		g_ReplyInfo.tags.gm.clear();
+		g_ReplyInfo.tags.gmws.clear();
+		g_ReplyInfo.tags.gmc.clear();
+	}
 }
 
 // Comme serversecure : BuildReplyInfo est appelé souvent, utilise les infos statiques
@@ -396,7 +362,7 @@ LUA_FUNCTION_STATIC(playerquery_RefreshInfoCache)
 		Warning(PROJECT_NAME " - playerquery: RefreshInfoCache - interfaces not ready!\n");
 		return 0;
 	}
-	BuildStaticReplyInfo();
+	BuildStaticReplyInfo(true);
 	BuildReplyInfo();
 	g_flInfoCacheLastUpdate = Plat_FloatTime();
 	return 0;
@@ -541,7 +507,7 @@ void CPlayerQueryModule::ServerActivate(edict_t* pEdictList, int edictCount, int
 		Msg(PROJECT_NAME " - playerquery: recvfrom hooked successfully\n");
 	}
 
-	BuildStaticReplyInfo();
+	BuildStaticReplyInfo(false);
 	Msg(PROJECT_NAME " - playerquery: ServerActivate done\n");
 }
 
