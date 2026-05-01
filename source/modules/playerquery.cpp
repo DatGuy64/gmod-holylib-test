@@ -38,6 +38,7 @@ class CPlayerQueryModule : public IModule
 {
 public:
 	void Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn) override;
+	void ServerActivate(edict_t* pEdictList, int edictCount, int clientMax) override;
 	void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) override;
 	void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) override;
 	void LevelShutdown() override;
@@ -369,38 +370,48 @@ void CPlayerQueryModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamef
 			sv_visiblemaxplayers ? "found" : "null",
 			sv_location ? "found" : "null");
 	}
+}
 
-	const FunctionPointers::GMOD_GetNetSocket_t GetNetSocket = FunctionPointers::GMOD_GetNetSocket();
-	if (GetNetSocket != nullptr)
+void CPlayerQueryModule::ServerActivate(edict_t* pEdictList, int edictCount, int clientMax)
+{
+	Msg(PROJECT_NAME " - playerquery: ServerActivate called\n");
+
+	if (g_GameSocket == INVALID_SOCKET || g_GameSocket == 0)
 	{
-		const netsocket_t* net_socket = GetNetSocket(1);
-		if (net_socket != nullptr)
+		const FunctionPointers::GMOD_GetNetSocket_t GetNetSocket = FunctionPointers::GMOD_GetNetSocket();
+		if (GetNetSocket != nullptr)
 		{
-			g_GameSocket = net_socket->hUDP;
-			Msg(PROJECT_NAME " - playerquery: GameSocket = %i\n", g_GameSocket);
+			const netsocket_t* net_socket = GetNetSocket(1);
+			if (net_socket != nullptr)
+			{
+				g_GameSocket = net_socket->hUDP;
+				Msg(PROJECT_NAME " - playerquery: GameSocket = %i\n", g_GameSocket);
+			}
+			else
+				Warning(PROJECT_NAME " - playerquery: GetNetSocket returned null!\n");
 		}
 		else
-			Warning(PROJECT_NAME " - playerquery: GetNetSocket returned null!\n");
+			Warning(PROJECT_NAME " - playerquery: GMOD_GetNetSocket not found!\n");
 	}
-	else
-		Warning(PROJECT_NAME " - playerquery: GMOD_GetNetSocket not found!\n");
 
-	if (g_GameSocket == INVALID_SOCKET)
+	if (g_GameSocket == INVALID_SOCKET || g_GameSocket == 0)
 	{
 		Warning(PROJECT_NAME " - playerquery: Failed to get game socket!\n");
 		return;
 	}
 
-	if (!g_RecvfromHook.Create(
-		reinterpret_cast<void*>(recvfrom),
-		reinterpret_cast<void*>(recvfrom_detour)))
+	if (!g_RecvfromHook.IsEnabled())
 	{
-		Warning(PROJECT_NAME " - playerquery: Failed to hook recvfrom!\n");
-		return;
+		if (!g_RecvfromHook.Create(
+			reinterpret_cast<void*>(recvfrom),
+			reinterpret_cast<void*>(recvfrom_detour)))
+		{
+			Warning(PROJECT_NAME " - playerquery: Failed to hook recvfrom!\n");
+			return;
+		}
+		g_RecvfromHook.Enable();
+		Msg(PROJECT_NAME " - playerquery: recvfrom hooked successfully\n");
 	}
-
-	g_RecvfromHook.Enable();
-	Msg(PROJECT_NAME " - playerquery: recvfrom hooked successfully\n");
 
 	BuildStaticInfo();
 }
