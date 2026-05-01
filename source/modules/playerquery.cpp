@@ -208,7 +208,7 @@ static void BuildReplyInfo()
 
 	if (pGamemode)
 	{
-		Msg(PROJECT_NAME " - playerquery: gamemode name='%s' category='%s' workshopid=%u\n",
+		printf("[playerquery] gamemode name='%s' category='%s' workshopid=%u\n",
 			pGamemode->name.c_str(), pGamemode->category.c_str(), (uint32_t)pGamemode->workshopid);
 	}
 
@@ -224,7 +224,7 @@ static void BuildReplyInfo()
 			{
 				gm_name = gm_name.substr(0, gm_name.size() - suffix.size());
 			}
-			Msg(PROJECT_NAME " - playerquery: gm_name after strip='%s'\n", gm_name.c_str());
+			printf("[playerquery] gm_name after strip='%s'\n", gm_name.c_str());
 
 			tags += "gm:" + gm_name;
 			tags += " gmc:" + gm_name;
@@ -244,7 +244,7 @@ static void BuildReplyInfo()
 		tags = "";
 	}
 
-	Msg(PROJECT_NAME " - playerquery: final tags='%s'\n", tags.c_str());
+	printf("[playerquery] final tags='%s'\n", tags.c_str());
 
 	bool has_tags = !tags.empty();
 
