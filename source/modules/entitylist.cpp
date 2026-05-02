@@ -266,17 +266,11 @@ LUA_FUNCTION_STATIC(GetGlobalEntityList)
 void CEntListModule::OnEntityCreated(CBaseEntity* pEntity)
 {
     if (!g_Lua)
-    {
-        Msg("[HolyLib][entitylist] OnEntityCreated: g_Lua is NULL, skipping entity %p\n", pEntity);
         return;
-    }
 
     auto pData = GetEntityListLuaData(g_Lua);
     if (!pData)
-    {
-        Msg("[HolyLib][entitylist] OnEntityCreated: LuaData is NULL, skipping entity %p\n", pEntity);
         return;
-    }
 
     EntityList& pGlobalEntityList = GetGlobalEntityList(g_Lua);
     pGlobalEntityList.FreeEntity(pEntity);
@@ -292,25 +286,16 @@ void CEntListModule::OnEntityDeleted(CBaseEntity* pEntity)
         Msg("Deleted Entity: %p (%i)\n", pEntity, (int)pEntityLists.size());
 
     if (!g_Lua)
-    {
-        Msg("[HolyLib][entitylist] OnEntityDeleted: g_Lua is NULL, skipping entity %p\n", pEntity);
         return;
-    }
 
     auto pData = GetEntityListLuaData(g_Lua);
     if (!pData)
-    {
-        Msg("[HolyLib][entitylist] OnEntityDeleted: LuaData is NULL, skipping entity %p\n", pEntity);
         return;
-    }
 
     for (EntityList* pList : pEntityLists)
     {
         if (!pList)
-        {
-            Msg("[HolyLib][entitylist] OnEntityDeleted: pList is NULL, skipping!\n");
             continue;
-        }
 
         pList->FreeEntity(pEntity);
 

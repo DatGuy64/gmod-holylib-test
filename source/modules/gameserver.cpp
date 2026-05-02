@@ -2471,8 +2471,6 @@ static void hook_CHLTVServer_FillServerInfo(void* srv, SVC_ServerInfo& info)
 static Detouring::Hook detour_CBaseClient_SetSignonState;
 static bool hook_CBaseClient_SetSignonState(CBaseClient* cl, int state, int spawncount)
 {
-	Msg(PROJECT_NAME ": hook_CBaseClient_SetSignonState called - state: %i, connected: %i\n", state, cl->IsConnected());
-
 	if (Lua::PushHook("HolyLib:OnSetSignonState"))
 	{
 		Push_CBaseClient(g_Lua, cl);
