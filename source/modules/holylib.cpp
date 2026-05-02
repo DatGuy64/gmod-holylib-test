@@ -339,6 +339,11 @@ static void hook_CBaseEntity_SetMoveType(CBaseEntity* pEnt, int iMoveType, int i
 
     bool bCanPush = HolyLib_CanPushEntityToLua(pEnt);
 
+    if (!bCanPush)
+    {
+        Msg("[HolyLib][holylib] hook_CBaseEntity_SetMoveType: entity %p failed CanPushEntityToLua (would have crashed), iMoveType=%d iMoveCollide=%d\n", pEnt, iMoveType, iMoveCollide);
+    }
+
     int iCurrentMoveType = bCanPush ? pEnt->GetMoveType() : 0;
 
     if (
