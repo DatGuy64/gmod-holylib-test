@@ -67,34 +67,12 @@ static double g_flGlobalLastReset = 0;
 static bool CheckIPRate(uint32_t addr)
 {
 	if (!g_bQueryLimiterEnabled) return true;
-
 	double now = Plat_FloatTime();
-
-	if (now - g_flGlobalLastReset >= g_flMaxQueriesWindow)
-	{
-		g_flGlobalLastReset = now;
-		g_nGlobalCount = 1;
-	}
-	else
-	{
-		g_nGlobalCount++;
-		if (g_nGlobalCount / g_flMaxQueriesWindow >= g_flGlobalMaxQueriesPerSecond)
-			return false;
-	}
-
+	if (now - g_flGlobalLastReset >= g_flMaxQueriesWindow) { g_flGlobalLastReset = now; g_nGlobalCount = 1; }
+	else { g_nGlobalCount++; if (g_nGlobalCount / g_flMaxQueriesWindow >= g_flGlobalMaxQueriesPerSecond) return false; }
 	auto& info = g_ClientRates[addr];
-	if (now - info.last_reset >= g_flMaxQueriesWindow)
-	{
-		info.last_reset = now;
-		info.count = 1;
-	}
-	else
-	{
-		info.count++;
-		if (info.count / g_flMaxQueriesWindow >= g_flMaxQueriesPerSecond)
-			return false;
-	}
-
+	if (now - info.last_reset >= g_flMaxQueriesWindow) { info.last_reset = now; info.count = 1; }
+	else { info.count++; if (info.count / g_flMaxQueriesWindow >= g_flMaxQueriesPerSecond) return false; }
 	return true;
 }
 
@@ -107,12 +85,12 @@ struct server_tags_t {
 
 static std::string ConcatenateTags(const server_tags_t& tags)
 {
-	std::string strtags;
-	if (!tags.gm.empty()) { strtags += "gm:"; strtags += tags.gm; }
-	if (!tags.gmws.empty()) { strtags += strtags.empty() ? "gmws:" : " gmws:"; strtags += tags.gmws; }
-	if (!tags.gmc.empty()) { strtags += strtags.empty() ? "gmc:" : " gmc:"; strtags += tags.gmc; }
-	if (!tags.loc.empty()) { strtags += strtags.empty() ? "loc:" : " loc:"; strtags += tags.loc; }
-	return strtags;
+	std::string s;
+	if (!tags.gm.empty()) { s += "gm:"; s += tags.gm; }
+	if (!tags.gmws.empty()) { s += s.empty() ? "gmws:" : " gmws:"; s += tags.gmws; }
+	if (!tags.gmc.empty()) { s += s.empty() ? "gmc:" : " gmc:"; s += tags.gmc; }
+	if (!tags.loc.empty()) { s += s.empty() ? "loc:" : " loc:"; s += tags.loc; }
+	return s;
 }
 
 static bool g_bInfoCacheEnabled = false;
@@ -122,10 +100,8 @@ static int g_iPlayerCountOverride = -1;
 static ConVar* sv_visiblemaxplayers = nullptr;
 static ConVar* sv_location = nullptr;
 
-static std::array<char, 1024> g_InfoCacheBuffer{};
-static bf_write g_InfoCachePacket(g_InfoCacheBuffer.data(), (int)g_InfoCacheBuffer.size());
-
-static std::vector<std::vector<char>> g_ExtraPacketBuffers;
+// Tous les packets a envoyer (principal + extras)
+static std::vector<std::vector<char>> g_AllPackets;
 static std::vector<std::string> g_ExtraCategories;
 
 struct reply_info_t {
@@ -174,7 +150,7 @@ static void BuildStaticReplyInfo()
 		g_ReplyInfo.game_version = "2020.10.14";
 }
 
-static void BuildPacketWithTags(std::vector<char>& buffer, const std::string& tags_str, int32_t port)
+static void BuildSinglePacket(std::vector<char>& buffer, const std::string& tags_str, int32_t port)
 {
 	if (!Util::server || !Util::engineserver) return;
 
@@ -194,7 +170,6 @@ static void BuildPacketWithTags(std::vector<char>& buffer, const std::string& ta
 
 	buffer.resize(1024);
 	bf_write pkt(buffer.data(), (int)buffer.size());
-	pkt.Reset();
 	pkt.WriteLong(-1);
 	pkt.WriteByte('I');
 	pkt.WriteByte(17);
@@ -226,36 +201,23 @@ static void BuildReplyInfo()
 	if (sv_location != nullptr) g_ReplyInfo.tags.loc = sv_location->GetString();
 	else g_ReplyInfo.tags.loc.clear();
 
-	const std::string tags = ConcatenateTags(g_ReplyInfo.tags);
+	g_AllPackets.clear();
 
 	// Packet principal avec le vrai port
-	std::vector<char> mainBuf;
-	BuildPacketWithTags(mainBuf, tags, g_ReplyInfo.udp_port);
-	g_InfoCachePacket.Reset();
-	if (!mainBuf.empty())
-	{
-		memcpy(g_InfoCacheBuffer.data(), mainBuf.data(), mainBuf.size());
-		// On repointe g_InfoCachePacket sur le bon nombre d'octets
-		// en resetant et re-ecrivant directement
-		bf_write tmp(g_InfoCacheBuffer.data(), (int)g_InfoCacheBuffer.size());
-		memcpy(g_InfoCacheBuffer.data(), mainBuf.data(), mainBuf.size());
-		// bf_write ne supporte pas SetNumBitsWritten directement,
-		// on reconstruit donc directement dans g_InfoCachePacket
-		g_InfoCachePacket.Reset();
-		for (size_t i = 0; i < mainBuf.size(); ++i)
-			g_InfoCachePacket.WriteByte((uint8_t)mainBuf[i]);
-	}
+	std::vector<char> mainPkt;
+	BuildSinglePacket(mainPkt, ConcatenateTags(g_ReplyInfo.tags), g_ReplyInfo.udp_port);
+	g_AllPackets.push_back(mainPkt);
 
 	// Packets supplementaires avec ports fictifs et categories differentes
-	g_ExtraPacketBuffers.resize(g_ExtraCategories.size());
 	for (size_t i = 0; i < g_ExtraCategories.size(); ++i)
 	{
 		server_tags_t extra_tags = g_ReplyInfo.tags;
 		extra_tags.gmc = g_ExtraCategories[i];
 		extra_tags.gm = g_ExtraCategories[i];
-		const std::string extra_tags_str = ConcatenateTags(extra_tags);
 		int32_t fake_port = g_ReplyInfo.udp_port + (int32_t)(i + 1);
-		BuildPacketWithTags(g_ExtraPacketBuffers[i], extra_tags_str, fake_port);
+		std::vector<char> extraPkt;
+		BuildSinglePacket(extraPkt, ConcatenateTags(extra_tags), fake_port);
+		g_AllPackets.push_back(extraPkt);
 	}
 }
 
@@ -296,17 +258,10 @@ static ssize_t recvfrom_detour(SOCKET s, void* buf, recvlen_t buflen, int32_t fl
 				g_flInfoCacheLastUpdate = now;
 			}
 
-			sendto(s, (const char*)g_InfoCachePacket.GetData(),
-				g_InfoCachePacket.GetNumBytesWritten(), 0,
-				(const sockaddr*)&infrom, sizeof(infrom));
-
-			for (auto& extraBuf : g_ExtraPacketBuffers)
+			for (auto& pkt : g_AllPackets)
 			{
-				if (!extraBuf.empty())
-				{
-					sendto(s, extraBuf.data(), (int)extraBuf.size(), 0,
-						(const sockaddr*)&infrom, sizeof(infrom));
-				}
+				if (!pkt.empty())
+					sendto(s, pkt.data(), (int)pkt.size(), 0, (const sockaddr*)&infrom, sizeof(infrom));
 			}
 
 			errno = EWOULDBLOCK;
@@ -372,14 +327,9 @@ LUA_FUNCTION_STATIC(playerquery_SetGamemode)
 {
 	const char* name = LUA->CheckString(1);
 	std::string gm_name = name;
-
 	static const std::string suffix = "_modded";
-	if (gm_name.size() > suffix.size() &&
-		gm_name.substr(gm_name.size() - suffix.size()) == suffix)
-	{
+	if (gm_name.size() > suffix.size() && gm_name.substr(gm_name.size() - suffix.size()) == suffix)
 		gm_name = gm_name.substr(0, gm_name.size() - suffix.size());
-	}
-
 	g_ReplyInfo.tags.gm = gm_name;
 	g_ReplyInfo.tags.gmc = gm_name;
 	return 0;
@@ -395,39 +345,21 @@ LUA_FUNCTION_STATIC(playerquery_AddExtraCategory)
 LUA_FUNCTION_STATIC(playerquery_ClearExtraCategories)
 {
 	g_ExtraCategories.clear();
-	g_ExtraPacketBuffers.clear();
 	return 0;
 }
 
 LUA_FUNCTION_STATIC(playerquery_GetDebugInfo)
 {
 	LUA->CreateTable();
-
-	LUA->PushString(g_ReplyInfo.tags.gm.c_str());
-	LUA->SetField(-2, "gm");
-
-	LUA->PushString(g_ReplyInfo.tags.gmc.c_str());
-	LUA->SetField(-2, "gmc");
-
-	LUA->PushString(g_ReplyInfo.tags.gmws.c_str());
-	LUA->SetField(-2, "gmws");
-
-	LUA->PushString(g_ReplyInfo.tags.loc.c_str());
-	LUA->SetField(-2, "loc");
-
-	LUA->PushString(g_ReplyInfo.game_dir.c_str());
-	LUA->SetField(-2, "game_dir");
-
-	LUA->PushString(g_ReplyInfo.game_version.c_str());
-	LUA->SetField(-2, "game_version");
-
-	LUA->PushNumber(g_ReplyInfo.max_clients);
-	LUA->SetField(-2, "max_clients");
-
-	std::string tags = ConcatenateTags(g_ReplyInfo.tags);
-	LUA->PushString(tags.c_str());
-	LUA->SetField(-2, "tags");
-
+	LUA->PushString(g_ReplyInfo.tags.gm.c_str()); LUA->SetField(-2, "gm");
+	LUA->PushString(g_ReplyInfo.tags.gmc.c_str()); LUA->SetField(-2, "gmc");
+	LUA->PushString(g_ReplyInfo.tags.gmws.c_str()); LUA->SetField(-2, "gmws");
+	LUA->PushString(g_ReplyInfo.tags.loc.c_str()); LUA->SetField(-2, "loc");
+	LUA->PushString(g_ReplyInfo.game_dir.c_str()); LUA->SetField(-2, "game_dir");
+	LUA->PushString(g_ReplyInfo.game_version.c_str()); LUA->SetField(-2, "game_version");
+	LUA->PushNumber(g_ReplyInfo.max_clients); LUA->SetField(-2, "max_clients");
+	LUA->PushString(ConcatenateTags(g_ReplyInfo.tags).c_str()); LUA->SetField(-2, "tags");
+	LUA->PushNumber((double)g_AllPackets.size()); LUA->SetField(-2, "packet_count");
 	return 1;
 }
 
@@ -492,7 +424,7 @@ void CPlayerQueryModule::LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua)
 	g_iPlayerCountOverride = -1;
 	g_bQueryLimiterEnabled = false;
 	g_ExtraCategories.clear();
-	g_ExtraPacketBuffers.clear();
+	g_AllPackets.clear();
 	g_RecvfromHook.Disable();
 	Util::NukeTable(pLua, "playerquery");
 }
