@@ -271,6 +271,13 @@ void CEntListModule::OnEntityCreated(CBaseEntity* pEntity)
         return;
     }
 
+    auto pData = GetEntityListLuaData(g_Lua);
+    if (!pData)
+    {
+        Msg("[HolyLib][entitylist] OnEntityCreated: LuaData is NULL, skipping entity %p\n", pEntity);
+        return;
+    }
+
     EntityList& pGlobalEntityList = GetGlobalEntityList(g_Lua);
     pGlobalEntityList.FreeEntity(pEntity);
     pGlobalEntityList.AddEntity(pEntity);
@@ -283,6 +290,19 @@ void CEntListModule::OnEntityDeleted(CBaseEntity* pEntity)
 {
     if (g_pEntListModule.InDebug())
         Msg("Deleted Entity: %p (%i)\n", pEntity, (int)pEntityLists.size());
+
+    if (!g_Lua)
+    {
+        Msg("[HolyLib][entitylist] OnEntityDeleted: g_Lua is NULL, skipping entity %p\n", pEntity);
+        return;
+    }
+
+    auto pData = GetEntityListLuaData(g_Lua);
+    if (!pData)
+    {
+        Msg("[HolyLib][entitylist] OnEntityDeleted: LuaData is NULL, skipping entity %p\n", pEntity);
+        return;
+    }
 
     for (EntityList* pList : pEntityLists)
     {
