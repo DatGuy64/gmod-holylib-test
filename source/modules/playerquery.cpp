@@ -470,9 +470,12 @@ LUA_FUNCTION_STATIC(playerquery_GetDebugInfo)
 		LUA->SetField(-2, "port");
 		LUA->PushNumber(g_ExtraSockets[i]->requests_count);
 		LUA->SetField(-2, "requests");
-		LUA->PushString(ConcatenateTags({g_ExtraSockets[i]->category, "", g_ExtraSockets[i]->category, ""}).c_str());
+		server_tags_t et; et.gm = g_ExtraSockets[i]->category; et.gmc = g_ExtraSockets[i]->category;
+		LUA->PushString(ConcatenateTags(et).c_str());
 		LUA->SetField(-2, "tags");
-		LUA->Util::RawSetI(-2, (int)(i + 1));
+		LUA->PushNumber((double)(i + 1));
+		LUA->Insert(-2);
+		LUA->RawSet(-3);
 	}
 	LUA->SetField(-2, "extra_sockets");
 	return 1;
