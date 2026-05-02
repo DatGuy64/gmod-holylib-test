@@ -330,36 +330,35 @@ static inline bool HolyLib_CanPushEntityToLua(CBaseEntity* pEnt)
 
 static void hook_CBaseEntity_SetMoveType(CBaseEntity* pEnt, int iMoveType, int iMoveCollide)
 {
-	if (!pEnt)
-	{
-		detour_CBaseEntity_SetMoveType
-			.GetTrampoline<Symbols::CBaseEntity_SetMoveType>()(pEnt, iMoveType, iMoveCollide);
-		return;
-	}
+    if (!pEnt)
+    {
+        detour_CBaseEntity_SetMoveType
+            .GetTrampoline<Symbols::CBaseEntity_SetMoveType>()(pEnt, iMoveType, iMoveCollide);
+        return;
+    }
 
-	int iCurrentMoveType = pEnt->GetMoveType();
+    bool bCanPush = HolyLib_CanPushEntityToLua(pEnt);
 
-	if (
-		HolyLib_CanPushEntityToLua(pEnt) &&
-		!bInMoveTypeCall &&
-		iCurrentMoveType != iMoveType &&
-		Lua::PushHook("HolyLib:OnMoveTypeChange")
-	)
-	{
-		bInMoveTypeCall = true;
+    int iCurrentMoveType = bCanPush ? pEnt->GetMoveType() : 0;
 
-		Util::Push_Entity(g_Lua, pEnt);
-		g_Lua->PushNumber(iCurrentMoveType);
-		g_Lua->PushNumber(iMoveType);
-		g_Lua->PushNumber(iMoveCollide);
+    if (
+        bCanPush &&
+        !bInMoveTypeCall &&
+        iCurrentMoveType != iMoveType &&
+        Lua::PushHook("HolyLib:OnMoveTypeChange")
+    )
+    {
+        bInMoveTypeCall = true;
+        Util::Push_Entity(g_Lua, pEnt);
+        g_Lua->PushNumber(iCurrentMoveType);
+        g_Lua->PushNumber(iMoveType);
+        g_Lua->PushNumber(iMoveCollide);
+        g_Lua->CallFunctionProtected(5, 0, true);
+        bInMoveTypeCall = false;
+    }
 
-		g_Lua->CallFunctionProtected(5, 0, true);
-
-		bInMoveTypeCall = false;
-	}
-
-	detour_CBaseEntity_SetMoveType
-		.GetTrampoline<Symbols::CBaseEntity_SetMoveType>()(pEnt, iMoveType, iMoveCollide);
+    detour_CBaseEntity_SetMoveType
+        .GetTrampoline<Symbols::CBaseEntity_SetMoveType>()(pEnt, iMoveType, iMoveCollide);
 }
 
 static std::unordered_set<std::string> g_pHideMsg;
