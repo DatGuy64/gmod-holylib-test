@@ -16,16 +16,12 @@
 #include <string>
 #include <string_view>
 #include <vector>
-#include <thread>
-#include <atomic>
 
 #if defined SYSTEM_POSIX
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <errno.h>
-#include <unistd.h>
-#include <fcntl.h>
 typedef int32_t SOCKET;
 typedef size_t recvlen_t;
 static const SOCKET INVALID_SOCKET = -1;
@@ -104,8 +100,8 @@ static int g_iPlayerCountOverride = -1;
 static ConVar* sv_visiblemaxplayers = nullptr;
 static ConVar* sv_location = nullptr;
 
-static std::vector<char> g_MainPacket;
-static std::vector<std::string> g_ExtraCategories;
+static std::array<char, 1024> g_InfoCacheBuffer{};
+static bf_write g_InfoCachePacket(g_InfoCacheBuffer.data(), (int)g_InfoCacheBuffer.size());
 
 struct reply_info_t {
 	std::string game_dir;
@@ -119,19 +115,6 @@ struct reply_info_t {
 static reply_info_t g_ReplyInfo;
 static SOCKET g_GameSocket = INVALID_SOCKET;
 static ISteamGameServer* g_pGameServer = nullptr;
-
-// Extra sockets pour les categories supplementaires
-struct ExtraSocket {
-	SOCKET sock = INVALID_SOCKET;
-	int32_t port = 0;
-	std::string category;
-	std::vector<char> packet;
-	std::thread thread;
-	std::atomic<bool> running{false};
-	std::atomic<int> requests_count{0};
-};
-
-static std::vector<ExtraSocket*> g_ExtraSockets;
 
 static void BuildStaticReplyInfo()
 {
@@ -166,9 +149,15 @@ static void BuildStaticReplyInfo()
 		g_ReplyInfo.game_version = "2020.10.14";
 }
 
-static void BuildSinglePacket(std::vector<char>& buffer, const std::string& tags_str, int32_t port)
+static void BuildReplyInfo()
 {
 	if (!Util::server || !Util::engineserver) return;
+
+	if (sv_location != nullptr) g_ReplyInfo.tags.loc = sv_location->GetString();
+	else g_ReplyInfo.tags.loc.clear();
+
+	const std::string tags = ConcatenateTags(g_ReplyInfo.tags);
+	const bool has_tags = !tags.empty();
 
 	const char* server_name = Util::server->GetName();
 	const char* map_name = Util::server->GetMapName();
@@ -182,140 +171,29 @@ static void BuildSinglePacket(std::vector<char>& buffer, const std::string& tags
 	bool vac_secure = g_pGameServer ? g_pGameServer->BSecure() : false;
 	const CSteamID* sid = Util::engineserver->GetGameServerSteamID();
 	uint64_t steamid = sid ? sid->ConvertToUint64() : 0;
-	bool has_tags = !tags_str.empty();
 
-	buffer.resize(1024);
-	bf_write pkt(buffer.data(), (int)buffer.size());
-	pkt.WriteLong(-1);
-	pkt.WriteByte('I');
-	pkt.WriteByte(17);
-	pkt.WriteString(server_name);
-	pkt.WriteString(map_name);
-	pkt.WriteString(g_ReplyInfo.game_dir.c_str());
-	pkt.WriteString(g_ReplyInfo.game_desc.c_str());
-	pkt.WriteShort(appid);
-	pkt.WriteByte(num_clients);
-	pkt.WriteByte(max_players);
-	pkt.WriteByte(num_fake);
-	pkt.WriteByte('d');
-	pkt.WriteByte('l');
-	pkt.WriteByte(has_password ? 1 : 0);
-	pkt.WriteByte((int)vac_secure);
-	pkt.WriteString(g_ReplyInfo.game_version.c_str());
-	pkt.WriteByte(0x80 | 0x10 | (has_tags ? 0x20 : 0x00) | 0x01);
-	pkt.WriteShort(port);
-	pkt.WriteLongLong((int64_t)steamid);
-	if (has_tags) pkt.WriteString(tags_str.c_str());
-	pkt.WriteLongLong(appid);
-	buffer.resize(pkt.GetNumBytesWritten());
-}
-
-static void BuildReplyInfo()
-{
-	if (!Util::server || !Util::engineserver) return;
-
-	if (sv_location != nullptr) g_ReplyInfo.tags.loc = sv_location->GetString();
-	else g_ReplyInfo.tags.loc.clear();
-
-	BuildSinglePacket(g_MainPacket, ConcatenateTags(g_ReplyInfo.tags), g_ReplyInfo.udp_port);
-
-	// Mettre a jour les packets des extra sockets
-	for (auto* es : g_ExtraSockets)
-	{
-		server_tags_t extra_tags = g_ReplyInfo.tags;
-		extra_tags.gmc = es->category;
-		extra_tags.gm = es->category;
-		BuildSinglePacket(es->packet, ConcatenateTags(extra_tags), es->port);
-	}
-}
-
-// Thread qui ecoute sur un socket supplementaire et repond aux A2S_INFO
-static void ExtraSocketThread(ExtraSocket* es)
-{
-	char buf[2048];
-	while (es->running)
-	{
-		sockaddr_in from{};
-		socklen_t fromlen = sizeof(from);
-
-		fd_set readfds;
-		FD_ZERO(&readfds);
-		FD_SET(es->sock, &readfds);
-		timeval tv = {0, 100000}; // 100ms timeout
-		int ret = select(es->sock + 1, &readfds, nullptr, nullptr, &tv);
-		if (ret <= 0) continue;
-
-		ssize_t len = recvfrom(es->sock, buf, sizeof(buf), 0, (sockaddr*)&from, &fromlen);
-		if (len < 5) continue;
-
-		bf_read pkt((uint8_t*)buf, len);
-		int32_t channel = (int32_t)pkt.ReadLong();
-		if (channel != -1) continue;
-
-		uint8_t type = (uint8_t)pkt.ReadByte();
-		if (type != 'T') continue;
-
-		es->requests_count++;
-		if (!es->packet.empty())
-		{
-			sendto(es->sock, es->packet.data(), (int)es->packet.size(), 0,
-				(const sockaddr*)&from, fromlen);
-		}
-	}
-}
-
-static void CloseExtraSockets()
-{
-	for (auto* es : g_ExtraSockets)
-	{
-		es->running = false;
-		if (es->thread.joinable())
-			es->thread.join();
-		if (es->sock != INVALID_SOCKET)
-		{
-			close(es->sock);
-			es->sock = INVALID_SOCKET;
-		}
-		delete es;
-	}
-	g_ExtraSockets.clear();
-}
-
-static bool OpenExtraSocket(const std::string& category, int32_t port)
-{
-	SOCKET sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	if (sock == INVALID_SOCKET) return false;
-
-	// Rendre le socket non-bloquant
-	int flags = fcntl(sock, F_GETFL, 0);
-	fcntl(sock, F_SETFL, flags | O_NONBLOCK);
-
-	// Permettre la reutilisation du port
-	int opt = 1;
-	setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-	sockaddr_in addr{};
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = INADDR_ANY;
-	addr.sin_port = htons((uint16_t)port);
-
-	if (bind(sock, (const sockaddr*)&addr, sizeof(addr)) < 0)
-	{
-		close(sock);
-		Warning(PROJECT_NAME " - playerquery: Failed to bind extra socket on port %i\n", port);
-		return false;
-	}
-
-	ExtraSocket* es = new ExtraSocket();
-	es->sock = sock;
-	es->port = port;
-	es->category = category;
-	es->running = true;
-	es->thread = std::thread(ExtraSocketThread, es);
-	g_ExtraSockets.push_back(es);
-
-	Msg(PROJECT_NAME " - playerquery: Extra socket opened on port %i for category '%s'\n", port, category.c_str());
-	return true;
+	g_InfoCachePacket.Reset();
+	g_InfoCachePacket.WriteLong(-1);
+	g_InfoCachePacket.WriteByte('I');
+	g_InfoCachePacket.WriteByte(17);
+	g_InfoCachePacket.WriteString(server_name);
+	g_InfoCachePacket.WriteString(map_name);
+	g_InfoCachePacket.WriteString(g_ReplyInfo.game_dir.c_str());
+	g_InfoCachePacket.WriteString(g_ReplyInfo.game_desc.c_str());
+	g_InfoCachePacket.WriteShort(appid);
+	g_InfoCachePacket.WriteByte(num_clients);
+	g_InfoCachePacket.WriteByte(max_players);
+	g_InfoCachePacket.WriteByte(num_fake);
+	g_InfoCachePacket.WriteByte('d');
+	g_InfoCachePacket.WriteByte('l');
+	g_InfoCachePacket.WriteByte(has_password ? 1 : 0);
+	g_InfoCachePacket.WriteByte((int)vac_secure);
+	g_InfoCachePacket.WriteString(g_ReplyInfo.game_version.c_str());
+	g_InfoCachePacket.WriteByte(0x80 | 0x10 | (has_tags ? 0x20 : 0x00) | 0x01);
+	g_InfoCachePacket.WriteShort(g_ReplyInfo.udp_port);
+	g_InfoCachePacket.WriteLongLong((int64_t)steamid);
+	if (has_tags) g_InfoCachePacket.WriteString(tags.c_str());
+	g_InfoCachePacket.WriteLongLong(appid);
 }
 
 using recvfrom_t = ssize_t(*)(SOCKET, void*, recvlen_t, int32_t, sockaddr*, socklen_t*);
@@ -355,9 +233,9 @@ static ssize_t recvfrom_detour(SOCKET s, void* buf, recvlen_t buflen, int32_t fl
 				g_flInfoCacheLastUpdate = now;
 			}
 
-			if (!g_MainPacket.empty())
-				sendto(s, g_MainPacket.data(), (int)g_MainPacket.size(), 0,
-					(const sockaddr*)&infrom, sizeof(infrom));
+			sendto(s, (const char*)g_InfoCachePacket.GetData(),
+				g_InfoCachePacket.GetNumBytesWritten(), 0,
+				(const sockaddr*)&infrom, sizeof(infrom));
 
 			errno = EWOULDBLOCK;
 			return -1;
@@ -430,24 +308,6 @@ LUA_FUNCTION_STATIC(playerquery_SetGamemode)
 	return 0;
 }
 
-// Ouvre un vrai socket UDP sur un port supplementaire pour apparaitre dans une autre categorie
-LUA_FUNCTION_STATIC(playerquery_AddExtraCategory)
-{
-	const char* category = LUA->CheckString(1);
-	int32_t port = (int32_t)LUA->CheckNumber(2);
-
-	bool ok = OpenExtraSocket(category, port);
-	LUA->PushBool(ok);
-	return 1;
-}
-
-LUA_FUNCTION_STATIC(playerquery_ClearExtraCategories)
-{
-	CloseExtraSockets();
-	g_ExtraCategories.clear();
-	return 0;
-}
-
 LUA_FUNCTION_STATIC(playerquery_GetDebugInfo)
 {
 	LUA->CreateTable();
@@ -459,25 +319,6 @@ LUA_FUNCTION_STATIC(playerquery_GetDebugInfo)
 	LUA->PushString(g_ReplyInfo.game_version.c_str()); LUA->SetField(-2, "game_version");
 	LUA->PushNumber(g_ReplyInfo.max_clients); LUA->SetField(-2, "max_clients");
 	LUA->PushString(ConcatenateTags(g_ReplyInfo.tags).c_str()); LUA->SetField(-2, "tags");
-	// Table avec les infos de chaque extra socket
-	LUA->CreateTable();
-	for (size_t i = 0; i < g_ExtraSockets.size(); ++i)
-	{
-		LUA->CreateTable();
-		LUA->PushString(g_ExtraSockets[i]->category.c_str());
-		LUA->SetField(-2, "category");
-		LUA->PushNumber(g_ExtraSockets[i]->port);
-		LUA->SetField(-2, "port");
-		LUA->PushNumber(g_ExtraSockets[i]->requests_count);
-		LUA->SetField(-2, "requests");
-		server_tags_t et; et.gm = g_ExtraSockets[i]->category; et.gmc = g_ExtraSockets[i]->category;
-		LUA->PushString(ConcatenateTags(et).c_str());
-		LUA->SetField(-2, "tags");
-		LUA->PushNumber((double)(i + 1));
-		LUA->Insert(-2);
-		LUA->RawSet(-3);
-	}
-	LUA->SetField(-2, "extra_sockets");
 	return 1;
 }
 
@@ -530,8 +371,6 @@ void CPlayerQueryModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServ
 		Util::AddFunc(pLua, playerquery_SetMaxQueriesPerSecond, "SetMaxQueriesPerSecond");
 		Util::AddFunc(pLua, playerquery_SetGlobalMaxQueriesPerSecond, "SetGlobalMaxQueriesPerSecond");
 		Util::AddFunc(pLua, playerquery_SetGamemode, "SetGamemode");
-		Util::AddFunc(pLua, playerquery_AddExtraCategory, "AddExtraCategory");
-		Util::AddFunc(pLua, playerquery_ClearExtraCategories, "ClearExtraCategories");
 		Util::AddFunc(pLua, playerquery_GetDebugInfo, "GetDebugInfo");
 	Util::FinishTable(pLua, "playerquery");
 }
@@ -541,8 +380,6 @@ void CPlayerQueryModule::LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua)
 	g_bInfoCacheEnabled = false;
 	g_iPlayerCountOverride = -1;
 	g_bQueryLimiterEnabled = false;
-	CloseExtraSockets();
-	g_ExtraCategories.clear();
 	g_RecvfromHook.Disable();
 	Util::NukeTable(pLua, "playerquery");
 }
