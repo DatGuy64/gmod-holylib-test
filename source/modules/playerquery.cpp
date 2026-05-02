@@ -128,6 +128,7 @@ struct ExtraSocket {
 	std::vector<char> packet;
 	std::thread thread;
 	std::atomic<bool> running{false};
+	std::atomic<int> requests_count{0};
 };
 
 static std::vector<ExtraSocket*> g_ExtraSockets;
@@ -254,6 +255,7 @@ static void ExtraSocketThread(ExtraSocket* es)
 		uint8_t type = (uint8_t)pkt.ReadByte();
 		if (type != 'T') continue;
 
+		es->requests_count++;
 		if (!es->packet.empty())
 		{
 			sendto(es->sock, es->packet.data(), (int)es->packet.size(), 0,
@@ -457,7 +459,22 @@ LUA_FUNCTION_STATIC(playerquery_GetDebugInfo)
 	LUA->PushString(g_ReplyInfo.game_version.c_str()); LUA->SetField(-2, "game_version");
 	LUA->PushNumber(g_ReplyInfo.max_clients); LUA->SetField(-2, "max_clients");
 	LUA->PushString(ConcatenateTags(g_ReplyInfo.tags).c_str()); LUA->SetField(-2, "tags");
-	LUA->PushNumber((double)g_ExtraSockets.size()); LUA->SetField(-2, "extra_sockets");
+	// Table avec les infos de chaque extra socket
+	LUA->CreateTable();
+	for (size_t i = 0; i < g_ExtraSockets.size(); ++i)
+	{
+		LUA->CreateTable();
+		LUA->PushString(g_ExtraSockets[i]->category.c_str());
+		LUA->SetField(-2, "category");
+		LUA->PushNumber(g_ExtraSockets[i]->port);
+		LUA->SetField(-2, "port");
+		LUA->PushNumber(g_ExtraSockets[i]->requests_count);
+		LUA->SetField(-2, "requests");
+		LUA->PushString(ConcatenateTags({g_ExtraSockets[i]->category, "", g_ExtraSockets[i]->category, ""}).c_str());
+		LUA->SetField(-2, "tags");
+		LUA->RawSetI(-2, (int)(i + 1));
+	}
+	LUA->SetField(-2, "extra_sockets");
 	return 1;
 }
 
