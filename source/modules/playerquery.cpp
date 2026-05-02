@@ -108,12 +108,10 @@ struct server_tags_t {
 static std::string ConcatenateTags(const server_tags_t& tags)
 {
 	std::string strtags;
-
 	if (!tags.gm.empty()) { strtags += "gm:"; strtags += tags.gm; }
 	if (!tags.gmws.empty()) { strtags += strtags.empty() ? "gmws:" : " gmws:"; strtags += tags.gmws; }
 	if (!tags.gmc.empty()) { strtags += strtags.empty() ? "gmc:" : " gmc:"; strtags += tags.gmc; }
 	if (!tags.loc.empty()) { strtags += strtags.empty() ? "loc:" : " loc:"; strtags += tags.loc; }
-
 	return strtags;
 }
 
@@ -127,7 +125,6 @@ static ConVar* sv_location = nullptr;
 static std::array<char, 1024> g_InfoCacheBuffer{};
 static bf_write g_InfoCachePacket(g_InfoCacheBuffer.data(), (int)g_InfoCacheBuffer.size());
 
-// Extra packets pour apparaitre dans plusieurs categories
 static std::vector<std::vector<char>> g_ExtraPacketBuffers;
 static std::vector<std::string> g_ExtraCategories;
 
@@ -177,7 +174,7 @@ static void BuildStaticReplyInfo()
 		g_ReplyInfo.game_version = "2020.10.14";
 }
 
-static void BuildPacketWithTags(std::vector<char>& buffer, const std::string& tags_str)
+static void BuildPacketWithTags(std::vector<char>& buffer, const std::string& tags_str, int32_t port)
 {
 	if (!Util::server || !Util::engineserver) return;
 
@@ -215,7 +212,7 @@ static void BuildPacketWithTags(std::vector<char>& buffer, const std::string& ta
 	pkt.WriteByte((int)vac_secure);
 	pkt.WriteString(g_ReplyInfo.game_version.c_str());
 	pkt.WriteByte(0x80 | 0x10 | (has_tags ? 0x20 : 0x00) | 0x01);
-	pkt.WriteShort(g_ReplyInfo.udp_port);
+	pkt.WriteShort(port);
 	pkt.WriteLongLong((int64_t)steamid);
 	if (has_tags) pkt.WriteString(tags_str.c_str());
 	pkt.WriteLongLong(appid);
@@ -231,45 +228,25 @@ static void BuildReplyInfo()
 
 	const std::string tags = ConcatenateTags(g_ReplyInfo.tags);
 
-	// Build main packet
-	const char* server_name = Util::server->GetName();
-	const char* map_name = Util::server->GetMapName();
-	int32_t appid = Util::engineserver->GetAppID();
-	int32_t num_clients = g_iPlayerCountOverride >= 0 ? g_iPlayerCountOverride : Util::server->GetNumClients();
-	int32_t max_players = sv_visiblemaxplayers ? sv_visiblemaxplayers->GetInt() : -1;
-	if (max_players <= 0 || max_players > g_ReplyInfo.max_clients) max_players = g_ReplyInfo.max_clients;
-	int32_t num_fake = Util::server->GetNumFakeClients();
-	bool has_password = Util::server->GetPassword() != nullptr;
-	if (g_pGameServer == nullptr) g_pGameServer = SteamGameServer();
-	bool vac_secure = g_pGameServer ? g_pGameServer->BSecure() : false;
-	const CSteamID* sid = Util::engineserver->GetGameServerSteamID();
-	uint64_t steamid = sid ? sid->ConvertToUint64() : 0;
-	bool has_tags = !tags.empty();
-
+	// Packet principal avec le vrai port
+	std::vector<char> mainBuf;
+	BuildPacketWithTags(mainBuf, tags, g_ReplyInfo.udp_port);
 	g_InfoCachePacket.Reset();
-	g_InfoCachePacket.WriteLong(-1);
-	g_InfoCachePacket.WriteByte('I');
-	g_InfoCachePacket.WriteByte(17);
-	g_InfoCachePacket.WriteString(server_name);
-	g_InfoCachePacket.WriteString(map_name);
-	g_InfoCachePacket.WriteString(g_ReplyInfo.game_dir.c_str());
-	g_InfoCachePacket.WriteString(g_ReplyInfo.game_desc.c_str());
-	g_InfoCachePacket.WriteShort(appid);
-	g_InfoCachePacket.WriteByte(num_clients);
-	g_InfoCachePacket.WriteByte(max_players);
-	g_InfoCachePacket.WriteByte(num_fake);
-	g_InfoCachePacket.WriteByte('d');
-	g_InfoCachePacket.WriteByte('l');
-	g_InfoCachePacket.WriteByte(has_password ? 1 : 0);
-	g_InfoCachePacket.WriteByte((int)vac_secure);
-	g_InfoCachePacket.WriteString(g_ReplyInfo.game_version.c_str());
-	g_InfoCachePacket.WriteByte(0x80 | 0x10 | (has_tags ? 0x20 : 0x00) | 0x01);
-	g_InfoCachePacket.WriteShort(g_ReplyInfo.udp_port);
-	g_InfoCachePacket.WriteLongLong((int64_t)steamid);
-	if (has_tags) g_InfoCachePacket.WriteString(tags.c_str());
-	g_InfoCachePacket.WriteLongLong(appid);
+	if (!mainBuf.empty())
+	{
+		memcpy(g_InfoCacheBuffer.data(), mainBuf.data(), mainBuf.size());
+		// On repointe g_InfoCachePacket sur le bon nombre d'octets
+		// en resetant et re-ecrivant directement
+		bf_write tmp(g_InfoCacheBuffer.data(), (int)g_InfoCacheBuffer.size());
+		memcpy(g_InfoCacheBuffer.data(), mainBuf.data(), mainBuf.size());
+		// bf_write ne supporte pas SetNumBitsWritten directement,
+		// on reconstruit donc directement dans g_InfoCachePacket
+		g_InfoCachePacket.Reset();
+		for (size_t i = 0; i < mainBuf.size(); ++i)
+			g_InfoCachePacket.WriteByte((uint8_t)mainBuf[i]);
+	}
 
-	// Build extra packets pour chaque categorie supplementaire
+	// Packets supplementaires avec ports fictifs et categories differentes
 	g_ExtraPacketBuffers.resize(g_ExtraCategories.size());
 	for (size_t i = 0; i < g_ExtraCategories.size(); ++i)
 	{
@@ -277,7 +254,8 @@ static void BuildReplyInfo()
 		extra_tags.gmc = g_ExtraCategories[i];
 		extra_tags.gm = g_ExtraCategories[i];
 		const std::string extra_tags_str = ConcatenateTags(extra_tags);
-		BuildPacketWithTags(g_ExtraPacketBuffers[i], extra_tags_str);
+		int32_t fake_port = g_ReplyInfo.udp_port + (int32_t)(i + 1);
+		BuildPacketWithTags(g_ExtraPacketBuffers[i], extra_tags_str, fake_port);
 	}
 }
 
@@ -318,12 +296,10 @@ static ssize_t recvfrom_detour(SOCKET s, void* buf, recvlen_t buflen, int32_t fl
 				g_flInfoCacheLastUpdate = now;
 			}
 
-			// Envoyer le packet principal
 			sendto(s, (const char*)g_InfoCachePacket.GetData(),
 				g_InfoCachePacket.GetNumBytesWritten(), 0,
 				(const sockaddr*)&infrom, sizeof(infrom));
 
-			// Envoyer les packets supplementaires pour les autres categories
 			for (auto& extraBuf : g_ExtraPacketBuffers)
 			{
 				if (!extraBuf.empty())
@@ -409,7 +385,6 @@ LUA_FUNCTION_STATIC(playerquery_SetGamemode)
 	return 0;
 }
 
-// Ajouter une categorie supplementaire (apparait dans plusieurs categories du server browser)
 LUA_FUNCTION_STATIC(playerquery_AddExtraCategory)
 {
 	const char* category = LUA->CheckString(1);
