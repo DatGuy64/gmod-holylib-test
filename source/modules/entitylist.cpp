@@ -263,6 +263,22 @@ LUA_FUNCTION_STATIC(GetGlobalEntityList)
 	return 1;
 }
 
+void CEntListModule::OnEntityCreated(CBaseEntity* pEntity)
+{
+	if (!g_Lua)
+	{
+		Msg("[HolyLib][entitylist] OnEntityCreated: g_Lua is NULL, skipping entity %p\n", pEntity);
+		return;
+	}
+
+	EntityList& pGlobalEntityList = GetGlobalEntityList(g_Lua);
+	pGlobalEntityList.FreeEntity(pEntity);
+	pGlobalEntityList.AddEntity(pEntity);
+
+	if (g_pEntListModule.InDebug())
+		Msg("Created Entity %p (%p, %i)\n", pEntity, &pGlobalEntityList, (int)pEntityLists.size());
+}
+
 void CEntListModule::OnEntityDeleted(CBaseEntity* pEntity)
 {
 	if (g_pEntListModule.InDebug())
@@ -270,23 +286,23 @@ void CEntListModule::OnEntityDeleted(CBaseEntity* pEntity)
 
 	for (EntityList* pList : pEntityLists)
 	{
+		if (!pList)
+		{
+			Msg("[HolyLib][entitylist] OnEntityDeleted: pList is NULL, skipping!\n");
+			continue;
+		}
+
+		if (!pList->GetLua())
+		{
+			Msg("[HolyLib][entitylist] OnEntityDeleted: pList->GetLua() is NULL for list %p, skipping!\n", pList);
+			continue;
+		}
+
 		pList->FreeEntity(pEntity);
 
 		if (g_pEntListModule.InDebug())
 			Msg("Deleted Entity inside %p\n", pList);
 	}
-}
-
-void CEntListModule::OnEntityCreated(CBaseEntity* pEntity)
-{
-	EntityList& pGlobalEntityList = GetGlobalEntityList(g_Lua);
-	pGlobalEntityList.FreeEntity(pEntity);
-
-	//Util::Push_Entity(pEntity); // BUG: The Engine hates us for this. "CREATING ENTITY - ALREADY HAS A LUA TABLE! AND IT SHOULDN'T"
-	pGlobalEntityList.AddEntity(pEntity);
-
-	if (g_pEntListModule.InDebug())
-		Msg("Created Entity %p (%p, %i)\n", pEntity, &pGlobalEntityList, (int)pEntityLists.size());
 }
 
 void CEntListModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
