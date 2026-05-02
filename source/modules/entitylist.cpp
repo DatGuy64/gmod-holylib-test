@@ -292,12 +292,6 @@ void CEntListModule::OnEntityDeleted(CBaseEntity* pEntity)
             continue;
         }
 
-        if (!pList->GetLua())
-        {
-            Msg("[HolyLib][entitylist] OnEntityDeleted: pList->GetLua() is NULL for list %p, skipping!\n", pList);
-            continue;
-        }
-
         pList->FreeEntity(pEntity);
 
         if (g_pEntListModule.InDebug())
