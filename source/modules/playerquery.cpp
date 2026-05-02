@@ -472,7 +472,7 @@ LUA_FUNCTION_STATIC(playerquery_GetDebugInfo)
 		LUA->SetField(-2, "requests");
 		LUA->PushString(ConcatenateTags({g_ExtraSockets[i]->category, "", g_ExtraSockets[i]->category, ""}).c_str());
 		LUA->SetField(-2, "tags");
-		LUA->RawSetI(-2, (int)(i + 1));
+		LUA->Util::RawSetI(-2, (int)(i + 1));
 	}
 	LUA->SetField(-2, "extra_sockets");
 	return 1;
