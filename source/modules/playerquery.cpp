@@ -230,7 +230,6 @@ static void BuildReplyInfo()
 	else g_ReplyInfo.tags.loc.clear();
 
 	const std::string tags = ConcatenateTags(g_ReplyInfo.tags);
-	BuildPacketWithTags(std::vector<char>(), tags); // dummy call, on build direct dans g_InfoCachePacket
 
 	// Build main packet
 	const char* server_name = Util::server->GetName();
