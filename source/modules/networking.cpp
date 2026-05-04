@@ -25,7 +25,6 @@
 #include "sourcesdk/ccservernetworkproperty.h"
 #include "sourcesdk/datatablestack.h"
 
-// Anti-Wallhack: variables defined in pvs.cpp
 #define HOLYLIB_MAX_PLAYERS 128
 extern bool     g_HolyPVS_AWHEnabled[HOLYLIB_MAX_PLAYERS + 1];
 extern bool     g_HolyPVS_AWHJustEnabled[HOLYLIB_MAX_PLAYERS + 1];
@@ -37,6 +36,7 @@ extern bool HolyPVS_VisibleByLOS_WithSlot(int vIdx, int tIdx, float cacheSeconds
 #if MODULE_EXISTS_PVS
 extern void HolyPVS_ResetAWHSlot(int idx);
 #endif
+// ---------------------------------------------------
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -1002,48 +1002,45 @@ static inline bool HolyPVS_AWHWhitelistTest(int viewerSlot, int targetSlot)
     return (g_HolyPVS_AWHWhitelist[viewerSlot][bit >> 6] & (1ULL << (bit & 63))) != 0ULL;
 }
 
-static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo)
+// Called at the end of New_CServerGameEnts_CheckTransmit (fast transmit path)
+static inline void ApplyAntiWallhackFastTransmit(int viewerSlot, CCheckTransmitInfo* pInfo)
 {
     if (!g_HolyPVS_AWHEnabled[viewerSlot])
         return;
 
-    if (!viewer) return;
-
-    const bool forceBurst    = g_HolyPVS_AWHJustEnabled[viewerSlot];
     const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
     const int maxClients     = gpGlobals->maxClients;
 
     CBitVec<MAX_EDICTS>* pTransmitBits = pInfo->m_pTransmitEdict;
     CBitVec<MAX_EDICTS>* pAlwaysBits   = pInfo->m_pTransmitAlways;
 
-    for (int i = 1; i <= maxClients; ++i)
+    if (g_HolyPVS_AWHJustEnabled[viewerSlot])
     {
-        if (i == viewerSlot) continue;
-
-        edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
-        if (!targetEdict || targetEdict->IsFree()) continue;
-
-        CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
-        if (!targetEnt || !targetEnt->IsPlayer()) continue;
-
-        if (HolyPVS_AWHWhitelistTest(viewerSlot, i)) continue;
-
-        const int talkingSlot = i - 1;
-        if (talkingSlot >= 0 && talkingSlot < HOLYLIB_MAX_PLAYERS && g_bIsPlayerTalking[talkingSlot])
-            continue;
-
-        if (forceBurst)
+        for (int i = 1; i <= maxClients; ++i)
         {
+            if (i == viewerSlot) continue;
+            if (HolyPVS_AWHWhitelistTest(viewerSlot, i)) continue;
+            if (g_bIsPlayerTalking[i - 1]) continue;
+
             HolyPVS_AWHSeenSet(viewerSlot, i);
             if (!pTransmitBits->Get(i))
             {
                 pTransmitBits->Set(i);
                 if (pAlwaysBits) pAlwaysBits->Set(i);
             }
-            continue;
         }
+        g_HolyPVS_AWHJustEnabled[viewerSlot] = false;
+        return;
+    }
+
+    for (int i = 1; i <= maxClients; ++i)
+    {
+        if (i == viewerSlot) continue;
 
         if (!pTransmitBits->Get(i)) continue;
+
+        if (HolyPVS_AWHWhitelistTest(viewerSlot, i)) continue;
+        if (g_bIsPlayerTalking[i - 1]) continue;
 
         if (!HolyPVS_AWHSeenTest(viewerSlot, i))
         {
@@ -1051,15 +1048,15 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
             continue;
         }
 
-        edict_t* viewerEdict = Util::engineserver->PEntityOfEntIndex(viewerSlot);
-        if (!viewerEdict || viewerEdict->IsFree()) break;
-        CBaseEntity* freshViewer = Util::servergameents->EdictToBaseEntity(viewerEdict);
-        if (!freshViewer) break;
-
         if (!HolyPVS_VisibleByLOS_WithSlot(viewerSlot, i, cacheSeconds))
         {
             pTransmitBits->Clear(i);
             if (pAlwaysBits) pAlwaysBits->Clear(i);
+
+            edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
+            if (!targetEdict || targetEdict->IsFree()) continue;
+            CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
+            if (!targetEnt) continue;
 
             for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
             {
@@ -1075,10 +1072,10 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
             }
         }
     }
-
-    if (forceBurst)
-        g_HolyPVS_AWHJustEnabled[viewerSlot] = false;
 }
+}
+// -----------------------------------------------------------
+
 bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)
 {
 	vec_t maxTransmitRange = g_nTransmitRange;
@@ -1326,7 +1323,7 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 	}
 	pInfo->m_pTransmitEdict->Or(g_pGlobalTransmitTickCache.g_bWasSeenByPlayer, &g_pGlobalTransmitTickCache.g_bWasSeenByPlayer);
 
-	ApplyAntiWallhackFastTransmit(pRecipientPlayer, clientIndex + 1, pInfo);
+	ApplyAntiWallhackFastTransmit(clientIndex + 1, pInfo);
 	return true;
 }
 
@@ -1510,6 +1507,7 @@ void CNetworkingModule::ClientDisconnect(edict_t* pPlayer)
 	g_pPlayerTransmitCache[pPlayer->m_EdictIndex-1].Reset();
 
 #if MODULE_EXISTS_PVS
+	// Reset AWH state so the next player reusing this slot doesn't inherit it.
 	HolyPVS_ResetAWHSlot(pPlayer->m_EdictIndex);
 #endif
 }

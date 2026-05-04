@@ -56,56 +56,24 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
     return tr.fraction > 0.97f;
 }
 
-static bool VisibleByLOS_NoCache(int viewerIdx, int targetIdx)
+static bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
 {
-    edict_t* viewerEdict = Util::engineserver->PEntityOfEntIndex(viewerIdx);
-    Msg("[AWH DEBUG] VisibleByLOS_NoCache vIdx=%d tIdx=%d viewerEdict=%p\n", viewerIdx, targetIdx, (void*)viewerEdict);
-    if (!viewerEdict || viewerEdict->IsFree())
-    {
-        Msg("[AWH DEBUG] viewer edict null or free\n");
+    if (!viewer || !target)
         return false;
-    }
 
-    edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(targetIdx);
-    Msg("[AWH DEBUG] targetEdict=%p\n", (void*)targetEdict);
-    if (!targetEdict || targetEdict->IsFree())
-    {
-        Msg("[AWH DEBUG] target edict null or free\n");
+    edict_t* viewerEdict = viewer->edict();
+    edict_t* targetEdict = target->edict();
+    if (!viewerEdict || !targetEdict || viewerEdict->IsFree() || targetEdict->IsFree())
         return false;
-    }
+
+    const Vector viewerEye = viewer->EyePosition();
 
     if (!g_m_vecOrigin_Offset)
         g_m_vecOrigin_Offset = new DTVarByOffset("DT_BaseEntity", "m_vecOrigin");
-
-    CBaseEntity* freshViewer = Util::servergameents->EdictToBaseEntity(viewerEdict);
-    CBaseEntity* freshTarget = Util::servergameents->EdictToBaseEntity(targetEdict);
-    Msg("[AWH DEBUG] freshViewer=%p freshTarget=%p\n", (void*)freshViewer, (void*)freshTarget);
-
-    if (!freshViewer || !freshTarget)
-    {
-        Msg("[AWH DEBUG] fresh entity null\n");
+    const Vector* pOrigin = (const Vector*)g_m_vecOrigin_Offset->GetPointer(target);
+    if (!pOrigin)
         return false;
-    }
-
-    const Vector* pViewerOrigin = (const Vector*)g_m_vecOrigin_Offset->GetPointer(freshViewer);
-    if (!pViewerOrigin)
-    {
-        Msg("[AWH DEBUG] pViewerOrigin null\n");
-        return false;
-    }
-    const Vector* pTargetOrigin = (const Vector*)g_m_vecOrigin_Offset->GetPointer(freshTarget);
-    if (!pTargetOrigin)
-    {
-        Msg("[AWH DEBUG] pTargetOrigin null\n");
-        return false;
-    }
-
-    const Vector viewerEye = *pViewerOrigin + Vector(0.0f, 0.0f, 64.0f);
-    const Vector& origin = *pTargetOrigin;
-
-    Msg("[AWH DEBUG] enginetrace=%p\n", (void*)enginetrace);
-    if (!enginetrace)
-        return true;
+    const Vector& origin = *pOrigin;
 
     for (int i = 0; i < 7; ++i)
         if (LOS_Clear(viewerEye, origin + g_AWHBBoxCorners[i]))
@@ -116,37 +84,28 @@ static bool VisibleByLOS_NoCache(int viewerIdx, int targetIdx)
 
 bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds)
 {
+    if (cacheSeconds <= 0.0f)
+        return VisibleByLOS_NoCache(viewer, target);
+
     edict_t* vEd = viewer ? viewer->edict() : nullptr;
     edict_t* tEd = target ? target->edict() : nullptr;
     int vIdx = vEd ? vEd->m_EdictIndex : -1;
     int tIdx = tEd ? tEd->m_EdictIndex : -1;
-
-    if (cacheSeconds <= 0.0f)
-        return VisibleByLOS_NoCache(vIdx, tIdx);
-
     if (vIdx < 1 || vIdx > HOLYLIB_MAX_PLAYERS || tIdx < 1 || tIdx > HOLYLIB_MAX_PLAYERS)
-        return VisibleByLOS_NoCache(vIdx, tIdx);
+        return VisibleByLOS_NoCache(viewer, target);
 
     const float now = gpGlobals->curtime;
     if (g_LOSNext[vIdx][tIdx] > now)
         return g_LOSVis[vIdx][tIdx] != 0;
 
-    const bool vis = VisibleByLOS_NoCache(vIdx, tIdx);
+    const bool vis = VisibleByLOS_NoCache(viewer, target);
     g_LOSVis[vIdx][tIdx] = vis ? 1 : 0;
     g_LOSNext[vIdx][tIdx] = now + cacheSeconds;
     return vis;
 }
 
-bool HolyPVS_VisibleByLOS_WithSlot(int vIdx, int tIdx, float cacheSeconds)
+bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* target, int tIdx, float cacheSeconds)
 {
-    Msg("[AWH DEBUG] VisibleByLOS_WithSlot called: vIdx=%d tIdx=%d cache=%.2f\n", vIdx, tIdx, cacheSeconds);
-
-    if (vIdx < 0 || vIdx > HOLYLIB_MAX_PLAYERS || tIdx < 0 || tIdx > HOLYLIB_MAX_PLAYERS)
-    {
-        Msg("[AWH DEBUG] INVALID SLOT: vIdx=%d tIdx=%d\n", vIdx, tIdx);
-        return false;
-    }
-
     if (cacheSeconds > 0.0f)
     {
         const float now = gpGlobals->curtime;
@@ -155,26 +114,20 @@ bool HolyPVS_VisibleByLOS_WithSlot(int vIdx, int tIdx, float cacheSeconds)
         {
             g_LOSVis[vIdx][tIdx] = 1;
             g_LOSNext[vIdx][tIdx] = now + cacheSeconds;
-            Msg("[AWH DEBUG] Cache init, returning true\n");
             return true;
         }
 
         if (g_LOSNext[vIdx][tIdx] > now)
-        {
-            Msg("[AWH DEBUG] Cache hit: %d\n", (int)g_LOSVis[vIdx][tIdx]);
             return g_LOSVis[vIdx][tIdx] != 0;
-        }
     }
 
-    Msg("[AWH DEBUG] About to call VisibleByLOS_NoCache vIdx=%d tIdx=%d\n", vIdx, tIdx);
-    const bool vis = VisibleByLOS_NoCache(vIdx, tIdx);
+    const bool vis = VisibleByLOS_NoCache(viewer, target);
 
     if (cacheSeconds > 0.0f)
     {
         g_LOSVis[vIdx][tIdx] = vis ? 1 : 0;
         g_LOSNext[vIdx][tIdx] = gpGlobals->curtime + cacheSeconds;
     }
-    Msg("[AWH DEBUG] VisibleByLOS_WithSlot result: %d\n", (int)vis);
     return vis;
 }
 
@@ -258,6 +211,9 @@ static bool g_bEnableLuaPreTransmitHook = false;
 static bool g_bEnableLuaPostTransmitHook = false;
 
 static Detouring::Hook detour_CServerGameEnts_CheckTransmit;
+#ifndef HOLYLIB_MANUALNETWORKING
+extern bool g_pReplaceCServerGameEnts_CheckTransmit;
+extern bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts);
 
 static inline bool HolyPVS_AWHSeenTest(int viewerSlot, int targetSlot)
 {
@@ -277,48 +233,47 @@ static inline bool HolyPVS_AWHWhitelistTest(int viewerSlot, int targetSlot)
     return (g_HolyPVS_AWHWhitelist[viewerSlot][bit >> 6] & (1ULL << (bit & 63))) != 0ULL;
 }
 
-static void ApplyAntiWallhack(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo)
+static void ApplyAntiWallhack(int viewerSlot, CCheckTransmitInfo* pInfo)
 {
     if (!g_HolyPVS_AWHEnabled[viewerSlot])
         return;
 
-    if (!viewer) return;
-
-    const bool forceBurst    = g_HolyPVS_AWHJustEnabled[viewerSlot];
     const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
     const int maxClients     = gpGlobals->maxClients;
 
     CBitVec<MAX_EDICTS>* pTransmitBits = pInfo->m_pTransmitEdict;
     CBitVec<MAX_EDICTS>* pAlwaysBits   = pInfo->m_pTransmitAlways;
 
-    for (int i = 1; i <= maxClients; ++i)
+    if (g_HolyPVS_AWHJustEnabled[viewerSlot])
     {
-        if (i == viewerSlot) continue;
-
-        edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
-        if (!targetEdict || targetEdict->IsFree()) continue;
-
-        CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
-        if (!targetEnt || !targetEnt->IsPlayer()) continue;
-
-        if (HolyPVS_AWHWhitelistTest(viewerSlot, i)) continue;
-
-        const int talkingSlot = i - 1;
-        if (talkingSlot >= 0 && talkingSlot < HOLYLIB_MAX_PLAYERS && g_bIsPlayerTalking[talkingSlot])
-            continue;
-
-        if (forceBurst)
+        // Burst path: force-transmit all players once so client has their state
+        for (int i = 1; i <= maxClients; ++i)
         {
+            if (i == viewerSlot) continue;
+            if (HolyPVS_AWHWhitelistTest(viewerSlot, i)) continue;
+            if (g_bIsPlayerTalking[i - 1]) continue;
+
             HolyPVS_AWHSeenSet(viewerSlot, i);
             if (!pTransmitBits->Get(i))
             {
                 pTransmitBits->Set(i);
                 if (pAlwaysBits) pAlwaysBits->Set(i);
             }
-            continue;
         }
+        g_HolyPVS_AWHJustEnabled[viewerSlot] = false;
+        return;
+    }
 
+    // Normal path: filter players not visible by LOS
+    for (int i = 1; i <= maxClients; ++i)
+    {
+        if (i == viewerSlot) continue;
+
+        // Skip early if not in transmit — most common case
         if (!pTransmitBits->Get(i)) continue;
+
+        if (HolyPVS_AWHWhitelistTest(viewerSlot, i)) continue;
+        if (g_bIsPlayerTalking[i - 1]) continue;
 
         if (!HolyPVS_AWHSeenTest(viewerSlot, i))
         {
@@ -326,19 +281,16 @@ static void ApplyAntiWallhack(CBasePlayer* viewer, int viewerSlot, CCheckTransmi
             continue;
         }
 
-        // Re-resolve viewer just before LOS to avoid using a stale pointer
-        edict_t* viewerEdict = Util::engineserver->PEntityOfEntIndex(viewerSlot);
-        Msg("[AWH DEBUG] ApplyAWH: viewerSlot=%d viewerEdict=%p targetSlot=%d targetEnt=%p\n",
-            viewerSlot, (void*)viewerEdict, i, (void*)targetEnt);
-        if (!viewerEdict || viewerEdict->IsFree()) { Msg("[AWH DEBUG] viewerEdict null/free, break\n"); break; }
-        CBaseEntity* freshViewer = Util::servergameents->EdictToBaseEntity(viewerEdict);
-        Msg("[AWH DEBUG] freshViewer=%p\n", (void*)freshViewer);
-        if (!freshViewer) { Msg("[AWH DEBUG] freshViewer null, break\n"); break; }
-
         if (!HolyPVS_VisibleByLOS_WithSlot(viewerSlot, i, cacheSeconds))
         {
             pTransmitBits->Clear(i);
             if (pAlwaysBits) pAlwaysBits->Clear(i);
+
+            // Hide children (weapons, hands parented to target)
+            edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
+            if (!targetEdict || targetEdict->IsFree()) continue;
+            CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
+            if (!targetEnt) continue;
 
             for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
             {
@@ -354,25 +306,7 @@ static void ApplyAntiWallhack(CBasePlayer* viewer, int viewerSlot, CCheckTransmi
             }
         }
     }
-
-    if (forceBurst)
-        g_HolyPVS_AWHJustEnabled[viewerSlot] = false;
 }
-
-static inline void DoApplyAntiWallhack(CCheckTransmitInfo* pInfo)
-{
-    CBaseEntity* pRecipientEntity = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
-    if (pRecipientEntity && pRecipientEntity->IsPlayer())
-    {
-        const int clientIndex = pInfo->m_pClientEnt->m_EdictIndex;
-        if (clientIndex >= 1 && clientIndex <= HOLYLIB_MAX_PLAYERS)
-            ApplyAntiWallhack((CBasePlayer*)pRecipientEntity, clientIndex, pInfo);
-    }
-}
-
-#ifndef HOLYLIB_MANUALNETWORKING
-extern bool g_pReplaceCServerGameEnts_CheckTransmit;
-extern bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts);
 
 static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)
 {
@@ -460,7 +394,12 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 		g_bBlockAdditionToTransmit = false;
 	}
 
-	DoApplyAntiWallhack(pInfo);
+
+	{
+		const int clientIndex = pInfo->m_pClientEnt->m_EdictIndex;
+		if (clientIndex >= 1 && clientIndex <= HOLYLIB_MAX_PLAYERS)
+			ApplyAntiWallhack(clientIndex, pInfo);
+	}
 
 	if (bWasOverrideStateFlagsUsed)
 	{
@@ -584,8 +523,6 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 		g_Lua->CallFunctionProtected(2, 0, true);
 		g_bBlockAdditionToTransmit = false;
 	}
-
-	DoApplyAntiWallhack(pInfo);
 
 	if (bWasOverrideStateFlagsUsed)
 	{
@@ -1657,15 +1594,6 @@ LUA_FUNCTION_STATIC(pvs_EnablePostTransmitHook)
 	return 0;
 }
 
-void CPVSModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn)
-{
-	if (!enginetrace)
-	{
-		enginetrace = (IEngineTrace*)appfn[0](INTERFACEVERSION_ENGINETRACE_SERVER, nullptr);
-		Detour::CheckValue("get interface", "enginetrace", enginetrace != nullptr);
-	}
-}
-
 void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 {
 	if (bServerInit)
@@ -1742,6 +1670,15 @@ DETOUR_THISCALL_FINISH();
 extern void Networking_SwitchToPVSTransmit();
 extern void Networking_SwitchToOURTransmit();
 #endif
+
+void CPVSModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn)
+{
+	if (!enginetrace)
+	{
+		enginetrace = (IEngineTrace*)appfn[0](INTERFACEVERSION_ENGINETRACE_SERVER, nullptr);
+		Detour::CheckValue("get interface", "enginetrace", enginetrace != nullptr);
+	}
+}
 
 void CPVSModule::InitDetour(bool bPreServer)
 {
