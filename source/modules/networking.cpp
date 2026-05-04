@@ -1073,7 +1073,7 @@ static inline void ApplyAntiWallhackFastTransmit(int viewerSlot, CCheckTransmitI
         }
     }
 }
-}
+
 // -----------------------------------------------------------
 
 bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)
