@@ -103,6 +103,10 @@ static bool VisibleByLOS_NoCache(int viewerIdx, int targetIdx)
     const Vector viewerEye = *pViewerOrigin + Vector(0.0f, 0.0f, 64.0f);
     const Vector& origin = *pTargetOrigin;
 
+    Msg("[AWH DEBUG] enginetrace=%p\n", (void*)enginetrace);
+    if (!enginetrace)
+        return true;
+
     for (int i = 0; i < 7; ++i)
         if (LOS_Clear(viewerEye, origin + g_AWHBBoxCorners[i]))
             return true;
