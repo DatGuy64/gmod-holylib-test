@@ -27,6 +27,22 @@ extern IVEngineServer* engine;
 
 extern GarrysMod::Lua::ILuaInterface* g_Lua;
 
+enum ThreadState
+{
+	STATE_NOTRUNNING,
+	STATE_RUNNING,
+	STATE_SHOULD_SHUTDOWN,
+};
+
+namespace GarrysMod::NetworkMessage
+{
+	constexpr int LuaFileDownload = 4; // Client told us which files he needs, so we must provide (IDs are sent in shorts / 2 bytes and the last one is ID 0!)
+	constexpr int RequestLuaFiles = 3; // Calls GModDataPack::OnFilesRequested - Tells the client to check the client_lua_files stringtable and to tell us which files they need
+	constexpr int ClientLuaError = 2;
+	// 1 does not exist
+	constexpr int LuaNetMessage = 0;
+}
+
 struct edict_t;
 class IGet;
 class CBaseEntity;
@@ -230,6 +246,14 @@ namespace Util
 		return LUA->IsType(-1, iType);
 	}
 
+	inline bool CheckBoolOpt(GarrysMod::Lua::ILuaInterface* LUA, int iStackPos, bool bFallback = false)
+	{
+		if (!LUA->IsType(iStackPos, GarrysMod::Lua::Type::Bool))
+			return bFallback;
+
+		return LUA->GetBool(iStackPos);
+	}
+
 	// Blocks execution by throwing an error if you tried to call a unsafe function
 	inline void DoUnsafeCodeCheck(GarrysMod::Lua::ILuaInterface* LUA)
 	{
@@ -268,6 +292,10 @@ namespace Util
 	extern VisData* CM_Vis(const Vector& orig, int type);
 	extern bool CM_Vis(byte* cluster, int clusterSize, int clusterID, int type);
 	extern void ResetClusters(VisData* data);
+
+	// API to block Sys_Error calls
+	// Registers a message that if an error contains it it'll be skipped x times
+	extern void SysError_IgnoreError(std::string msg, uint32_t count);
 
 	extern bool ShouldLoad();
 	extern void CheckVersion(bool bAutoUpdate);
@@ -332,19 +360,37 @@ namespace Util
 
 	// More Lua stuff for UserData (NEVER NULL)
 	extern Symbols::lua_setfenv func_lua_setfenv;
-	extern Symbols::lua_touserdata func_lua_touserdata;
+	extern Symbols::lua_touserdata func_lua_touserdata;  // Unused for now
 	extern Symbols::lua_type func_lua_type;
 	extern Symbols::lua_gc func_lua_gc;
 	extern Symbols::lua_setallocf func_lua_setallocf;
+	extern Symbols::lua_newuserdata func_lua_newuserdata;
 
+	extern Symbols::lua_call func_lua_call; // Unused for now
 	extern Symbols::lua_pcall func_lua_pcall;
-	extern Symbols::lua_insert func_lua_insert;
-	extern Symbols::lua_toboolean func_lua_toboolean;
+	extern Symbols::lua_cpcall func_lua_cpcall; // Unused for now
+	extern Symbols::lua_insert func_lua_insert; // Unused for now
+	extern Symbols::lua_toboolean func_lua_toboolean; // Unused for now
 
 	// These can be NULL. Why? Because on 64x all the names are mangled making shit far more difficult...
 	extern Symbols::lj_tab_new func_lj_tab_new;
 	extern Symbols::lj_gc_barrierf func_lj_gc_barrierf;
 	extern Symbols::lj_tab_get func_lj_tab_get;
+
+	// I hate this :sob:
+	// Once we actually need it / there is a confirmed issue then we can enable it
+	/*inline int lua_setfenv(lua_State *L, int idx)
+	{ if (g_Lua && L == g_Lua->GetState()) { return func_lua_setfenv(L, idx); } else { return ::lua_setfenv(L, idx); } }
+	inline void* lua_touserdata(lua_State *L, int idx)
+	{ if (g_Lua && L == g_Lua->GetState()) { return func_lua_touserdata(L, idx); } else { return ::lua_touserdata(L, idx); } }
+	inline int lua_type(lua_State *L, int idx)
+	{ if (g_Lua && L == g_Lua->GetState()) { return func_lua_type(L, idx); } else { return ::lua_type(L, idx); } }
+	inline int lua_gc(lua_State *L, int what, int data)
+	{ if (g_Lua && L == g_Lua->GetState()) { return func_lua_gc(L, what, data); } else { return ::lua_gc(L, what, data); } }
+	inline void lua_setallocf(lua_State *L, Symbols::lua_allocf f, void* ud)
+	{ if (g_Lua && L == g_Lua->GetState()) { func_lua_setallocf(L, f, ud); } else { ::lua_setallocf(L, f, ud); } }
+	inline int lua_pcall(lua_State *L, int nArgs, int nRets, int nErrorFunc)
+	{ if (g_Lua && L == g_Lua->GetState()) { return func_lua_pcall(L, nArgs, nRets, nErrorFunc); } else { return ::lua_pcall(L, nArgs, nRets, nErrorFunc); } }*/
 
 	extern IVEngineServer* engineserver;
 	extern IServerGameClients* servergameclients;

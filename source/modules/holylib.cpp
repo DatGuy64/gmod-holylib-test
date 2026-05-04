@@ -81,12 +81,10 @@ LUA_FUNCTION_STATIC(FadeClientVolume)
 	return 1;
 }
 
-LUA_FUNCTION_STATIC(ServerExecute)
+LUA_JIT_WRAPPED_0(ServerExecute)
 {
 	VPROF_BUDGET("HolyLib(Lua) - HolyLib.ServerExecute", VPROF_BUDGETGROUP_HOLYLIB);
 	Util::engineserver->ServerExecute();
-
-	return 0;
 }
 
 LUA_FUNCTION_STATIC(IsMapValid)
@@ -126,10 +124,9 @@ LUA_FUNCTION_STATIC(_UserMessageBegin)
 	return 1;
 }
 
-LUA_FUNCTION_STATIC(_MessageEnd)
+LUA_JIT_WRAPPED_0(_MessageEnd)
 {
 	MessageEnd();
-	return 0;
 }
 
 static Detouring::Hook detour_GetGModServerTags;
@@ -315,7 +312,7 @@ static void hook_CBaseEntity_SetMoveType(CBaseEntity* pEnt, int iMoveType, int i
 	if (!bInMoveTypeCall && iCurrentMoveType != iMoveType && pEntHandle.IsValid() && Lua::PushHook("HolyLib:OnMoveTypeChange"))
 	{
 		// Uncomment the code below to see if the entity is valid. GetClassname should almost always return a valid class
-		 Msg("hook_CBaseEntity_SetMoveType: %p - %s\n", pEnt, pEnt->GetClassname());
+		// Msg("hook_CBaseEntity_SetMoveType: %p - %s\n", pEnt, pEnt->GetClassname());
 		
 		EHANDLE* pHandle = g_Lua->NewUserType<EHANDLE>(GarrysMod::Lua::Type::Entity);
 		pHandle->Init(pEntHandle.GetEntryIndex(), pEntHandle.GetSerialNumber());
@@ -355,6 +352,8 @@ LUA_FUNCTION_STATIC(HideMsg) // ToDo: Final logic is still missing.
 
 LUA_FUNCTION_STATIC(GetRegistry)
 {
+	Util::DoUnsafeCodeCheck(LUA);
+
 	LUA->PushSpecial(GarrysMod::Lua::SPECIAL_REG);
 	return 1;
 }
@@ -409,9 +408,18 @@ LUA_FUNCTION_STATIC(ReceiveClientMessage)
 	return 0;
 }
 
+LUA_FUNCTION_STATIC(GetEnvironmentValue)
+{
+	Util::DoUnsafeCodeCheck(LUA);
+	const char* pVarName = LUA->CheckString(1);
+	const char* pValue = getenv(pVarName);
+	LUA->PushString(pValue);
+	return 1;
+}
+
 static char pLevelName[256], pLandmarkName[256] = {0};
-static Detouring::Hook detour_CHostState_State_ChangeLevelMP;
-static void hook_CHostState_State_ChangeLevelMP(const char* levelName, const char* landmarkName)
+static Detouring::Hook detour_HostState_ChangeLevelMP;
+static void hook_HostState_ChangeLevelMP(const char* levelName, const char* landmarkName)
 {
 	if (levelName) 
 	{
@@ -425,7 +433,7 @@ static void hook_CHostState_State_ChangeLevelMP(const char* levelName, const cha
 		pLandmarkName[0] = '\0';
 	}
 
-	detour_CHostState_State_ChangeLevelMP.GetTrampoline<Symbols::CHostState_State_ChangeLevelMP>()(levelName, landmarkName);
+	detour_HostState_ChangeLevelMP.GetTrampoline<Symbols::HostState_ChangeLevelMP>()(levelName, landmarkName);
 }
 
 void CHolyLibModule::LevelShutdown()
@@ -484,7 +492,7 @@ void CHolyLibModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerIn
 			Util::AddFunc(pLua, HideServer, "HideServer");
 			Util::AddFunc(pLua, Reconnect, "Reconnect");
 			Util::AddFunc(pLua, FadeClientVolume, "FadeClientVolume");
-			Util::AddFunc(pLua, ServerExecute, "ServerExecute");
+			LUA_REGISTER_JIT(pLua, ServerExecute, "ServerExecute");
 			Util::AddFunc(pLua, IsMapValid, "IsMapValid");
 			Util::AddFunc(pLua, InvalidateBoneCache, "InvalidateBoneCache");
 			Util::AddFunc(pLua, SetSignOnState, "SetSignOnState");
@@ -493,11 +501,12 @@ void CHolyLibModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerIn
 			Util::AddFunc(pLua, HideMsg, "HideMsg");
 			Util::AddFunc(pLua, GetRegistry, "GetRegistry");
 			Util::AddFunc(pLua, Disconnect, "Disconnect");
+			Util::AddFunc(pLua, GetEnvironmentValue, "GetEnvironmentValue");
 
 			// Networking stuff
 			Util::AddFunc(pLua, _EntityMessageBegin, "EntityMessageBegin");
 			Util::AddFunc(pLua, _UserMessageBegin, "UserMessageBegin");
-			Util::AddFunc(pLua, _MessageEnd, "MessageEnd");
+			LUA_REGISTER_JIT(pLua, _MessageEnd, "MessageEnd");
 			Util::AddFunc(pLua, ReceiveClientMessage, "ReceiveClientMessage");
 		Util::FinishTable(pLua, "HolyLib");
 	} else {
@@ -565,9 +574,9 @@ void CHolyLibModule::InitDetour(bool bPreServer)
 
 #if ARCHITECTURE_IS_X86
 	Detour::Create(
-		&detour_CHostState_State_ChangeLevelMP, "CHostState_State_ChangeLevelMP",
-		engine_loader.GetModule(), Symbols::CHostState_State_ChangeLevelMPSym,
-		(void*)hook_CHostState_State_ChangeLevelMP, m_pID
+		&detour_HostState_ChangeLevelMP, "HostState_ChangeLevelMP",
+		engine_loader.GetModule(), Symbols::HostState_ChangeLevelMPSym,
+		(void*)hook_HostState_ChangeLevelMP, m_pID
 	);
 #endif
 

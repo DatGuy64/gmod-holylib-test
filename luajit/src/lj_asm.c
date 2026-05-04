@@ -1,6 +1,6 @@
 /*
 ** IR assembler (SSA IR -> machine code).
-** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #define lj_asm_c
@@ -93,6 +93,10 @@ typedef struct ASMState {
   MCode *invmcp;	/* Points to invertible loop branch (or NULL). */
   MCode *flagmcp;	/* Pending opportunity to merge flag setting ins. */
   MCode *realign;	/* Realign loop if not NULL. */
+  MCode *mctail;	/* Tail of trace before stack adjust + jmp. */
+#if LJ_TARGET_PPC || LJ_TARGET_ARM64
+  MCode *mcexit;	/* Pointer to exit stubs. */
+#endif
 
 #ifdef LUAJIT_RANDOM_RA
   /* Randomize register allocation. OK for fuzz testing, not for production. */
@@ -1173,6 +1177,19 @@ static void asm_tdup(ASMState *as, IRIns *ir)
   asm_gencall(as, ci, args);
 }
 
+static void asm_udatanew(ASMState *as, IRIns *ir)
+{
+  const CCallInfo *ci = &lj_ir_callinfo[IRCALL_lj_udata_new];
+  IRRef args[3];
+  asm_snap_prep(as);
+  args[0] = ASMREF_L; /* lua_State *L  */
+  args[1] = ir->op1;      /* uint32_t size */
+  args[2] = ir->op2;     /* GCtab env */   
+  as->gcsteps++;
+  asm_setupresult(as, ir, ci);  /* GCudata * */
+  asm_gencall(as, ci, args);
+}
+
 static void asm_gc_check(ASMState *as);
 
 /* Explicit GC step. */
@@ -1180,7 +1197,7 @@ static void asm_gcstep(ASMState *as, IRIns *ir)
 {
   IRIns *ira;
   for (ira = IR(as->stopins+1); ira < ir; ira++)
-    if ((ira->o == IR_TNEW || ira->o == IR_TDUP ||
+    if ((ira->o == IR_TNEW || ira->o == IR_TDUP || ira->o == IR_UDNEW ||
 	 (LJ_HASFFI && (ira->o == IR_CNEW || ira->o == IR_CNEWI))) &&
 	ra_used(ira))
       as->gcsteps++;
@@ -1326,27 +1343,32 @@ static void asm_conv64(ASMState *as, IRIns *ir)
   IRType st = (IRType)((ir-1)->op2 & IRCONV_SRCMASK);
   IRType dt = (((ir-1)->op2 & IRCONV_DSTMASK) >> IRCONV_DSH);
   IRCallID id;
+  const CCallInfo *ci;
+#if LJ_TARGET_ARM && !LJ_ABI_SOFTFP
+  CCallInfo cim;
+#endif
   IRRef args[2];
   lj_assertA((ir-1)->o == IR_CONV && ir->o == IR_HIOP,
 	     "not a CONV/HIOP pair at IR %04d", (int)(ir - as->ir) - REF_BIAS);
   args[LJ_BE] = (ir-1)->op1;
   args[LJ_LE] = ir->op1;
-  if (st == IRT_NUM || st == IRT_FLOAT) {
-    id = IRCALL_fp64_d2l + ((st == IRT_FLOAT) ? 2 : 0) + (dt - IRT_I64);
+  lj_assertA(st != IRT_FLOAT, "bad CONV *64.float emitted");
+  if (st == IRT_NUM) {
+    id = IRCALL_lj_vm_num2u64;
     ir--;
+    ci = &lj_ir_callinfo[id];
   } else {
     id = IRCALL_fp64_l2d + ((dt == IRT_FLOAT) ? 2 : 0) + (st - IRT_I64);
-  }
-  {
 #if LJ_TARGET_ARM && !LJ_ABI_SOFTFP
-    CCallInfo cim = lj_ir_callinfo[id], *ci = &cim;
+    cim = lj_ir_callinfo[id];
     cim.flags |= CCI_VARARG;  /* These calls don't use the hard-float ABI! */
+    ci = &cim;
 #else
-    const CCallInfo *ci = &lj_ir_callinfo[id];
+    ci = &lj_ir_callinfo[id];
 #endif
-    asm_setupresult(as, ir, ci);
-    asm_gencall(as, ci, args);
   }
+  asm_setupresult(as, ir, ci);
+  asm_gencall(as, ci, args);
 }
 #endif
 
@@ -1395,11 +1417,11 @@ static void asm_collectargs(ASMState *as, IRIns *ir,
   if ((ci->flags & CCI_L)) { *args++ = ASMREF_L; n--; }
   while (n-- > 1) {
     ir = IR(ir->op1);
-    lj_assertA(ir->o == IR_CARG, "malformed CALL arg tree");
+    lj_assertA(ir->o == IR_CARG || ir->o == IR_CALLCC, "malformed CALL arg tree");
     args[n] = ir->op2 == REF_NIL ? 0 : ir->op2;
   }
   args[0] = ir->op1 == REF_NIL ? 0 : ir->op1;
-  lj_assertA(IR(ir->op1)->o != IR_CARG, "malformed CALL arg tree");
+  lj_assertA(IR(ir->op1)->o != IR_CARG && IR(ir->op1)->o != IR_CALLCC, "malformed CALL arg tree");
 }
 
 /* Reconstruct CCallInfo flags for CALLX*. */
@@ -1421,6 +1443,11 @@ static uint32_t asm_callx_flags(ASMState *as, IRIns *ir)
 #endif
   }
 #endif
+
+  if (IR(ir->op2)->o == IR_CALLCC) {
+    nargs |= IR(IR(ir->op2)->op2)->i;
+  }
+
   return (nargs | (ir->t.irt << CCI_OTSHIFT));
 }
 
@@ -1877,6 +1904,8 @@ static void asm_ir(ASMState *as, IRIns *ir)
 		  (int)(ir - as->ir) - REF_BIAS, ir->o);
 #endif
     break;
+	
+  case IR_UDNEW: asm_udatanew(as, ir); break;
 
   /* Buffer operations. */
   case IR_BUFHDR: asm_bufhdr(as, ir); break;
@@ -1898,7 +1927,9 @@ static void asm_ir(ASMState *as, IRIns *ir)
     /* fallthrough */
   case IR_CALLN: case IR_CALLL: case IR_CALLS: asm_call(as, ir); break;
   case IR_CALLXS: asm_callx(as, ir); break;
-  case IR_CARG: break;
+  case IR_CARG:
+  case IR_CALLCSE:
+  case IR_CALLCC: break;
 
   default:
     setintV(&as->J->errinfo, ir->o);
@@ -2344,7 +2375,7 @@ static void asm_setup_regsp(ASMState *as)
     case IR_CNEW:
 #endif
       /* fallthrough */
-    case IR_TNEW: case IR_TDUP: case IR_CNEWI: case IR_TOSTR:
+    case IR_TNEW: case IR_TDUP: case IR_CNEWI: case IR_UDNEW: case IR_TOSTR:
     case IR_BUFSTR:
       ir->prev = REGSP_HINT(RID_RET);
       if (inloop)
@@ -2542,7 +2573,7 @@ void lj_asm_trace(jit_State *J, GCtrace *T)
     RA_DBGX((as, "===== STOP ====="));
 
     /* General trace setup. Emit tail of trace. */
-    asm_tail_prep(as);
+    asm_tail_prep(as, T->link);
     as->mcloop = NULL;
     as->flagmcp = NULL;
     as->topslot = 0;
@@ -2587,6 +2618,9 @@ void lj_asm_trace(jit_State *J, GCtrace *T)
       asm_head_side(as);
     else
       asm_head_root(as);
+#if LJ_ABI_BRANCH_TRACK
+    emit_branch_track(as);
+#endif
     asm_phi_fixup(as);
 
     if (J->curfinal->nins >= T->nins) {  /* IR didn't grow? */

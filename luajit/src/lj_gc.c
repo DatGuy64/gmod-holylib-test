@@ -1,6 +1,6 @@
 /*
 ** Garbage collector.
-** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
 **
 ** Major portions taken verbatim or adapted from the Lua interpreter.
 ** Copyright (C) 1994-2008 Lua.org, PUC-Rio. See Copyright Notice in lua.h
@@ -65,7 +65,8 @@ static void gc_mark(global_State *g, GCobj *o)
     GCtab *mt = tabref(gco2ud(o)->metatable);
     gray2black(o);  /* Userdata are never gray. */
     if (mt) gc_markobj(g, mt);
-    gc_markobj(g, tabref(gco2ud(o)->env));
+    GCtab *env = tabref(gco2ud(o)->env);
+    if (env) gc_markobj(g, env);
     if (LJ_HASBUFFER && gco2ud(o)->udtype == UDTYPE_BUFFER) {
       SBufExt *sbx = (SBufExt *)uddata(gco2ud(o));
       if (sbufiscow(sbx) && gcref(sbx->cowref))
@@ -106,6 +107,7 @@ static void gc_mark_start(global_State *g)
   setgcrefnull(g->gc.weak);
   gc_markobj(g, mainthread(g));
   gc_markobj(g, tabref(mainthread(g)->env));
+  gc_markobj(g, vmthread(g));
   gc_marktv(g, &g->registrytv);
   gc_mark_gcroot(g);
   g->gc.state = GCSpropagate;
@@ -523,10 +525,9 @@ static void gc_call_finalizer(global_State *g, lua_State *L,
   g->gc.threshold = oldt;  /* Restore GC threshold. */
   if (errcode) {
     ptrdiff_t errobj = savestack(L, L->top-1);  /* Stack may be resized. */
-    lj_vmevent_send(L, ERRFIN,
+    lj_vmevent_send_novmthread(L, ERRFIN,
       copyTV(L, L->top++, restorestack(L, errobj));
     );
-    L->top--;
   }
 }
 

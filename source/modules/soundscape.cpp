@@ -123,6 +123,9 @@ LUA_FUNCTION_STATIC(soundscape_BlockEngineChanges)
 
 void CSoundscapeModule::ClientDisconnect(edict_t* pClient)
 {
+	if (pClient->m_EdictIndex > MAX_PLAYERS)
+		return;
+
 	// We unset the bit so that the next client that gets this slot won't be affected by the previous player.
 	pBlockEngineAction.Clear(pClient->m_EdictIndex-1);
 }
@@ -137,8 +140,8 @@ LUA_FUNCTION_STATIC(soundscape_GetAll)
 
 	for (auto nIndex=g_pSoundscapeSystem->m_soundscapes.First(); nIndex != g_pSoundscapeSystem->m_soundscapes.InvalidIndex(); nIndex = g_pSoundscapeSystem->m_soundscapes.Next(nIndex))
 	{
-		LUA->PushString(g_pSoundscapeSystem->m_soundscapes.GetStringForKey(nIndex));
 		LUA->PushNumber(g_pSoundscapeSystem->m_soundscapes.GetIDForKey(nIndex));
+		LUA->PushString(g_pSoundscapeSystem->m_soundscapes.GetStringForKey(nIndex));
 		
 		LUA->RawSet(-3);
 	}

@@ -80,45 +80,35 @@ static bool hook_CSteam3Server_NotifyClientConnect(CSteam3Server* srv, CBaseClie
 		int status = 0;
 		if (!bRet)
 		{
+			// Try it again so that we get the reason why it failed.
 			status = SteamGameServer()->BeginAuthSession( pvCookie, ucbCookie, steamID );
 		}
 		g_Lua->PushNumber(status);
 
 		if (g_Lua->CallFunctionProtected(5, 1, true))
 		{
-			bool bOverride = false;
-			uint64 ulNewSteamID = ulSteamID;
-
 			if (g_Lua->IsType(-1, GarrysMod::Lua::Type::Bool))
 			{
-				bOverride = g_Lua->GetBool(-1);
-			}
-			else if (g_Lua->IsType(-1, GarrysMod::Lua::Type::String))
-			{
-				const char* newSteamStr = g_Lua->GetString(-1);
-				ulNewSteamID = strtoull(newSteamStr, nullptr, 0);
-				bOverride = true;
-			}
+				bool bOverride = g_Lua->GetBool(-1);
 
-			if (!bRet && bOverride)
-			{
-				CSteamID newSteamID(ulNewSteamID);
-				client->SetSteamID(newSteamID);
+				if (!bRet && bOverride)
+				{
+					client->SetSteamID(steamID);
 
-				func_CSteam3Server_SendUpdatedServerDetails(srv);
+					func_CSteam3Server_SendUpdatedServerDetails(srv);
 
-				client->m_bSendServerInfo = true;
-				g_pApprovedClients.push_back(client);
-			}
+					// BUG: Gmod by default refuses to send the ServerInfo since it has some additional checks in CBaseServer::SendPendingServerInfo that prevent it.
+					client->m_bSendServerInfo = true;
+					g_pApprovedClients.push_back(client);
+				}
 
-			if (bOverride)
-			{
-				g_pApprovedSteamIDs.insert(ulNewSteamID);
-				func_CSteam3Server_SendUpdatedServerDetails(srv);
-			}
+				if (bOverride) // Steam may not always deny a connection but a steamID may still already be in use.
+				{
+					g_pApprovedSteamIDs.insert(ulSteamID);
+				}
 
-			if (!bRet)
 				bRet = bOverride;
+			}
 
 			g_Lua->Pop(1);
 		}
@@ -173,6 +163,15 @@ LUA_FUNCTION_STATIC(steamworks_Activate)
 
 	func_CSteam3Server_Activate(&func_Steam3Server(), CSteam3Server::EServerType::eServerTypeNormal);
 	LUA->PushBool(true);
+	return 1;
+}
+
+LUA_FUNCTION_STATIC(steamworks_IsSecure)
+{
+	if (!func_Steam3Server)
+		LUA->ThrowError("Failed to load Steam3Server!\n");
+
+	LUA->PushBool(func_Steam3Server().BSecure());
 	return 1;
 }
 
@@ -276,6 +275,7 @@ void CSteamWorksModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServe
 	{
 		Util::AddFunc(pLua, steamworks_Shutdown, "Shutdown");
 		Util::AddFunc(pLua, steamworks_Activate, "Activate");
+		Util::AddFunc(pLua, steamworks_IsSecure, "IsSecure");
 		Util::AddFunc(pLua, steamworks_IsConnected, "IsConnected");
 		Util::AddFunc(pLua, steamworks_ForceActivate, "ForceActivate");
 		Util::AddFunc(pLua, steamworks_ForceAuthenticate, "ForceAuthenticate");
@@ -291,6 +291,7 @@ void CSteamWorksModule::LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua)
 		Util::RemoveField(pLua, "Shutdown");
 		Util::RemoveField(pLua, "Activate");
 		Util::RemoveField(pLua, "IsConnected");
+		Util::RemoveField(pLua, "IsSecure");
 		Util::RemoveField(pLua, "ForceActivate");
 		Util::RemoveField(pLua, "ForceAuthenticate");
 		Util::RemoveField(pLua, "GetGameServerSteamID");

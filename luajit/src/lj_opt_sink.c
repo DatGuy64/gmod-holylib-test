@@ -1,6 +1,6 @@
 /*
 ** SINK: Allocation Sinking and Store Sinking.
-** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #define lj_opt_sink_c
@@ -138,9 +138,7 @@ static int sink_mark_ins(jit_State *J, int lightsink)
     case IR_USTORE:
       irt_setmark(IR(ir->op2)->t);  /* Mark stored value. */
       break;
-#if LJ_HASFFI
     case IR_CALLXS:
-#endif
     case IR_CALLS:
       irt_setmark(IR(ir->op1)->t);  /* Mark (potentially) stored values. */
       break;
@@ -243,6 +241,7 @@ static void sink_sweep_ins(jit_State *J)
 	ir->prev = REGSP_INIT;
       }
       break;
+	case IR_UDNEW:
 #if LJ_HASFFI
     case IR_CNEW: case IR_CNEWI:
 #endif

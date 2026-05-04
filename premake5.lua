@@ -11,6 +11,13 @@ if not HOLYLIB_DEVELOPMENT then
 		description = "Sets the path to the garrysmod_common (https://github.com/danielga/garrysmod_common) directory",
 		default = "../garrysmod_common"
 	})
+
+	newoption({
+		trigger = "dedicated",
+		description = "Build for Windows dedicated server (defines DEDICATED)"
+	})
+
+	HOLYLIB_DEDICATED = _OPTIONS["dedicated"] and true or false
 end
 
 local gmcommon = assert(_OPTIONS.gmcommon or os.getenv("GARRYSMOD_COMMON"),
@@ -62,7 +69,7 @@ prebuildCommand = basePath .. prebuildCommand -- We add this after execute since
 --[[
 	Project setup
 ]]
-CreateWorkspace({name = "holylib", abi_compatible = false})
+CreateWorkspace({name = "holylib", abi_compatible = true})
 	-- Serverside module (gmsv prefix)
 	-- Can define "source_path", where the source files are located
 	-- Can define "manual_files", which allows you to manually add files to the project,
@@ -88,7 +95,7 @@ CreateWorkspace({name = "holylib", abi_compatible = false})
 		IncludeDetouring()
 		IncludeScanning()
 		if IncludeIVP then
-			IncludeIVP() -- Can be removed if anyone doesn't want it.
+			--IncludeIVP() -- Can be removed if anyone doesn't want it.
 		end
 		IncludeBootil()
 
@@ -105,6 +112,8 @@ CreateWorkspace({name = "holylib", abi_compatible = false})
 		defines("IVP_NO_PERFORMANCE_TIMER")
 		defines("PHYSENV_INCLUDEIVPFALLBACK")
 		defines("CPPHTTPLIB_NO_EXCEPTIONS") -- We don't want exceptions!
+		defines("NOBASSOVERLOADS")
+		defines("USE_OLD_BF_READ")
 
 		prebuildcommands(prebuildCommand)
 
@@ -120,6 +129,8 @@ CreateWorkspace({name = "holylib", abi_compatible = false})
 			sourcePath .. [[lz4/*.h]],
 			sourcePath .. [[lz4/*.c]],
 			sourcePath .. [[lz4/*.cpp]],
+			sourcePath .. [[uwebsockets/*.h]],
+			sourcePath .. [[uwebsockets/*.cpp]],
 
 			rootDir .. "lua/*.h",
 			rootDir .. "source/lua/scripts/*.lua",
@@ -131,6 +142,7 @@ CreateWorkspace({name = "holylib", abi_compatible = false})
 			["Source files/sourcesdk/"] = gmcommon .. "/**.*",
 			["Lua Headers"] = rootDir .. "lua/*.h",
 			["Lua Scrips"] = rootDir .. "source/lua/scripts/*.lua",
+			["uWebSockets"] = sourcePath .. "uwebsockets/*.*",
 			["README"] = rootDir .. "README.md",
 			["Workflows"] = rootDir .. ".github/workflows/**.yml",
 		})
@@ -139,7 +151,7 @@ CreateWorkspace({name = "holylib", abi_compatible = false})
 
 		includedirs({
 			sourcePath .. [[sourcesdk/]],
-			sourcePath .. [[lua]]
+			sourcePath .. [[lua]],
 		})
 
 		filter("system:windows")
@@ -147,8 +159,6 @@ CreateWorkspace({name = "holylib", abi_compatible = false})
 			disablewarnings({"4101"})
 			links({"lua51_32.lib"})
 			links({"lua51_64.lib"})
-			links({"bass_32.lib"})
-			links({"bass_64.lib"})
 			links({"opus_32.lib"})
 			links({"opus_64.lib"})
 
@@ -172,8 +182,15 @@ CreateWorkspace({name = "holylib", abi_compatible = false})
 		filter({"platforms:x86_64"})
 			defines("PLATFORM_64BITS")
 
+		filter("system:windows")
+			if HOLYLIB_DEDICATED then
+				defines("DEDICATED")
+			else
+				defines("NOT_DEDICATED") -- Windows client build
+			end
+
 		filter("system:linux")
 			disablewarnings({"unused-variable"})
 			targetextension(".so")
-			links({"dl", "tier0", "pthread", "bass"}) -- this fixes the undefined reference to `dlopen' errors.
-			defines("DEDICATED") -- All linux build focus Linux dedicated servers. Windows focus on the gmod client
+			links({"dl", "tier0", "pthread"}) -- this fixes the undefined reference to `dlopen' errors.
+			defines("DEDICATED") -- All linux build focus Linux dedicated servers.

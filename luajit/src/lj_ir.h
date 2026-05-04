@@ -1,6 +1,6 @@
 /*
 ** SSA IR (Intermediate Representation) format.
-** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #ifndef _LJ_IR_H
@@ -122,6 +122,7 @@
   _(TDUP,	AW, ref, ___) \
   _(CNEW,	AW, ref, ref) \
   _(CNEWI,	NW, ref, ref)  /* CSE is ok, not marked as A. */ \
+  _(UDNEW,  AW, ref, ref) \
   \
   /* Buffer operations. */ \
   _(BUFHDR,	L , ref, lit) \
@@ -146,6 +147,8 @@
   _(CALLS,	S , ref, lit) \
   _(CALLXS,	S , ref, ref) \
   _(CARG,	N , ref, ref) \
+  _(CALLCSE,	N , ref, ref) /* flag to allow CSE for a CALLXS */\
+  _(CALLCC,	N , ref, ref) \
   \
   /* End of list. */
 
@@ -192,6 +195,7 @@ IRFPMDEF(FPMENUM)
 /* FLOAD fields. */
 #define IRFLDEF(_) \
   _(STR_LEN,	offsetof(GCstr, len)) \
+  _(STR_DATA,	sizeof(GCstr)) \
   _(FUNC_ENV,	offsetof(GCfunc, l.env)) \
   _(FUNC_PC,	offsetof(GCfunc, l.pc)) \
   _(FUNC_FFID,	offsetof(GCfunc, l.ffid)) \
@@ -203,8 +207,17 @@ IRFPMDEF(FPMENUM)
   _(TAB_HMASK,	offsetof(GCtab, hmask)) \
   _(TAB_NOMM,	offsetof(GCtab, nomm)) \
   _(UDATA_META,	offsetof(GCudata, metatable)) \
+  _(UDATA_ENV,	offsetof(GCudata, env)) \
+  _(UDATA_FLAGS, offsetof(GCudata, flags)) /* You can use U16 for load if when needing to guard on both type and flags :) */ \
   _(UDATA_UDTYPE, offsetof(GCudata, udtype)) \
-  _(UDATA_FILE,	sizeof(GCudata)) \
+  _(UDATA_HVALUE, offsetof(GCudata, align1)) /* This field is used by HolyLib to store the userdata value */ \
+  _(UDATA_VALUE, sizeof(GCudata)) \
+  _(GMOD_UDATA_TYPE, offsetof(GMODudata, type)) \
+  _(GMOD_UDATA_DATA, offsetof(GMODudata, data)) \
+  _(GMOD_UDATA_TYPE_DIRECT, (sizeof(GCudata) + offsetof(GMODudata, data))) \
+  _(GMOD_UDATA_DATA_DIRECT, (sizeof(GCudata) + offsetof(GMODudata, type))) \
+  _(LSTR_DATA, offsetof(lua_String, data)) \
+  _(LSTR_LEN, offsetof(lua_String, length)) \
   _(SBUF_W,	sizeof(GCudata) + offsetof(SBufExt, w)) \
   _(SBUF_E,	sizeof(GCudata) + offsetof(SBufExt, e)) \
   _(SBUF_B,	sizeof(GCudata) + offsetof(SBufExt, b)) \
@@ -519,6 +532,7 @@ typedef uint32_t TRef;
 #define tref_isudata(tr)	(tref_istype((tr), IRT_UDATA))
 #define tref_isnum(tr)		(tref_istype((tr), IRT_NUM))
 #define tref_isint(tr)		(tref_istype((tr), IRT_INT))
+#define tref_isthread(tr)    (tref_istype((tr), IRT_THREAD))
 
 #define tref_isbool(tr)		(tref_typerange((tr), IRT_FALSE, IRT_TRUE))
 #define tref_ispri(tr)		(tref_typerange((tr), IRT_NIL, IRT_TRUE))

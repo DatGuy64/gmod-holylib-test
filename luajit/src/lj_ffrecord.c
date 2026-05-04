@@ -1,6 +1,6 @@
 /*
 ** Fast function call recorder.
-** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #define lj_ffrecord_c
@@ -70,7 +70,7 @@ static int32_t argv2int(jit_State *J, TValue *o)
 {
   if (!lj_strscan_numberobj(o))
     lj_trace_err(J, LJ_TRERR_BADTYPE);
-  return tvisint(o) ? intV(o) : lj_num2int(numV(o));
+  return numberVint(o);
 }
 
 /* Get runtime value of string argument. */
@@ -191,8 +191,264 @@ static void LJ_FASTCALL recff_nyi(jit_State *J, RecordFFData *rd)
 /* Fallback handler for unsupported variants of fast functions. */
 #define recff_nyiu	recff_nyi
 
+#define emitconv(a, dt, st, flags) \
+  emitir(IRT(IR_CONV, (dt)), (a), (st)|((dt) << 5)|(flags))
+
+static IRType CFunctionInfoTypeToIRType(lua_TraceRecorderType type)
+{
+  switch(type) {
+    case TR_TYPE_VOID:
+      return IRT_NIL;
+    case TR_TYPE_LUASTATE:
+      return IRT_THREAD;
+    case TR_TYPE_TABLE:
+      return IRT_TAB;
+    case TR_TYPE_USERDATA:
+      return IRT_UDATA;
+    case TR_TYPE_USERDATA_VALUE:
+      return IRT_UDATA;
+    case TR_TYPE_I8:
+      return IRT_I8;
+    case TR_TYPE_U8:
+      return IRT_U8;
+    case TR_TYPE_I16:
+      return IRT_I16;
+    case TR_TYPE_U16:
+      return IRT_U16;
+    case TR_TYPE_INT:
+      return IRT_INT;
+    case TR_TYPE_U32:
+      return IRT_U32;
+    case TR_TYPE_I64:
+      return IRT_I64;
+    case TR_TYPE_U64:
+      return IRT_U64;
+    case TR_TYPE_BOOL:
+      return IRT_U8;
+    case TR_TYPE_TRUE:
+      return IRT_TRUE;
+    case TR_TYPE_FALSE:
+      return IRT_FALSE;
+    case TR_TYPE_FLOAT:
+      return IRT_FLOAT;
+    case TR_TYPE_DOUBLE:
+      return IRT_NUM;
+    case TR_TYPE_STRING:
+      return IRT_STR;
+    case TR_TYPE_CHARS:
+      return IRT_STR;
+    default:
+      return 0;
+  }
+}
+
+static TRef CFunctionProcessType(jit_State *J, TRef ref, TRef val, TValue* value, lua_TraceRecorderType type)
+{
+  if (type == TR_TYPE_CHARS) {
+    return emitir(IRT(IR_STRREF, IRT_PGC), val, lj_ir_kint(J, 0));
+  } else if (type == TR_TYPE_USERDATA) {
+    // We guard on the type as we don't possibly want to get passed different userdata's and re-use the same trace
+    TRef tr = emitir(IRT(IR_FLOAD, IRT_U16), val, IRFL_UDATA_UDTYPE);
+    emitir(IRTGI(IR_EQ), tr, lj_ir_kint(J, udataV(value)->guard));
+    return val;
+  } else if (type == TR_TYPE_USERDATA_VALUE) {
+    TRef tr = emitir(IRT(IR_FLOAD, IRT_U16), val, IRFL_UDATA_UDTYPE);
+    emitir(IRTGI(IR_EQ), tr, lj_ir_kint(J, udataV(value)->guard));
+    return emitir(IRT(IR_FLOAD, IRT_PTR), val, IRFL_UDATA_VALUE);
+  } else {
+    return val;
+  }
+}
+
 /* Must stop the trace for classic C functions with arbitrary side-effects. */
-#define recff_c		recff_nyi
+/* RaphaelIT7: We now support tracing of C functions :hehe: */
+static void LJ_FASTCALL recff_c(jit_State *J, RecordFFData *rd)
+{
+  GCfuncC* fn = &J->fn->c;
+  CFuncCallInfo* callinfo = NULL;
+  uint32_t stackargs = 0;
+  for (stackargs = 0; stackargs < LUA_CFUNCINFO_MAXARGS; ++stackargs) {
+    if (tref_isnil(J->base[stackargs]))
+      break;
+  }
+
+  uint32_t mostargs = 0;
+  for (uint32_t idx = 0; idx < MAX_CFUNC_CALLINFOS; ++idx) {
+    CFuncCallInfo* ci = &fn->callinfo[idx];
+    if (!ci->func)
+      continue;
+
+    int mismatch = 0;
+    uint32_t nargs = CCI_NARGS(ci);
+    if (callinfo && nargs <= mostargs || nargs > stackargs)
+      continue;
+
+    for (uint32_t arg = (ci->givestate ? 1 : 0); arg < nargs; ++arg) {
+      if (!tref_istype(J->base[arg], CFunctionInfoTypeToIRType(ci->argType[arg]))) {
+        mismatch = 1;
+        break;
+      }
+    }
+
+    if (!mismatch && stackargs > nargs && ci->exactargs)
+      mismatch = 1;
+
+    if (!mismatch && ((nargs > mostargs) || (nargs == mostargs && !callinfo))) {
+      callinfo = ci;
+      mostargs = nargs;
+    }
+  }
+
+  if (!callinfo) {
+    recff_nyi(J, rd);
+    return;
+  }
+
+  if (callinfo->traceFunc)
+  {
+    /*lua_TraceRecorder recorder;
+    lj_tr_init(&recorder, 16);
+    callinfo->traceFunc(&recorder);
+    if (recorder.aborted) // We failed.
+    {
+      lj_tr_free(&recorder);
+      recff_nyi(J, rd);
+      return;
+    }
+
+    // ToDo: implement processing
+    lj_tr_free(&recorder);
+    rd->nres = recorder.returns;*/
+    recff_nyi(J, rd);
+    return;
+  }
+
+  if (callinfo->retType == TR_RETURN_USERDATA_ENV)
+  {
+    TRef tr = J->base[0];
+    if (!tref_isudata(tr) || !tabref(udataV(&rd->argv[0])->env)) // Can't trace if GCudata::env is null
+    {
+      recff_nyi(J, rd);
+      return;
+    }
+
+    // For loading ENV we only guard on GCudata::flags since HolyLib has the UDATA_NO_USERTABLE in case any userdata will not have env set to something valid
+    TRef loadtr = emitir(IRT(IR_FLOAD, IRT_U8), tr, IRFL_UDATA_FLAGS);
+    emitir(IRTGI(IR_EQ), loadtr, lj_ir_kint(J, udataV(&rd->argv[0])->flags));
+    J->base[0] = emitir(IRT(IR_FLOAD, IRT_TAB), tr, IRFL_UDATA_ENV);
+    return;
+  }
+
+  if (callinfo->retType == TR_RETURN_TYPEID)
+  {
+    TRef tr = J->base[0];
+#define typecheck(func, type) \
+    if (func(tr)) { J->base[0] = lj_ir_kint(J, type); return; }
+
+    typecheck(tref_isnil, LUA_TNIL)
+    typecheck(tref_isbool, LUA_TBOOLEAN)
+    typecheck(tref_islightud, LUA_TLIGHTUSERDATA)
+    typecheck(tref_isnumber, LUA_TNUMBER)
+    typecheck(tref_isstr, LUA_TSTRING)
+    typecheck(tref_istab, LUA_TTABLE)
+    typecheck(tref_isfunc, LUA_TFUNCTION)
+    typecheck(tref_isthread, LUA_TTHREAD)
+
+    if (tref_isudata(tr))
+    {
+      GCudata* ud = udataV(&rd->argv[0]);
+      void* uddata = uddata(ud);
+      uint8_t type = ud->udtype;
+
+      TRef typetr = emitir(IRT(IR_FLOAD, IRT_U8), tr, IRFL_UDATA_UDTYPE);
+      emitir(IRTGI(IR_EQ), typetr, lj_ir_kint(J, udataV(&rd->argv[0])->udtype));
+
+      if (type == UDTYPE_USERDATA && uddata(ud)) // GMod Userdata
+      {
+        GMODudata* gmodUD = uddata(ud);
+        TRef valuetr = emitir(IRT(IR_FLOAD, IRT_U8), tr, IRFL_UDATA_UDTYPE);
+        emitir(IRTGI(gmodUD ? IR_NE : IR_EQ), valuetr, lj_ir_kint(J, 0)); // We guard as safety
+        if (gmodUD)
+          J->base[0] = emitir(IRT(IR_FLOAD, IRT_U8), tr, IRFL_GMOD_UDATA_TYPE_DIRECT);
+      } else if (type > UDTYPE__MAX) { // HolyLib userdata
+        J->base[0] = lj_ir_kint(J, type); // We just return the type since we already guard on it.
+      }
+
+      J->base[0] = lj_ir_kint(J, LUA_TUSERDATA);
+      return;
+    }
+
+#undef typecheck
+
+    // HolyLib also uses cdata though idk how to handle that yet
+    recff_nyi(J, rd);
+    return;
+  }
+
+  if (!callinfo->func) {
+    recff_nyi(J, rd);
+    return;
+  }
+
+  uint32_t args = CCI_NARGS(callinfo);
+  TRef tr = TREF_NIL;
+  if (args > 0) {
+    for (uint32_t i=(callinfo->givestate ? 1 : 0); i < args; ++i) {
+      if (!tref_istype(J->base[i], CFunctionInfoTypeToIRType(callinfo->argType[i]))) {
+        recff_nyi(J, rd);
+        return;
+      }
+    }
+
+    if (callinfo->givestate) {
+      tr = emitir(IRT(IR_LREF, IRT_THREAD), 0, 0);
+    } else {
+      tr = CFunctionProcessType(J, tr, J->base[0], &rd->argv[0], callinfo->argType[0]);
+    }
+
+    for (uint32_t i=1; i < args; ++i) {
+      tr = emitir(IRT(IR_CARG, IRT_NIL), tr, CFunctionProcessType(J, tr, J->base[i], &rd->argv[i], callinfo->argType[i]));
+    }
+  }
+  
+  //if (CCI_OP(callinfo) == IR_CALLS)
+  //  J->needsnap = 1;
+
+  TRef funcPtr = lj_ir_kptr(J, callinfo->func);
+  funcPtr = emitir(IRT(IR_CALLCC, IRT_NIL), funcPtr, lj_ir_kint(J, callinfo->flags & CCI_CC_MASK));
+
+  if (callinfo->allowoptout)
+    funcPtr = emitir(IRT(IR_CALLCSE, IRT_NIL), funcPtr, lj_ir_kint(J, 0));
+  
+  IRType retType = CFunctionInfoTypeToIRType(callinfo->retType);
+  TRef result = emitir(IRT(IR_CALLXS, retType), tr, funcPtr);
+  if (callinfo->retType == TR_TYPE_VOID) {
+    J->base[0] = TREF_NIL;
+    rd->nres = 0;
+  } else {
+    if (retType == IRT_FLOAT) {
+      result = emitconv(result, IRT_NUM, retType, 0);
+    } else if (callinfo->retType == TR_TYPE_CHARS) {
+      TRef strlen = lj_ir_call(J, IRCALL_strlen, result);
+      result = emitir(IRT(IR_SNEW, IRT_STR), result, strlen);
+    } else if (callinfo->retType == TR_TYPE_STRING) {
+      emitir(IRTG(IR_NE, IRT_TRUE), result, lj_ir_kint(J, 0)); // GUARD to avoid null pointer crashes
+      TRef strlen = emitir(IRT(IR_FLOAD, IRT_UINTP), result, IRFL_LSTR_LEN);
+      result = emitir(IRT(IR_FLOAD, IRT_PTR), result, IRFL_LSTR_DATA);
+      result = emitir(IRT(IR_SNEW, IRT_STR), result, strlen);
+    } else if (callinfo->retType == TR_TYPE_BOOL) {
+      //RaphaelIT7: GG - You can't specify a bool return value / I got no idea yet
+      //WARNING: This is EXPENSIVE!!! If we return false we will mismatch & die (not really but it'll exit the trace)
+      result = emitir(IRTG(callinfo->retbool == 1 ? IR_NE : IR_EQ, IRT_TRUE), result, lj_ir_kint(J, 0));
+      //result = emitconv(result, IRT_BOOL, retType, 0); // yes... I did attempt to add IRT_BOOL... didn't go well
+      //result = emitir(IRTG(IR_NE, IRT_U8), result, lj_ir_kint(J, 0));
+    }
+
+    J->base[0] = result;
+    rd->nres = 1;
+  }
+  UNUSED(rd);
+}
 
 /* Emit BUFHDR for the global temporary buffer. */
 static TRef recff_bufhdr(jit_State *J)
@@ -525,6 +781,26 @@ static void LJ_FASTCALL recff_xpcall(jit_State *J, RecordFFData *rd)
   }  /* else: Interpreter will throw. */
 }
 
+static void LJ_FASTCALL recff_newproxy(jit_State *J, RecordFFData *rd)
+{
+  TRef tr = J->base[0];
+  if (!tref_isnil(tr) && !tref_isfalse(tr)) {
+    recff_nyiu(J, rd);
+    return;
+  }
+
+  TRef ud = emitir(IRTG(IR_UDNEW, IRT_UDATA), lj_ir_kint(J, sizeof(GMODudata)), lj_ir_knull(J, IRT_TAB));
+
+  TRef dataref = emitir(IRT(IR_FREF, IRT_PTR), ud, IRFL_GMOD_UDATA_DATA_DIRECT);
+  emitir(IRT(IR_FSTORE, IRT_PTR), dataref, lj_ir_knull(J, IRT_PTR));
+
+  TRef typeref = emitir(IRT(IR_FREF, IRT_U8), ud, IRFL_GMOD_UDATA_TYPE_DIRECT);
+  emitir(IRT(IR_FSTORE, IRT_U8), typeref, lj_ir_kint(J, 7)); // 7 = (type) userdata
+
+  J->base[0] = ud;
+  UNUSED(rd);
+}
+
 static void LJ_FASTCALL recff_getfenv(jit_State *J, RecordFFData *rd)
 {
   TRef tr = J->base[0];
@@ -628,7 +904,7 @@ static void LJ_FASTCALL recff_math_round(jit_State *J, RecordFFData *rd)
     /* Result is integral (or NaN/Inf), but may not fit an int32_t. */
     if (LJ_DUALNUM) {  /* Try to narrow using a guarded conversion to int. */
       lua_Number n = lj_vm_foldfpm(numberVnum(&rd->argv[0]), rd->data);
-      if (n == (lua_Number)lj_num2int(n))
+      if (lj_num2int_ok(n))
 	tr = emitir(IRTGI(IR_CONV), tr, IRCONV_INT_NUM|IRCONV_CHECK);
     }
     J->base[0] = tr;
@@ -838,7 +1114,7 @@ static TRef recff_string_start(jit_State *J, GCstr *s, int32_t *st, TRef tr,
     emitir(IRTGI(IR_EQ), tr, tr0);
     tr = tr0;
   } else {
-    tr = emitir(IRTI(IR_ADD), tr, lj_ir_kint(J, -1));
+    tr = emitir(IRTGI(IR_ADDOV), tr, lj_ir_kint(J, -1));
     emitir(IRTGI(IR_GE), tr, tr0);
     start--;
   }
@@ -890,15 +1166,15 @@ static void LJ_FASTCALL recff_string_range(jit_State *J, RecordFFData *rd)
   } else if ((MSize)end <= str->len) {
     emitir(IRTGI(IR_ULE), trend, trlen);
   } else {
-    emitir(IRTGI(IR_UGT), trend, trlen);
+    emitir(IRTGI(IR_GT), trend, trlen);
     end = (int32_t)str->len;
     trend = trlen;
   }
   trstart = recff_string_start(J, str, &start, trstart, trlen, tr0);
   if (rd->data) {  /* Return string.sub result. */
-    if (end - start >= 0) {
+    if (start <= end) {
       /* Also handle empty range here, to avoid extra traces. */
-      TRef trptr, trslen = emitir(IRTI(IR_SUB), trend, trstart);
+      TRef trptr, trslen = emitir(IRTGI(IR_SUBOV), trend, trstart);
       emitir(IRTGI(IR_GE), trslen, tr0);
       trptr = emitir(IRT(IR_STRREF, IRT_PGC), trstr, trstart);
       J->base[0] = emitir(IRT(IR_SNEW, IRT_STR), trptr, trslen);
@@ -907,9 +1183,9 @@ static void LJ_FASTCALL recff_string_range(jit_State *J, RecordFFData *rd)
       J->base[0] = lj_ir_kstr(J, &J2G(J)->strempty);
     }
   } else {  /* Return string.byte result(s). */
-    ptrdiff_t i, len = end - start;
-    if (len > 0) {
-      TRef trslen = emitir(IRTI(IR_SUB), trend, trstart);
+    if (start < end) {
+      ptrdiff_t i, len = end - start;
+      TRef trslen = emitir(IRTGI(IR_SUBOV), trend, trstart);
       emitir(IRTGI(IR_EQ), trslen, lj_ir_kint(J, (int32_t)len));
       if (J->baseslot + len > LJ_MAX_JSLOTS)
 	lj_trace_err_info(J, LJ_TRERR_STACKOV);
@@ -1462,6 +1738,15 @@ static void LJ_FASTCALL recff_buffer_decode(jit_State *J, RecordFFData *rd)
 
 /* -- Table library fast functions ---------------------------------------- */
 
+static void LJ_FASTCALL recff_table_maxn(jit_State *J, RecordFFData *rd)
+{
+  TRef tr = J->base[0];
+  if (tref_istab(tr)) {
+    rd->nres = 1;
+    J->base[0] = lj_ir_call(J, IRCALL_lj_tab_maxn, tr);
+  }
+}
+
 static void LJ_FASTCALL recff_table_insert(jit_State *J, RecordFFData *rd)
 {
   RecordIndex ix;
@@ -1477,6 +1762,8 @@ static void LJ_FASTCALL recff_table_insert(jit_State *J, RecordFFData *rd)
       setintV(&ix.keyv, lj_tab_len(t) + 1);
       ix.idxchain = 0;
       lj_record_idx(J, &ix);  /* Set new value. */
+      J->base[0] = ix.key;
+      rd->nres = 1;
     } else {  /* Complex case: insert in the middle. */
       recff_nyiu(J, rd);
       return;
@@ -1548,7 +1835,7 @@ static TRef recff_io_fp(jit_State *J, TRef *udp, int32_t id)
     emitir(IRTGI(IR_EQ), tr, lj_ir_kint(J, UDTYPE_IO_FILE));
   }
   *udp = ud;
-  fp = emitir(IRT(IR_FLOAD, IRT_PTR), ud, IRFL_UDATA_FILE);
+  fp = emitir(IRT(IR_FLOAD, IRT_PTR), ud, IRFL_UDATA_VALUE);
   emitir(IRTG(IR_NE, IRT_PTR), fp, lj_ir_knull(J, IRT_PTR));
   return fp;
 }
@@ -1609,6 +1896,32 @@ static void LJ_FASTCALL recff_debug_getmetatable(jit_State *J, RecordFFData *rd)
   }
   emitir(IRTG(mt ? IR_NE : IR_EQ, IRT_TAB), mtref, lj_ir_knull(J, IRT_TAB));
   J->base[0] = mt ? mtref : TREF_NIL;
+}
+
+// NYI - We got the custom flag LJ_GC_BLOCKDEBUG which we need to handle for functions...
+static void LJ_FASTCALL recff_debug_getfenv(jit_State *J, RecordFFData *rd)
+{
+  GCtab *env;
+  TRef envref;
+  TRef tr = J->base[0];
+  if (tref_isfunc(tr)) {
+    recff_nyiu(J, rd);
+    return;
+    //env = tabref(funcV(&rd->argv[0])->c.env);
+    //envref = emitir(IRT(IR_FLOAD, IRT_TAB), tr, IRFL_FUNC_ENV);
+  } else if (tref_isthread(tr)) {
+    env = tabref(threadV(&rd->argv[0])->env);
+    envref = emitir(IRT(IR_FLOAD, IRT_TAB), tr, IRFL_THREAD_ENV);
+  } else if (tref_isudata(tr)) {
+    env = tabref(udataV(&rd->argv[0])->env);
+    envref = emitir(IRT(IR_FLOAD, IRT_TAB), tr, IRFL_UDATA_ENV);
+  } else {
+    env = 0;
+    J->base[0] = TREF_NIL;
+    return;
+  }
+  emitir(IRTG(env ? IR_NE : IR_EQ, IRT_TAB), envref, lj_ir_knull(J, IRT_TAB));
+  J->base[0] = env ? envref : TREF_NIL;
 }
 
 /* -- Record calls to fast functions -------------------------------------- */

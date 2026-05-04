@@ -1,3 +1,6 @@
+# clangd
+.cache
+compile_commands.json
 
 Bootil/projects/obj/
 Bootil/projects/release_x64_windows/
@@ -14,6 +17,7 @@ ghostinj-dll/projects/**
 development/64x/
 development/garrysmod_common/
 development/module/projects/**
+_builds/**
 
 # generated files
 source/modules/_modules.h
@@ -26,5 +30,8 @@ source/_versioninfo.h
 source/_prebuildtools/http/*.txt
 source/_prebuildtools/generated_summary.md
 source/modules/_modules.cpp
+source/sourcesdk/luagc_jit.cpp
 
 projects/windows/vs2022/
+**.pdb
+luajit/src/luajit.vcxproj/**

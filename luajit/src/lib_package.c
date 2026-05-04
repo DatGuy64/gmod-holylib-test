@@ -1,6 +1,6 @@
 /*
 ** Package library.
-** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
 **
 ** Major portions taken verbatim or adapted from the Lua interpreter.
 ** Copyright (C) 1994-2012 Lua.org, PUC-Rio. See Copyright Notice in lua.h
@@ -287,7 +287,16 @@ static int lj_cf_package_loadlib(lua_State *L)
 static int lj_cf_package_unloadlib(lua_State *L)
 {
   void **lib = (void **)luaL_checkudata(L, 1, "_LOADLIB");
-  if (*lib) ll_unloadlib(*lib);
+  if (*lib)
+  {
+  	// GMod specific!!! GMod implements GMOD_LoadBinaryModule in the lua_shared but the unload part is implemented here!
+  	lua_CFunction gmod13_close = ll_sym(L, *lib, "gmod13_close");
+  	if (gmod13_close) {
+      lua_pushcfunction(L, gmod13_close);
+      lua_call(L, 0, 0);
+    }
+  	ll_unloadlib(*lib);
+  }
   *lib = NULL;  /* mark library as closed */
   return 0;
 }
@@ -425,7 +434,7 @@ static int lj_cf_package_loader_preload(lua_State *L)
 
 /* ------------------------------------------------------------------------ */
 
-#define KEY_SENTINEL	(U64x(80000000,00000000)|'s')
+#define KEY_SENTINEL	(U64x(81000000,00000000)|'s')
 
 static int lj_cf_package_require(lua_State *L)
 {

@@ -9,10 +9,11 @@
 #include <memory>
 #include <mutex>
 #include "sourcesdk/proto_oob.h"
+#include "sourcesdk/net_ws_headers.h"
+#include <netadr_new.h>
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
-#include <netadr_new.h>
 
 /*
 	Current purpose:
@@ -37,6 +38,7 @@ IModule* pNetworkThreadingModule = &g_pNetworkThreadingModule;
 
 static ConVar networkthreading_parallelprocessing("holylib_networkthreading_parallelprocessing", "0", 0, "If enabled, some packets will be processed by the networking thread instead of the main thread");
 static ConVar networkthreading_forcechallenge("holylib_networkthreading_forcechallenge", "0", 0, "If enabled, clients are ALWAYS requested to have a challenge for A2S requests.");
+static ConVar networkthreading_strictpackets("holylib_networkthreading_strictpackets", "1", 0, "If enabled, split packets and compressed packets from non-connected addresses will not be processed and harder limits are enforced.");
 
 // NOTE: There is inside gcsteamdefines.h the AUTO_LOCK_WRITE which we could probably use
 //static CThreadRWLock g_pIPFilterMutex; // Idk if using a std::shared_mutex might be faster
@@ -103,7 +105,7 @@ struct QueuedPacket {
 	unsigned char* pBytes = nullptr;
 };
 
-static CThreadMutex g_pQueuePacketsMutex;
+static std::mutex g_pQueuePacketsMutex;
 static std::vector<QueuedPacket*> g_pQueuedPackets;
 static inline void AddPacketToQueueForMainThread(netpacket_s* pPacket, bool bIsConnectionless)
 {
@@ -128,7 +130,7 @@ static inline void AddPacketToQueueForMainThread(netpacket_s* pPacket, bool bIsC
 	if (g_pNetworkThreadingModule.InDebug() == 1)
 		Msg(PROJECT_NAME " - networkthreading: Added %i bytes packet to queue (%p)\n", pPacket->size, pQueue);
 
-	AUTO_LOCK(g_pQueuePacketsMutex);
+	std::lock_guard<std::mutex> lock(g_pQueuePacketsMutex);
 	g_pQueuedPackets.push_back(pQueue);
 }
 
@@ -167,15 +169,9 @@ static inline HandleStatus ShouldHandlePacket(netpacket_s* pPacket, bool isConne
 extern ConVar sv_filter_nobanresponse;
 #endif
 
-enum NetworkThreadState
-{
-	STATE_NOTRUNNING,
-	STATE_RUNNING,
-	STATE_SHOULD_SHUTDOWN,
-};
-
 // BUG: GMod's CBaseServer::GetChallengeNr isn't thread safe
 static std::atomic<uint32> g_nChallengeNr = 0;
+static std::atomic<uint32> g_nLastChallengeNr = 0;
 static Symbols::NET_SendPacket func_NET_SendPacket = nullptr;
 static inline void SendChallenge(netpacket_s* pPacket)
 {
@@ -196,41 +192,80 @@ static inline void SendChallenge(netpacket_s* pPacket)
 	func_NET_SendPacket(NULL, pServer->m_Socket, pPacket->from, msg.GetData(), msg.GetNumBytesWritten(), nullptr, false);
 }
 
-static inline bool EnforceConnectionlessChallenge(netpacket_s* pPacket)
+static inline bool IsValidChallenge(netadr_t &adr, int nChallengeValue)
+{
+	if (adr.IsLoopback())
+		return true;
+
+	if (nChallengeValue == 0xFFFFFFFF)
+		return false;
+
+	uint64 challenge = ((uint64)adr.GetIPNetworkByteOrder() << 32) + g_nChallengeNr.load();
+	CRC32_t hash;
+	CRC32_Init(&hash);
+	CRC32_ProcessBuffer(&hash, &challenge, sizeof(challenge));
+	CRC32_Final(&hash);
+	//Msg("g_nChallengeNr: %i == %i (%s)\n", (int)hash, nChallengeValue, adr.ToString());
+	if ((int)hash == nChallengeValue)
+		return true;
+
+	challenge &= 0xffffffff00000000ull;
+	challenge += g_nLastChallengeNr.load();
+	hash = 0;
+	CRC32_Init(&hash);
+	CRC32_ProcessBuffer(&hash, &challenge, sizeof(challenge));
+	CRC32_Final(&hash);
+
+	//Msg("g_nLastChallengeNr: %i == %i (%s)\n", (int)hash, nChallengeValue, adr.ToString());
+	return (int)hash == nChallengeValue;
+}
+
+static inline int IsValidConnectionlessPacket(netpacket_s* pPacket, bool bOnlyA2S)
+{
+	char c = (char)pPacket->message.ReadChar();
+	if (c == A2S_INFO)
+	{
+		constexpr int payload = sizeof("Source Engine Query") * 8;
+		if (!pPacket->message.SeekRelative(payload))
+			return -1;
+	} else {
+		if (c != A2S_GETCHALLENGE && c != A2S_SERVERQUERY_GETCHALLENGE && c != A2S_PLAYER && c != A2S_RULES && (bOnlyA2S || c != C2S_CONNECT))
+			return -1;
+	}
+
+	return c;
+}
+
+static inline bool EnforceConnectionlessChallenge(netpacket_s* pPacket, int type)
 {
 	if (!networkthreading_forcechallenge.GetBool() || !func_NET_SendPacket)
 		return false;
 
-	char c = (char)pPacket->message.ReadChar();
-	if (c == A2S_INFO)
-	{
-		constexpr int payload = sizeof("Source Engine Query\0") * 8;
-		if (!pPacket->message.SeekRelative(payload))
-			return false;
-	} else {
-		if (c != A2S_PLAYER && c != A2S_RULES)
-			return false;
-	}
+	if (type != A2S_PLAYER && type != A2S_RULES && type != A2S_INFO)
+		return false;
 
+	//Msg("verifying challenge! (%s - %i)\n", pPacket->from.ToString(), type);
 	// Now it can only be A2S_INFO, A2S_PLAYER, A2S_RULES
-	long challenge = pPacket->message.ReadLong();
-	if (challenge == 0xFFFFFFFF)
-	{
-		SendChallenge(pPacket);
-		return true;
-	}
+	int challenge = (int)pPacket->message.ReadLong();
+	if (IsValidChallenge(pPacket->from, challenge))
+		return false;
+
+	//Msg("Requesting challenge! (%s - %i)\n", pPacket->from.ToString(), type);
+	SendChallenge(pPacket);
+	return true;
 }
 
-static std::atomic<int> g_nThreadState = NetworkThreadState::STATE_NOTRUNNING;
+static std::atomic<int> g_nThreadState = ThreadState::STATE_NOTRUNNING;
 static Symbols::NET_GetPacket func_NET_GetPacket;
 static Symbols::Filter_SendBan func_Filter_SendBan;
 static Symbols::NET_FindNetChannel func_NET_FindNetChannel;
 static SIMPLETHREAD_RETURNVALUE NetworkThread(void* pThreadData)
 {
+	// ThreadSetDebugName(ThreadGetCurrentId(), PROJECT_NAME " - NetworkThread");
 	if (!Util::server || !func_NET_GetPacket || !func_Filter_SendBan || !func_NET_FindNetChannel)
 	{
 		Msg(PROJECT_NAME " - networkthreading: Shutting down thread since were missing some functions!\n");
-		g_nThreadState.store(NetworkThreadState::STATE_NOTRUNNING);
+		g_nThreadState.store(ThreadState::STATE_NOTRUNNING);
 		return 0;
 	}
 
@@ -243,7 +278,7 @@ static SIMPLETHREAD_RETURNVALUE NetworkThread(void* pThreadData)
 	ConVarRef net_showudp("net_showudp");
 
 	netpacket_s* packet;
-	while (g_nThreadState.load() == NetworkThreadState::STATE_RUNNING)
+	while (g_nThreadState.load() == ThreadState::STATE_RUNNING)
 	{
 		while ((packet = func_NET_GetPacket(nSocket, pBuffer)) != nullptr)
 		{
@@ -261,10 +296,16 @@ static SIMPLETHREAD_RETURNVALUE NetworkThread(void* pThreadData)
 			// check for connectionless packet (0xffffffff) first
 			if (LittleLong(*(unsigned int *)packet->data) == CONNECTIONLESS_HEADER)
 			{
-				packet->message.ReadLong();	// read the -1
-				if (EnforceConnectionlessChallenge(packet))
+				packet->message.SeekRelative(sizeof(long)*8);	// read the -1
+				int nPacketType = IsValidConnectionlessPacket(packet, false);
+				if (networkthreading_strictpackets.GetBool() && nPacketType == -1)
 					continue;
 
+				if (EnforceConnectionlessChallenge(packet, nPacketType))
+					continue;
+
+				packet->message.StartReading( packet->data, packet->size ); // Reset buffer
+				packet->message.SeekRelative(sizeof(long)*8); // Read it again
 				if (net_showudp.GetInt())
 					Msg("UDP <- %s: sz=%i OOB '%c' wire=%i\n", packet->from.ToString(), packet->size, packet->data[4], packet->wiresize);
 
@@ -301,7 +342,7 @@ static SIMPLETHREAD_RETURNVALUE NetworkThread(void* pThreadData)
 		ThreadSleep(1); // hoping to not make it use like 100% CPU without slowing down networking
 	}
 
-	g_nThreadState.store(NetworkThreadState::STATE_NOTRUNNING);
+	g_nThreadState.store(ThreadState::STATE_NOTRUNNING);
 	return 0;
 }
 
@@ -309,7 +350,7 @@ static Detouring::Hook detour_NET_ProcessSocket;
 static std::unordered_set<INetChannel*> g_pNetChannels; // No mutex since only the main thread parties on it... hopefully
 static void hook_NET_ProcessSocket(int nSocket, IConnectionlessPacketHandler* pHandler)
 {
-	if (!Util::server || nSocket != ((CBaseServer*)Util::server)->m_Socket || g_nThreadState.load() == NetworkThreadState::STATE_NOTRUNNING)
+	if (!Util::server || nSocket != ((CBaseServer*)Util::server)->m_Socket || g_nThreadState.load() == ThreadState::STATE_NOTRUNNING)
 	{
 		detour_NET_ProcessSocket.GetTrampoline<Symbols::NET_ProcessSocket>()(nSocket, pHandler);
 		return;
@@ -329,8 +370,13 @@ static void hook_NET_ProcessSocket(int nSocket, IConnectionlessPacketHandler* pH
 			netchan->GetMsgHandler()->ConnectionCrashed("TCP connection failed.");
 	}
 
-	AUTO_LOCK(g_pQueuePacketsMutex);
-	for (QueuedPacket* pQueuePacket : g_pQueuedPackets)
+	std::vector<QueuedPacket*> pPackets;
+	{
+		std::lock_guard<std::mutex> lock(g_pQueuePacketsMutex);
+		pPackets = std::move(g_pQueuedPackets);
+	}
+
+	for (QueuedPacket* pQueuePacket : pPackets)
 	{
 		if (pQueuePacket->bIsConnectionless) {
 			if (g_pNetworkThreadingModule.InDebug() == 1)
@@ -348,7 +394,6 @@ static void hook_NET_ProcessSocket(int nSocket, IConnectionlessPacketHandler* pH
 
 		delete pQueuePacket;
 	}
-	g_pQueuedPackets.clear();
 }
 
 static Detouring::Hook detour_CNetChan_Constructor;
@@ -377,11 +422,196 @@ static void hook_NET_RemoveNetChannel(INetChannel* pChannel, bool bShouldRemove)
 	// We don't need to do any cleanup since any packets that can't be passed to a channel since they have been removed are simply dropped.
 }
 
+typedef struct
+{
+	int			nPort;		// UDP/TCP use same port number
+	bool		bListening;	// true if TCP port is listening
+	int			hUDP;		// handle to UDP socket from socket()
+	int			hTCP;		// handle to TCP socket from socket()
+} netsocket_t;
+
+struct lzss_header_t
+{
+	unsigned int	id;
+	unsigned int	actualSize;	// always little endian
+};
+
+constexpr inline unsigned MAKEUID(char d, char c, char b, char a) noexcept {
+  return (static_cast<unsigned>(a) << 24) | (static_cast<unsigned>(b) << 16) |
+         (static_cast<unsigned>(c) << 8) | static_cast<unsigned>(d);
+}
+
+constexpr unsigned int LZSS_ID{MAKEUID('L', 'Z', 'S', 'S')};
+int COM_GetUncompressedSize( IN_BYTECAP(compressedLen) const void *compressed, unsigned int compressedLen )
+{
+	const lzss_header_t *pHeader = static_cast<const lzss_header_t *>(compressed);
+
+	// Check for our own LZSS compressed data
+	if ( ( compressedLen >= sizeof(lzss_header_t) ) && pHeader->id == LZSS_ID )
+		return LittleLong( pHeader->actualSize );
+
+	return -1;
+}
+
+/*
+	Some exploit fix - There was some talk in the Discord, so I guess let's do something about it
+	Split packets are a bit expensive, but in any case we should never be receiving split packets from non-connected adresses.
+	So let's just block those, as I see absolutely no reason to why we should receive them.
+
+	We also never expect to get a compressed packet from a non-connected address.
+	Additionally non-connected addresses usually never send large packets, so we can safely limit size too.
+*/
+
+// We do 8+ as padding for slight free room.
+// I've used A2S_INFO as the largest one since no other query is larger than that.
+static constexpr size_t NET_MAX_CONNECTIONLESS_SIZE = 1 + sizeof("Source Engine Query") + 4 + 8;
+// 16 for 4x ReadLong, 2x ReadString with 256 buffers, ReadString with 32 buffer, 2 for ReadShort, STEAM_KEYSIZE = 2048, 8 for slight free room
+// IMPORTANT: A C2S_CONNECT packet may be split or compressed (I hate this- fuck that, we won't let it)
+static constexpr size_t NET_MAX_CONNECT_PACKET_SIZE = 16 + 256 + 256 + 32 + 2 + STEAM_KEYSIZE + 8;
+
+static CUtlVector<netsocket_t>* net_sockets; // This one is mostly thread safe unless NET_AddExtraSocket / NET_RemoveAllExtraSockets are called but those seem completely unused
+static Symbols::NET_GetLong func_NET_GetLong = nullptr;
+static Symbols::NET_LagPacket func_NET_LagPacket = nullptr;
+static Symbols::NET_ErrorString func_NET_ErrorString = nullptr;
+static Symbols::NET_GetLastError func_NET_GetLastError = nullptr;
+static Symbols::COM_BufferToBufferDecompress func_COM_BufferToBufferDecompress = nullptr;
+static constexpr size_t NET_COMPRESSION_STACKBUF_SIZE = 16384;
+static Detouring::Hook detour_NET_ReceiveDatagram;
+bool hook_NET_ReceiveDatagram(const intp sock, netpacket_t* packet)
+{
+	VPROF_BUDGET( "NET_ReceiveDatagram", VPROF_BUDGETGROUP_OTHER_NETWORKING );
+
+	CBaseServer* pServer = (CBaseServer*)Util::server;
+	if (!pServer || !net_sockets || !func_NET_GetLong || !func_NET_LagPacket || !func_NET_GetLastError || !func_COM_BufferToBufferDecompress || !func_NET_ErrorString)
+		return detour_NET_ReceiveDatagram.GetTrampoline<Symbols::NET_ReceiveDatagram>()(sock, packet);
+
+	Assert ( packet );
+	Assert ( net_multiplayer );
+
+	struct sockaddr	from;
+	socklen_t		fromlen = sizeof(from);
+	int	net_socket = (*net_sockets)[packet->source].hUDP;
+
+	int ret = 0;
+	{
+		VPROF_BUDGET( "recvfrom", VPROF_BUDGETGROUP_OTHER_NETWORKING );
+		ret = recvfrom(net_socket, (char *)packet->data, NET_MAX_MESSAGE, 0, &from, (socklen_t*)&fromlen );
+	}
+	if ( ret >= NET_MIN_MESSAGE )
+	{
+		packet->wiresize = ret;
+		if ( !packet->from.SetFromSockadr( &from ) )
+			DevMsg( PROJECT_NAME " - networkthreading: Unable to set IPv4 address with family %hu.\n", from.sa_family );
+
+		packet->size = ret;
+
+		static ConVarRef net_showudp_wire("net_showudp_wire");
+		if ( net_showudp_wire.IsValid() && net_showudp_wire.GetBool() )
+			Msg( "WIRE:  UDP sz=%d tm=%f rt %f from %s\n", ret, net_time, Plat_FloatTime(), packet->from.ToString() );
+
+		MEM_ALLOC_CREDIT();
+		CUtlMemoryFixedGrowable< byte, NET_COMPRESSION_STACKBUF_SIZE > bufVoice( NET_COMPRESSION_STACKBUF_SIZE );
+
+		if ( ret < NET_MAX_MESSAGE )
+		{
+			bool isConnected = !networkthreading_strictpackets.GetBool() || packet->from.IsLoopback() || func_NET_FindNetChannel(pServer->m_Socket, packet->from);
+			char packetType = *((char*)packet->data + sizeof(unsigned int));
+			if (!isConnected && ret > NET_MAX_CONNECTIONLESS_SIZE && (packetType != C2S_CONNECT || ret > NET_MAX_CONNECT_PACKET_SIZE))
+			{
+				DevMsg(PROJECT_NAME " - networkthreading: Blocked a large packet from an address that is not connected to the server! (%s - %i - %i)\n", packet->from.ToString(), ret, (int)packetType);
+				return false;
+			}
+
+			// Check for split message
+			if ( LittleLong( *(int *)packet->data ) == NET_HEADER_FLAG_SPLITPACKET )	
+			{
+				if (!isConnected)
+				{
+					DevMsg(PROJECT_NAME " - networkthreading: Blocked a split packet from an address that is not connected to the server! (%s)\n", packet->from.ToString());
+					return false;
+				}
+
+				if ( !func_NET_GetLong( sock, packet ) )
+					return false;
+			}
+			
+			// Next check for compressed message
+			if ( LittleLong( *(int *)packet->data) == NET_HEADER_FLAG_COMPRESSEDPACKET )
+			{
+				if (!isConnected)
+				{
+					DevMsg(PROJECT_NAME " - networkthreading: Blocked a compressed packet from an address that is not connected to the server! (%s)\n", packet->from.ToString());
+					return false;
+				}
+
+				char *pCompressedData = (char*)packet->data + sizeof( unsigned int );
+				unsigned nCompressedDataSize = packet->wiresize - sizeof( unsigned int );
+
+				// Decompress
+				int actualSize = COM_GetUncompressedSize( pCompressedData, nCompressedDataSize );
+				if ( actualSize <= 0 || actualSize > NET_MAX_MESSAGE )
+					return false;
+
+				MEM_ALLOC_CREDIT();
+				CUtlMemoryFixedGrowable< byte, NET_COMPRESSION_STACKBUF_SIZE > memDecompressed( NET_COMPRESSION_STACKBUF_SIZE );
+				memDecompressed.EnsureCapacity( actualSize );
+
+				unsigned uDecompressedSize = (unsigned)actualSize;
+				func_COM_BufferToBufferDecompress( memDecompressed.Base(), &uDecompressedSize, pCompressedData, nCompressedDataSize );
+				if ( uDecompressedSize == 0 || ((unsigned int)actualSize) != uDecompressedSize )
+				{
+					static ConVarRef net_showudp("net_showudp");
+					if ( net_showudp.IsValid() && net_showudp.GetBool() )
+					{
+						DevMsg(PROJECT_NAME " - UDP :  discarding %d bytes from %s due to decompression error [%d decomp, actual %d] at tm=%f rt=%f\n", ret, packet->from.ToString(), uDecompressedSize, actualSize, 
+							net_time, Plat_FloatTime() );
+					}
+					return false;
+				}
+
+				// packet->wiresize is already set
+				Q_memcpy( packet->data, memDecompressed.Base(), uDecompressedSize );
+
+				packet->size = uDecompressedSize;
+			}
+
+			return func_NET_LagPacket( true, packet );
+		}
+		else
+		{
+			ConDMsg(PROJECT_NAME " - networkthreading(NET_ReceiveDatagram):  Oversize packet from %s\n", packet->from.ToString() );
+		}
+	}
+	else if ( ret == -1  ) // error?
+	{
+		const int net_error = func_NET_GetLastError();
+		switch ( net_error )
+		{
+		case WSAEWOULDBLOCK:
+		case WSAECONNRESET:
+		case WSAECONNREFUSED:
+			break;
+		case WSAEMSGSIZE:
+			ConDMsg ("NET_ReceivePacket: %s\n", func_NET_ErrorString(net_error));
+			break;
+		default:
+			// Let's continue even after errors
+			ConDMsg ("NET_ReceivePacket: %s\n", func_NET_ErrorString(net_error));
+			break;
+		}
+	}
+
+	return false;
+}
+
 void CNetworkThreadingModule::Think(bool bSimulating)
 {
 	CBaseServer* pServer = (CBaseServer*)Util::server;
 	if (pServer)
+	{
 		g_nChallengeNr.store(pServer->m_CurrentRandomNonce);
+		g_nLastChallengeNr.store(pServer->m_LastRandomNonce);
+	}
 }
 
 static ThreadHandle_t g_pNetworkThread = nullptr;
@@ -389,9 +619,12 @@ void CNetworkThreadingModule::ServerActivate(edict_t* pEdictList, int edictCount
 {
 	CBaseServer* pServer = (CBaseServer*)Util::server;
 	if (pServer)
+	{
 		g_nChallengeNr.store(pServer->m_CurrentRandomNonce);
+		g_nLastChallengeNr.store(pServer->m_LastRandomNonce);
+	}
 
-	g_nThreadState.store(NetworkThreadState::STATE_RUNNING);
+	g_nThreadState.store(ThreadState::STATE_RUNNING);
 	if (g_pNetworkThread == nullptr)
 	{
 		ConDMsg(PROJECT_NAME " - networkthreading: Starting network thread...\n");
@@ -405,10 +638,10 @@ void CNetworkThreadingModule::LevelShutdown()
 		return;
 
 	ConDMsg(PROJECT_NAME " - networkthreading: Stopping network thread...\n");
-	if (g_nThreadState.load() != NetworkThreadState::STATE_NOTRUNNING)
+	if (g_nThreadState.load() != ThreadState::STATE_NOTRUNNING)
 	{
-		g_nThreadState.store(NetworkThreadState::STATE_SHOULD_SHUTDOWN);
-		while (g_nThreadState.load() != NetworkThreadState::STATE_NOTRUNNING) // Wait for shutdown
+		g_nThreadState.store(ThreadState::STATE_SHOULD_SHUTDOWN);
+		while (g_nThreadState.load() != ThreadState::STATE_NOTRUNNING) // Wait for shutdown
 			ThreadSleep(0);
 	}
 	ReleaseThreadHandle(g_pNetworkThread);
@@ -438,6 +671,27 @@ void CNetworkThreadingModule::InitDetour(bool bPreServer)
 		engine_loader.GetModule(), Symbols::NET_RemoveNetChannelSym,
 		(void*)hook_NET_RemoveNetChannel, m_pID
 	);
+
+	Detour::Create(
+		&detour_NET_ReceiveDatagram, "NET_ReceiveDatagram",
+		engine_loader.GetModule(), Symbols::NET_ReceiveDatagramSym,
+		(void*)hook_NET_ReceiveDatagram, m_pID
+	);
+
+	func_NET_GetLastError = (Symbols::NET_GetLastError)Detour::GetFunction(engine_loader.GetModule(), Symbols::NET_GetLastErrorSym);
+	Detour::CheckFunction((void*)func_NET_GetLastError, "NET_GetLastError");
+
+	func_NET_ErrorString = (Symbols::NET_ErrorString)Detour::GetFunction(engine_loader.GetModule(), Symbols::NET_ErrorStringSym);
+	Detour::CheckFunction((void*)func_NET_ErrorString, "NET_ErrorString");
+
+	func_NET_GetLong = (Symbols::NET_GetLong)Detour::GetFunction(engine_loader.GetModule(), Symbols::NET_GetLongSym);
+	Detour::CheckFunction((void*)func_NET_GetLong, "NET_GetLong");
+
+	func_NET_LagPacket = (Symbols::NET_LagPacket)Detour::GetFunction(engine_loader.GetModule(), Symbols::NET_LagPacketSym);
+	Detour::CheckFunction((void*)func_NET_LagPacket, "NET_LagPacket");
+
+	func_COM_BufferToBufferDecompress = (Symbols::COM_BufferToBufferDecompress)Detour::GetFunction(engine_loader.GetModule(), Symbols::COM_BufferToBufferDecompressSym);
+	Detour::CheckFunction((void*)func_COM_BufferToBufferDecompress, "COM_BufferToBufferDecompress");
 
 	func_Filter_ShouldDiscard = (Symbols::Filter_ShouldDiscard)Detour::GetFunction(engine_loader.GetModule(), Symbols::Filter_ShouldDiscardSym);
 	Detour::CheckFunction((void*)func_Filter_ShouldDiscard, "Filter_ShouldDiscard");
@@ -478,4 +732,7 @@ void CNetworkThreadingModule::InitDetour(bool bPreServer)
 		engine_loader.GetModule(), Symbols::writeipSym,
 		(void*)hook_writeip, m_pID
 	);
+
+	net_sockets = Detour::ResolveSymbol<CUtlVector<netsocket_t>>(engine_loader, Symbols::net_socketsSym);
+	Detour::CheckValue("get variable", "net_sockets", net_sockets != nullptr);
 }
