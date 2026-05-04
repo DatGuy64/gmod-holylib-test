@@ -58,16 +58,29 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
 
 static bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
 {
+    Msg("[AWH DEBUG] VisibleByLOS_NoCache: viewer=%p target=%p\n", (void*)viewer, (void*)target);
+
     if (!viewer || !target)
+    {
+        Msg("[AWH DEBUG] NULL viewer or target!\n");
         return false;
+    }
 
     edict_t* viewerEdict = viewer->edict();
+    Msg("[AWH DEBUG] viewerEdict=%p\n", (void*)viewerEdict);
     if (!viewerEdict || viewerEdict->IsFree())
+    {
+        Msg("[AWH DEBUG] viewer edict null or free\n");
         return false;
+    }
 
     edict_t* targetEdict = target->edict();
+    Msg("[AWH DEBUG] targetEdict=%p\n", (void*)targetEdict);
     if (!targetEdict || targetEdict->IsFree())
+    {
+        Msg("[AWH DEBUG] target edict null or free\n");
         return false;
+    }
 
     const Vector viewerEye = viewer->EyePosition();
 
@@ -75,7 +88,10 @@ static bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
         g_m_vecOrigin_Offset = new DTVarByOffset("DT_BaseEntity", "m_vecOrigin");
     const Vector* pOrigin = (const Vector*)g_m_vecOrigin_Offset->GetPointer(target);
     if (!pOrigin)
+    {
+        Msg("[AWH DEBUG] pOrigin null\n");
         return false;
+    }
 
     const Vector& origin = *pOrigin;
 
@@ -110,6 +126,15 @@ bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheS
 
 bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* target, int tIdx, float cacheSeconds)
 {
+    Msg("[AWH DEBUG] VisibleByLOS_WithSlot called: viewer=%p vIdx=%d target=%p tIdx=%d cache=%.2f\n",
+        (void*)viewer, vIdx, (void*)target, tIdx, cacheSeconds);
+
+    if (vIdx < 0 || vIdx > HOLYLIB_MAX_PLAYERS || tIdx < 0 || tIdx > HOLYLIB_MAX_PLAYERS)
+    {
+        Msg("[AWH DEBUG] INVALID SLOT: vIdx=%d tIdx=%d\n", vIdx, tIdx);
+        return false;
+    }
+
     if (cacheSeconds > 0.0f)
     {
         const float now = gpGlobals->curtime;
@@ -118,13 +143,18 @@ bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* t
         {
             g_LOSVis[vIdx][tIdx] = 1;
             g_LOSNext[vIdx][tIdx] = now + cacheSeconds;
+            Msg("[AWH DEBUG] Cache init, returning true\n");
             return true;
         }
 
         if (g_LOSNext[vIdx][tIdx] > now)
+        {
+            Msg("[AWH DEBUG] Cache hit: %d\n", (int)g_LOSVis[vIdx][tIdx]);
             return g_LOSVis[vIdx][tIdx] != 0;
+        }
     }
 
+    Msg("[AWH DEBUG] About to call VisibleByLOS_NoCache viewer=%p target=%p\n", (void*)viewer, (void*)target);
     const bool vis = VisibleByLOS_NoCache(viewer, target);
 
     if (cacheSeconds > 0.0f)
@@ -132,6 +162,7 @@ bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* t
         g_LOSVis[vIdx][tIdx] = vis ? 1 : 0;
         g_LOSNext[vIdx][tIdx] = gpGlobals->curtime + cacheSeconds;
     }
+    Msg("[AWH DEBUG] VisibleByLOS_WithSlot result: %d\n", (int)vis);
     return vis;
 }
 
@@ -284,9 +315,12 @@ static void ApplyAntiWallhack(CBasePlayer* viewer, int viewerSlot, CCheckTransmi
 
         // Re-resolve viewer just before LOS to avoid using a stale pointer
         edict_t* viewerEdict = Util::engineserver->PEntityOfEntIndex(viewerSlot);
-        if (!viewerEdict || viewerEdict->IsFree()) break;
+        Msg("[AWH DEBUG] ApplyAWH: viewerSlot=%d viewerEdict=%p targetSlot=%d targetEnt=%p\n",
+            viewerSlot, (void*)viewerEdict, i, (void*)targetEnt);
+        if (!viewerEdict || viewerEdict->IsFree()) { Msg("[AWH DEBUG] viewerEdict null/free, break\n"); break; }
         CBaseEntity* freshViewer = Util::servergameents->EdictToBaseEntity(viewerEdict);
-        if (!freshViewer) break;
+        Msg("[AWH DEBUG] freshViewer=%p\n", (void*)freshViewer);
+        if (!freshViewer) { Msg("[AWH DEBUG] freshViewer null, break\n"); break; }
 
         if (!HolyPVS_VisibleByLOS_WithSlot(freshViewer, viewerSlot, targetEnt, i, cacheSeconds))        {
             pTransmitBits->Clear(i);
