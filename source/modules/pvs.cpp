@@ -282,7 +282,13 @@ static void ApplyAntiWallhack(CBasePlayer* viewer, int viewerSlot, CCheckTransmi
             continue;
         }
 
-        if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))        {
+        // Re-resolve viewer just before LOS to avoid using a stale pointer
+        edict_t* viewerEdict = Util::engineserver->PEntityOfEntIndex(viewerSlot);
+        if (!viewerEdict || viewerEdict->IsFree()) break;
+        CBaseEntity* freshViewer = Util::servergameents->EdictToBaseEntity(viewerEdict);
+        if (!freshViewer) break;
+
+        if (!HolyPVS_VisibleByLOS_WithSlot(freshViewer, viewerSlot, targetEnt, i, cacheSeconds))        {
             pTransmitBits->Clear(i);
             if (pAlwaysBits) pAlwaysBits->Clear(i);
 
