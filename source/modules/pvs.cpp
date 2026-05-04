@@ -28,7 +28,7 @@ bool  g_HolyPVS_AWHJustEnabled[HOLYLIB_MAX_PLAYERS + 1]  = { false };
 float g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1] = { 0.0f };
 uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2]      = {};
 uint64_t g_HolyPVS_AWHWhitelist[HOLYLIB_MAX_PLAYERS + 1][2] = {};
-bool g_bIsPlayerTalking[HOLYLIB_MAX_PLAYERS]              = { false };
+extern bool g_bIsPlayerTalking[HOLYLIB_MAX_PLAYERS];
 
 static float g_LOSNext[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
 static unsigned char g_LOSVis[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
