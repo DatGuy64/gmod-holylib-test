@@ -56,7 +56,11 @@ static void hook_CSteam3Server_OnLogonSuccess(CSteam3Server* srv, SteamServersCo
 	}
 }
 
-static std::vector<CBaseClient*> g_pApprovedClients;
+struct ApprovedClient {
+	CBaseClient* pClient;
+	int nTicks = 0;
+};
+static std::vector<ApprovedClient> g_pApprovedClients;
 static std::unordered_set<uint64> g_pApprovedSteamIDs;
 static Detouring::Hook detour_CSteam3Server_NotifyClientConnect;
 static Symbols::CSteam3Server_SendUpdatedServerDetails func_CSteam3Server_SendUpdatedServerDetails;
@@ -108,7 +112,7 @@ static bool hook_CSteam3Server_NotifyClientConnect(CSteam3Server* srv, CBaseClie
 				func_CSteam3Server_SendUpdatedServerDetails(srv);
 
 				client->m_bSendServerInfo = true;
-				g_pApprovedClients.push_back(client);
+				g_pApprovedClients.push_back({client, 0});
 			}
 
 			if (bOverride)
@@ -255,7 +259,8 @@ void CSteamWorksModule::Think(bool bSimulating)
 {
 	for (auto it = g_pApprovedClients.begin(); it != g_pApprovedClients.end(); )
 	{
-		CBaseClient* pClient = *it;
+		CBaseClient* pClient = it->pClient;
+
 		if (!pClient->IsConnected())
 		{
 			Msg(PROJECT_NAME ": removed client as it wasn't connected\n");
@@ -266,7 +271,12 @@ void CSteamWorksModule::Think(bool bSimulating)
 		if (!pClient->m_bSendServerInfo)
 		{
 			Msg(PROJECT_NAME ": skipped client as it didn't want the serverinfo\n");
-			it++;
+			it->nTicks++;
+
+			if (it->nTicks > 300)
+				it = g_pApprovedClients.erase(it);
+			else
+				it++;
 			continue;
 		}
 
