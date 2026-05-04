@@ -32,7 +32,7 @@ extern float    g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1];
 extern uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2];
 extern uint64_t g_HolyPVS_AWHWhitelist[HOLYLIB_MAX_PLAYERS + 1][2];
 extern bool     g_bIsPlayerTalking[HOLYLIB_MAX_PLAYERS];
-extern bool HolyPVS_VisibleByLOS_WithSlot(int vIdx, int tIdx, float cacheSeconds);
+extern bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* target, int tIdx, float cacheSeconds);
 #if MODULE_EXISTS_PVS
 extern void HolyPVS_ResetAWHSlot(int idx);
 #endif
@@ -1003,7 +1003,7 @@ static inline bool HolyPVS_AWHWhitelistTest(int viewerSlot, int targetSlot)
 }
 
 // Called at the end of New_CServerGameEnts_CheckTransmit (fast transmit path)
-static inline void ApplyAntiWallhackFastTransmit(int viewerSlot, CCheckTransmitInfo* pInfo)
+static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo)
 {
     if (!g_HolyPVS_AWHEnabled[viewerSlot])
         return;
@@ -1036,9 +1036,7 @@ static inline void ApplyAntiWallhackFastTransmit(int viewerSlot, CCheckTransmitI
     for (int i = 1; i <= maxClients; ++i)
     {
         if (i == viewerSlot) continue;
-
         if (!pTransmitBits->Get(i)) continue;
-
         if (HolyPVS_AWHWhitelistTest(viewerSlot, i)) continue;
         if (g_bIsPlayerTalking[i - 1]) continue;
 
@@ -1048,15 +1046,15 @@ static inline void ApplyAntiWallhackFastTransmit(int viewerSlot, CCheckTransmitI
             continue;
         }
 
-        if (!HolyPVS_VisibleByLOS_WithSlot(viewerSlot, i, cacheSeconds))
+        edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
+        if (!targetEdict || targetEdict->IsFree()) continue;
+        CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
+        if (!targetEnt) continue;
+
+        if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))
         {
             pTransmitBits->Clear(i);
             if (pAlwaysBits) pAlwaysBits->Clear(i);
-
-            edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
-            if (!targetEdict || targetEdict->IsFree()) continue;
-            CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
-            if (!targetEnt) continue;
 
             for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
             {
@@ -1323,7 +1321,7 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 	}
 	pInfo->m_pTransmitEdict->Or(g_pGlobalTransmitTickCache.g_bWasSeenByPlayer, &g_pGlobalTransmitTickCache.g_bWasSeenByPlayer);
 
-	ApplyAntiWallhackFastTransmit(clientIndex + 1, pInfo);
+	ApplyAntiWallhackFastTransmit(pRecipientPlayer, clientIndex + 1, pInfo);
 	return true;
 }
 
