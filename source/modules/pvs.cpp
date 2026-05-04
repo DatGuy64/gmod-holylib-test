@@ -15,7 +15,7 @@
 #include <stdint.h>
 
 #include "util.h"
-extern IEngineTrace* enginetrace;
+#include "enginecallbacks.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -212,6 +212,7 @@ void HolyPVS_ResetAWHSlot(int idx)
 class CPVSModule : public IModule
 {
 public:
+	void Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn) override;
 	void LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit) override;
 	void LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua) override;
 	void InitDetour(bool bPreServer) override;
@@ -1656,6 +1657,15 @@ LUA_FUNCTION_STATIC(pvs_EnablePostTransmitHook)
 	return 0;
 }
 
+void CPVSModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamefn)
+{
+	if (!enginetrace)
+	{
+		enginetrace = (IEngineTrace*)appfn[0](INTERFACEVERSION_ENGINETRACE_SERVER, nullptr);
+		Detour::CheckValue("get interface", "enginetrace", enginetrace != nullptr);
+	}
+}
+
 void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 {
 	if (bServerInit)
@@ -1736,18 +1746,7 @@ extern void Networking_SwitchToOURTransmit();
 void CPVSModule::InitDetour(bool bPreServer)
 {
 	if (bPreServer)
-	{
-		if (!enginetrace)
-		{
-			SourceSDK::FactoryLoader engine_loader("engine");
-			enginetrace = engine_loader.GetInterface<IEngineTrace>(INTERFACEVERSION_ENGINETRACE_SERVER);
-			if (!enginetrace)
-				Warning("[pvs] Failed to get IEngineTrace!\n");
-			else
-				Msg("[pvs] IEngineTrace initialized: %p\n", (void*)enginetrace);
-		}
 		return;
-	}
 
 #ifndef HOLYLIB_MANUALNETWORKING
 	DETOUR_PREPARE_THISCALL();
