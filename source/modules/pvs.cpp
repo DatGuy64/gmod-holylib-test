@@ -32,7 +32,7 @@ extern bool g_bIsPlayerTalking[HOLYLIB_MAX_PLAYERS];
 
 static float g_LOSNext[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
 static unsigned char g_LOSVis[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
-static DTVarByOffset* g_m_vecAbsOrigin_Offset = nullptr;
+static DTVarByOffset* g_m_vecOrigin_Offset = nullptr;
 
 static CTraceFilterWorldOnly g_HolyLibTraceFilterWorldOnly;
 
@@ -83,16 +83,16 @@ static bool VisibleByLOS_NoCache(CBaseEntity* viewer, int viewerIdx, CBaseEntity
         return false;
     }
 
-    if (!g_m_vecAbsOrigin_Offset)
-        g_m_vecAbsOrigin_Offset = new DTVarByOffset("DT_BaseEntity", "m_vecAbsOrigin");
+    if (!g_m_vecOrigin_Offset)
+        g_m_vecOrigin_Offset = new DTVarByOffset("DT_BaseEntity", "m_vecOrigin");
 
-    const Vector* pViewerOrigin = (const Vector*)g_m_vecAbsOrigin_Offset->GetPointer(viewer);
+    const Vector* pViewerOrigin = (const Vector*)g_m_vecOrigin_Offset->GetPointer(viewer);
     if (!pViewerOrigin)
     {
         Msg("[AWH DEBUG] pViewerOrigin null\n");
         return false;
     }
-    const Vector* pTargetOrigin = (const Vector*)g_m_vecAbsOrigin_Offset->GetPointer(target);
+    const Vector* pTargetOrigin = (const Vector*)g_m_vecOrigin_Offset->GetPointer(target);
     if (!pTargetOrigin)
     {
         Msg("[AWH DEBUG] pTargetOrigin null\n");
