@@ -56,14 +56,19 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
     return tr.fraction > 0.97f;
 }
 
-static bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
+static bool VisibleByLOS_NoCache(CBaseEntity* viewer, int vIdx, CBaseEntity* target, int tIdx)
 {
-    if (!viewer || !target)
+    edict_t* viewerEdict = Util::engineserver->PEntityOfEntIndex(vIdx);
+    edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(tIdx);
+    if (!viewerEdict || !targetEdict || viewerEdict->IsFree() || targetEdict->IsFree())
         return false;
 
-    edict_t* viewerEdict = viewer->edict();
-    edict_t* targetEdict = target->edict();
-    if (!viewerEdict || !targetEdict || viewerEdict->IsFree() || targetEdict->IsFree())
+    // Re-resolve if caller passed nullptr (target only needed here)
+    if (!target)
+        target = Util::servergameents->EdictToBaseEntity(targetEdict);
+    if (!viewer)
+        viewer = Util::servergameents->EdictToBaseEntity(viewerEdict);
+    if (!viewer || !target)
         return false;
 
     const Vector viewerEye = viewer->EyePosition();
@@ -84,44 +89,46 @@ static bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
 
 bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheSeconds)
 {
-    if (cacheSeconds <= 0.0f)
-        return VisibleByLOS_NoCache(viewer, target);
-
     edict_t* vEd = viewer ? viewer->edict() : nullptr;
     edict_t* tEd = target ? target->edict() : nullptr;
     int vIdx = vEd ? vEd->m_EdictIndex : -1;
     int tIdx = tEd ? tEd->m_EdictIndex : -1;
-    if (vIdx < 1 || vIdx > HOLYLIB_MAX_PLAYERS || tIdx < 1 || tIdx > HOLYLIB_MAX_PLAYERS)
-        return VisibleByLOS_NoCache(viewer, target);
+
+    if (cacheSeconds <= 0.0f || vIdx < 1 || vIdx > HOLYLIB_MAX_PLAYERS || tIdx < 1 || tIdx > HOLYLIB_MAX_PLAYERS)
+        return VisibleByLOS_NoCache(viewer, vIdx, target, tIdx);
 
     const float now = gpGlobals->curtime;
-    if (g_LOSNext[vIdx][tIdx] > now)
+    if (g_LOSNext[vIdx][tIdx] >= 0.0f && g_LOSNext[vIdx][tIdx] > now)
         return g_LOSVis[vIdx][tIdx] != 0;
 
-    const bool vis = VisibleByLOS_NoCache(viewer, target);
+    const bool vis = VisibleByLOS_NoCache(viewer, vIdx, target, tIdx);
     g_LOSVis[vIdx][tIdx] = vis ? 1 : 0;
     g_LOSNext[vIdx][tIdx] = now + cacheSeconds;
     return vis;
 }
 
+// Returns LOS visibility using cache. viewer/target only used when cache expired.
 bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* target, int tIdx, float cacheSeconds)
 {
     if (cacheSeconds > 0.0f)
     {
         const float now = gpGlobals->curtime;
 
-        if (g_LOSNext[vIdx][tIdx] == 0.0f)
+        if (g_LOSNext[vIdx][tIdx] >= 0.0f)
         {
+            if (g_LOSNext[vIdx][tIdx] > now)
+                return g_LOSVis[vIdx][tIdx] != 0;
+        }
+        else
+        {
+            // First call for this pair - assume visible, schedule real check next expiry
             g_LOSVis[vIdx][tIdx] = 1;
             g_LOSNext[vIdx][tIdx] = now + cacheSeconds;
             return true;
         }
-
-        if (g_LOSNext[vIdx][tIdx] > now)
-            return g_LOSVis[vIdx][tIdx] != 0;
     }
 
-    const bool vis = VisibleByLOS_NoCache(viewer, target);
+    const bool vis = VisibleByLOS_NoCache(viewer, vIdx, target, tIdx);
 
     if (cacheSeconds > 0.0f)
     {
@@ -146,7 +153,7 @@ void HolyPVS_ResetAWHSlot(int idx)
 
     for (int i = 1; i <= HOLYLIB_MAX_PLAYERS; ++i)
     {
-        g_LOSNext[idx][i] = 0.0f;
+        g_LOSNext[idx][i] = -1.0f;
         g_LOSVis[idx][i]  = 0;
     }
 
@@ -157,7 +164,7 @@ void HolyPVS_ResetAWHSlot(int idx)
     {
         g_HolyPVS_AWHSeen[viewer][wordIdx]      &= mask;
         g_HolyPVS_AWHWhitelist[viewer][wordIdx] &= mask;
-        g_LOSNext[viewer][idx] = 0.0f;
+        g_LOSNext[viewer][idx] = -1.0f;
         g_LOSVis[viewer][idx]  = 0;
     }
 }
@@ -246,7 +253,6 @@ static void ApplyAntiWallhack(CBaseEntity* viewer, int viewerSlot, CCheckTransmi
 
     if (g_HolyPVS_AWHJustEnabled[viewerSlot])
     {
-        // Burst path: force-transmit all players once so client has their state
         for (int i = 1; i <= maxClients; ++i)
         {
             if (i == viewerSlot) continue;
@@ -264,45 +270,80 @@ static void ApplyAntiWallhack(CBaseEntity* viewer, int viewerSlot, CCheckTransmi
         return;
     }
 
-    // Normal path: filter players not visible by LOS
-    for (int i = 1; i <= maxClients; ++i)
+    // pAlwaysBits null check once outside loop
+    if (pAlwaysBits)
     {
-        if (i == viewerSlot) continue;
-
-        // Skip early if not in transmit — most common case
-        if (!pTransmitBits->Get(i)) continue;
-
-        if (HolyPVS_AWHWhitelistTest(viewerSlot, i)) continue;
-        if (g_bIsPlayerTalking[i - 1]) continue;
-
-        if (!HolyPVS_AWHSeenTest(viewerSlot, i))
+        for (int i = 1; i <= maxClients; ++i)
         {
-            HolyPVS_AWHSeenSet(viewerSlot, i);
-            continue;
-        }
+            if (i == viewerSlot) continue;
+            if (!pTransmitBits->Get(i)) continue;
+            if (HolyPVS_AWHWhitelistTest(viewerSlot, i)) continue;
+            if (g_bIsPlayerTalking[i - 1]) continue;
 
-        edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
-        if (!targetEdict || targetEdict->IsFree()) continue;
-        CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
-        if (!targetEnt) continue;
-
-        if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))
-        {
-            pTransmitBits->Clear(i);
-            if (pAlwaysBits) pAlwaysBits->Clear(i);
-
-            // Hide children (weapons, hands parented to target)
-
-            for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
+            if (!HolyPVS_AWHSeenTest(viewerSlot, i))
             {
-                edict_t* chEd = ch->edict();
-                if (!chEd || chEd->IsFree()) continue;
-                const int idx = chEd->m_EdictIndex;
-                if (idx <= maxClients) continue;
-                if (pTransmitBits->Get(idx))
+                HolyPVS_AWHSeenSet(viewerSlot, i);
+                continue;
+            }
+
+            // targetEnt resolved only when LOS says invisible
+            if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, nullptr, i, cacheSeconds))
+            {
+                pTransmitBits->Clear(i);
+                pAlwaysBits->Clear(i);
+
+                edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
+                if (!targetEdict || targetEdict->IsFree()) continue;
+                CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
+                if (!targetEnt) continue;
+
+                for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
                 {
-                    pTransmitBits->Clear(idx);
-                    if (pAlwaysBits) pAlwaysBits->Clear(idx);
+                    edict_t* chEd = ch->edict();
+                    if (!chEd || chEd->IsFree()) continue;
+                    const int idx = chEd->m_EdictIndex;
+                    if (idx <= maxClients) continue;
+                    if (pTransmitBits->Get(idx))
+                    {
+                        pTransmitBits->Clear(idx);
+                        pAlwaysBits->Clear(idx);
+                    }
+                }
+            }
+        }
+    }
+    else
+    {
+        for (int i = 1; i <= maxClients; ++i)
+        {
+            if (i == viewerSlot) continue;
+            if (!pTransmitBits->Get(i)) continue;
+            if (HolyPVS_AWHWhitelistTest(viewerSlot, i)) continue;
+            if (g_bIsPlayerTalking[i - 1]) continue;
+
+            if (!HolyPVS_AWHSeenTest(viewerSlot, i))
+            {
+                HolyPVS_AWHSeenSet(viewerSlot, i);
+                continue;
+            }
+
+            if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, nullptr, i, cacheSeconds))
+            {
+                pTransmitBits->Clear(i);
+
+                edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
+                if (!targetEdict || targetEdict->IsFree()) continue;
+                CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
+                if (!targetEnt) continue;
+
+                for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
+                {
+                    edict_t* chEd = ch->edict();
+                    if (!chEd || chEd->IsFree()) continue;
+                    const int idx = chEd->m_EdictIndex;
+                    if (idx <= maxClients) continue;
+                    if (pTransmitBits->Get(idx))
+                        pTransmitBits->Clear(idx);
                 }
             }
         }
