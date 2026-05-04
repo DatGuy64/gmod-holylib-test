@@ -270,7 +270,6 @@ void CSteamWorksModule::Think(bool bSimulating)
 
 		if (!pClient->m_bSendServerInfo)
 		{
-			Msg(PROJECT_NAME ": skipped client as it didn't want the serverinfo\n");
 			it->nTicks++;
 
 			if (it->nTicks > 300)
