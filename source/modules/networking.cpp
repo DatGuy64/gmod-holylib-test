@@ -36,7 +36,6 @@ extern bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEn
 #if MODULE_EXISTS_PVS
 extern void HolyPVS_ResetAWHSlot(int idx);
 #endif
-// ---------------------------------------------------
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -1002,7 +1001,6 @@ static inline bool HolyPVS_AWHWhitelistTest(int viewerSlot, int targetSlot)
     return (g_HolyPVS_AWHWhitelist[viewerSlot][bit >> 6] & (1ULL << (bit & 63))) != 0ULL;
 }
 
-// Called at the end of New_CServerGameEnts_CheckTransmit (fast transmit path)
 static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo)
 {
     if (!g_HolyPVS_AWHEnabled[viewerSlot])
@@ -1077,8 +1075,6 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
     if (forceBurst)
         g_HolyPVS_AWHJustEnabled[viewerSlot] = false;
 }
-// -----------------------------------------------------------
-
 bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)
 {
 	vec_t maxTransmitRange = g_nTransmitRange;
@@ -1510,7 +1506,6 @@ void CNetworkingModule::ClientDisconnect(edict_t* pPlayer)
 	g_pPlayerTransmitCache[pPlayer->m_EdictIndex-1].Reset();
 
 #if MODULE_EXISTS_PVS
-	// Reset AWH state so the next player reusing this slot doesn't inherit it.
 	HolyPVS_ResetAWHSlot(pPlayer->m_EdictIndex);
 #endif
 }
