@@ -58,6 +58,17 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
 
 static bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
 {
+    if (!viewer || !target)
+        return false;
+
+    edict_t* viewerEdict = viewer->edict();
+    if (!viewerEdict || viewerEdict->IsFree())
+        return false;
+
+    edict_t* targetEdict = target->edict();
+    if (!targetEdict || targetEdict->IsFree())
+        return false;
+
     const Vector viewerEye = viewer->EyePosition();
 
     if (!g_m_vecOrigin_Offset)
@@ -271,8 +282,7 @@ static void ApplyAntiWallhack(CBasePlayer* viewer, int viewerSlot, CCheckTransmi
             continue;
         }
 
-        if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))
-        {
+        if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))        {
             pTransmitBits->Clear(i);
             if (pAlwaysBits) pAlwaysBits->Clear(i);
 
