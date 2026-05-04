@@ -25,6 +25,7 @@
 #include "sourcesdk/ccservernetworkproperty.h"
 #include "sourcesdk/datatablestack.h"
 
+// Anti-Wallhack: variables defined in pvs.cpp
 #define HOLYLIB_MAX_PLAYERS 128
 extern bool     g_HolyPVS_AWHEnabled[HOLYLIB_MAX_PLAYERS + 1];
 extern bool     g_HolyPVS_AWHJustEnabled[HOLYLIB_MAX_PLAYERS + 1];
@@ -1006,13 +1007,13 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
     if (!g_HolyPVS_AWHEnabled[viewerSlot])
         return;
 
-    const bool forceBurst    = g_HolyPVS_AWHJustEnabled[viewerSlot];
-    const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
-    const int maxClients     = gpGlobals->maxClients;
-
     if (!viewer) return;
     edict_t* viewerEdict = viewer->edict();
     if (!viewerEdict || viewerEdict->IsFree()) return;
+
+    const bool forceBurst    = g_HolyPVS_AWHJustEnabled[viewerSlot];
+    const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
+    const int maxClients     = gpGlobals->maxClients;
 
     CBitVec<MAX_EDICTS>* pTransmitBits = pInfo->m_pTransmitEdict;
     CBitVec<MAX_EDICTS>* pAlwaysBits   = pInfo->m_pTransmitAlways;

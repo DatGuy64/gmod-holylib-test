@@ -66,13 +66,18 @@ static bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
     if (!viewerEdict || !targetEdict || viewerEdict->IsFree() || targetEdict->IsFree())
         return false;
 
-    const Vector viewerEye = viewer->EyePosition();
+    if (!enginetrace)
+        return true;
+
+    Vector viewerEye;
+    viewerEye = viewer->EyePosition();
 
     if (!g_m_vecOrigin_Offset)
         g_m_vecOrigin_Offset = new DTVarByOffset("DT_BaseEntity", "m_vecOrigin");
     const Vector* pOrigin = (const Vector*)g_m_vecOrigin_Offset->GetPointer(target);
     if (!pOrigin)
-        return false;
+        return true;
+
     const Vector& origin = *pOrigin;
 
     for (int i = 0; i < 7; ++i)
@@ -106,6 +111,14 @@ bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheS
 
 bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* target, int tIdx, float cacheSeconds)
 {
+    if (!viewer || !target)
+        return false;
+
+    edict_t* vEd = viewer->edict();
+    edict_t* tEd = target->edict();
+    if (!vEd || !tEd || vEd->IsFree() || tEd->IsFree())
+        return false;
+
     if (cacheSeconds > 0.0f)
     {
         const float now = gpGlobals->curtime;
@@ -283,7 +296,7 @@ static void ApplyAntiWallhack(CBasePlayer* viewer, int viewerSlot, CCheckTransmi
             continue;
         }
 
-        if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, (CBaseEntity*)targetEnt, i, cacheSeconds))
+        if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))
         {
             pTransmitBits->Clear(i);
             if (pAlwaysBits) pAlwaysBits->Clear(i);
@@ -393,6 +406,7 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 		g_bBlockAdditionToTransmit = false;
 	}
 
+	// Apply Anti-Wallhack filter after CheckTransmit produced its results
 	{
 		CBaseEntity* pRecipientEntity = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
 		if (pRecipientEntity && pRecipientEntity->IsPlayer())
