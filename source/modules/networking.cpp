@@ -25,6 +25,19 @@
 #include "sourcesdk/ccservernetworkproperty.h"
 #include "sourcesdk/datatablestack.h"
 
+#define HOLYLIB_MAX_PLAYERS 128
+extern bool     g_HolyPVS_AWHEnabled[HOLYLIB_MAX_PLAYERS + 1];
+extern bool     g_HolyPVS_AWHJustEnabled[HOLYLIB_MAX_PLAYERS + 1];
+extern float    g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1];
+extern uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2];
+extern uint64_t g_HolyPVS_AWHWhitelist[HOLYLIB_MAX_PLAYERS + 1][2];
+extern bool     g_bIsPlayerTalking[HOLYLIB_MAX_PLAYERS];
+extern bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* target, int tIdx, float cacheSeconds);
+#if MODULE_EXISTS_PVS
+extern void HolyPVS_ResetAWHSlot(int idx);
+#endif
+// ---------------------------------------------------
+
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
@@ -970,6 +983,102 @@ static inline void DoTransmitPVSCheck(
 static Detouring::Hook detour_CServerGameEnts_CheckTransmit;
 static ConVar networking_fastpath("holylib_networking_fastpath", "0", 0, "Experimental - If two players are in the same area, then it will reuse the transmit state of the first calculated player saving a lot of time");
 static ConVar networking_fastpath_usecluster("holylib_networking_fastpath_usecluster", "1", 0, "Experimental - When using the fastpatth, it will compate against clients in the same cluster instead of area");
+
+static inline bool HolyPVS_AWHSeenTest(int viewerSlot, int targetSlot)
+{
+    const int bit = targetSlot - 1;
+    return (g_HolyPVS_AWHSeen[viewerSlot][bit >> 6] & (1ULL << (bit & 63))) != 0ULL;
+}
+
+static inline void HolyPVS_AWHSeenSet(int viewerSlot, int targetSlot)
+{
+    const int bit = targetSlot - 1;
+    g_HolyPVS_AWHSeen[viewerSlot][bit >> 6] |= 1ULL << (bit & 63);
+}
+
+static inline bool HolyPVS_AWHWhitelistTest(int viewerSlot, int targetSlot)
+{
+    const int bit = targetSlot - 1;
+    return (g_HolyPVS_AWHWhitelist[viewerSlot][bit >> 6] & (1ULL << (bit & 63))) != 0ULL;
+}
+
+// Called at the end of New_CServerGameEnts_CheckTransmit (fast transmit path)
+static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo)
+{
+    if (!g_HolyPVS_AWHEnabled[viewerSlot])
+        return;
+
+    const bool forceBurst    = g_HolyPVS_AWHJustEnabled[viewerSlot];
+    const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
+    const int maxClients     = gpGlobals->maxClients;
+
+    if (!viewer) return;
+    edict_t* viewerEdict = viewer->edict();
+    if (!viewerEdict || viewerEdict->IsFree()) return;
+
+    CBitVec<MAX_EDICTS>* pTransmitBits = pInfo->m_pTransmitEdict;
+    CBitVec<MAX_EDICTS>* pAlwaysBits   = pInfo->m_pTransmitAlways;
+
+    for (int i = 1; i <= maxClients; ++i)
+    {
+        if (i == viewerSlot) continue;
+
+        edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
+        if (!targetEdict || targetEdict->IsFree()) continue;
+
+        CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
+        if (!targetEnt || !targetEnt->IsPlayer()) continue;
+
+        if (HolyPVS_AWHWhitelistTest(viewerSlot, i)) continue;
+
+        const int talkingSlot = i - 1;
+        if (talkingSlot >= 0 && talkingSlot < HOLYLIB_MAX_PLAYERS && g_bIsPlayerTalking[talkingSlot])
+            continue;
+
+        if (forceBurst)
+        {
+            HolyPVS_AWHSeenSet(viewerSlot, i);
+            if (!pTransmitBits->Get(i))
+            {
+                pTransmitBits->Set(i);
+                if (pAlwaysBits) pAlwaysBits->Set(i);
+            }
+            continue;
+        }
+
+        if (!pTransmitBits->Get(i)) continue;
+
+        if (!HolyPVS_AWHSeenTest(viewerSlot, i))
+        {
+            HolyPVS_AWHSeenSet(viewerSlot, i);
+            continue;
+        }
+
+        if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))
+        {
+            pTransmitBits->Clear(i);
+            if (pAlwaysBits) pAlwaysBits->Clear(i);
+
+            for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
+            {
+                edict_t* chEd = ch->edict();
+                if (!chEd || chEd->IsFree()) continue;
+                const int idx = chEd->m_EdictIndex;
+                if (idx <= maxClients) continue;
+                if (pTransmitBits->Get(idx))
+                {
+                    pTransmitBits->Clear(idx);
+                    if (pAlwaysBits) pAlwaysBits->Clear(idx);
+                }
+            }
+        }
+    }
+
+    if (forceBurst)
+        g_HolyPVS_AWHJustEnabled[viewerSlot] = false;
+}
+// -----------------------------------------------------------
+
 bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)
 {
 	vec_t maxTransmitRange = g_nTransmitRange;
@@ -1217,6 +1326,7 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 	}
 	pInfo->m_pTransmitEdict->Or(g_pGlobalTransmitTickCache.g_bWasSeenByPlayer, &g_pGlobalTransmitTickCache.g_bWasSeenByPlayer);
 
+	ApplyAntiWallhackFastTransmit(pRecipientPlayer, clientIndex + 1, pInfo);
 	return true;
 }
 
@@ -1398,6 +1508,11 @@ void CNetworkingModule::ClientDisconnect(edict_t* pPlayer)
 		return;
 
 	g_pPlayerTransmitCache[pPlayer->m_EdictIndex-1].Reset();
+
+#if MODULE_EXISTS_PVS
+	// Reset AWH state so the next player reusing this slot doesn't inherit it.
+	HolyPVS_ResetAWHSlot(pPlayer->m_EdictIndex);
+#endif
 }
 
 #if MODULE_EXISTS_PVS
