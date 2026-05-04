@@ -33,7 +33,7 @@ extern float    g_HolyPVS_AWHCacheSeconds[HOLYLIB_MAX_PLAYERS + 1];
 extern uint64_t g_HolyPVS_AWHSeen[HOLYLIB_MAX_PLAYERS + 1][2];
 extern uint64_t g_HolyPVS_AWHWhitelist[HOLYLIB_MAX_PLAYERS + 1][2];
 extern bool     g_bIsPlayerTalking[HOLYLIB_MAX_PLAYERS];
-extern bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* target, int tIdx, float cacheSeconds);
+extern bool HolyPVS_VisibleByLOS_WithSlot(int vIdx, int tIdx, float cacheSeconds);
 #if MODULE_EXISTS_PVS
 extern void HolyPVS_ResetAWHSlot(int idx);
 #endif
@@ -1056,7 +1056,7 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
         CBaseEntity* freshViewer = Util::servergameents->EdictToBaseEntity(viewerEdict);
         if (!freshViewer) break;
 
-        if (!HolyPVS_VisibleByLOS_WithSlot(freshViewer, viewerSlot, targetEnt, i, cacheSeconds))
+        if (!HolyPVS_VisibleByLOS_WithSlot(viewerSlot, i, cacheSeconds))
         {
             pTransmitBits->Clear(i);
             if (pAlwaysBits) pAlwaysBits->Clear(i);
