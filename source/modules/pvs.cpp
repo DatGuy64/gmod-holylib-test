@@ -15,7 +15,7 @@
 #include <stdint.h>
 
 #include "util.h"
-#include "enginecallbacks.h"
+extern IEngineTrace* enginetrace;
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
