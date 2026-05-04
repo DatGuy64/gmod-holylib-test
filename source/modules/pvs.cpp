@@ -233,7 +233,7 @@ static inline bool HolyPVS_AWHWhitelistTest(int viewerSlot, int targetSlot)
     return (g_HolyPVS_AWHWhitelist[viewerSlot][bit >> 6] & (1ULL << (bit & 63))) != 0ULL;
 }
 
-static void ApplyAntiWallhack(int viewerSlot, CCheckTransmitInfo* pInfo)
+static void ApplyAntiWallhack(CBaseEntity* viewer, int viewerSlot, CCheckTransmitInfo* pInfo)
 {
     if (!g_HolyPVS_AWHEnabled[viewerSlot])
         return;
@@ -281,16 +281,17 @@ static void ApplyAntiWallhack(int viewerSlot, CCheckTransmitInfo* pInfo)
             continue;
         }
 
-        if (!HolyPVS_VisibleByLOS_WithSlot(viewerSlot, i, cacheSeconds))
+        edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
+        if (!targetEdict || targetEdict->IsFree()) continue;
+        CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
+        if (!targetEnt) continue;
+
+        if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))
         {
             pTransmitBits->Clear(i);
             if (pAlwaysBits) pAlwaysBits->Clear(i);
 
             // Hide children (weapons, hands parented to target)
-            edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
-            if (!targetEdict || targetEdict->IsFree()) continue;
-            CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
-            if (!targetEnt) continue;
 
             for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
             {
@@ -398,7 +399,11 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 	{
 		const int clientIndex = pInfo->m_pClientEnt->m_EdictIndex;
 		if (clientIndex >= 1 && clientIndex <= HOLYLIB_MAX_PLAYERS)
-			ApplyAntiWallhack(clientIndex, pInfo);
+		{
+			CBaseEntity* pRecipientEntity = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
+			if (pRecipientEntity)
+				ApplyAntiWallhack(pRecipientEntity, clientIndex, pInfo);
+		}
 	}
 
 	if (bWasOverrideStateFlagsUsed)
