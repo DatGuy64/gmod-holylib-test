@@ -1736,7 +1736,18 @@ extern void Networking_SwitchToOURTransmit();
 void CPVSModule::InitDetour(bool bPreServer)
 {
 	if (bPreServer)
+	{
+		if (!enginetrace)
+		{
+			SourceSDK::FactoryLoader engine_loader("engine");
+			enginetrace = engine_loader.GetInterface<IEngineTrace>(INTERFACEVERSION_ENGINETRACE_SERVER);
+			if (!enginetrace)
+				Warning("[pvs] Failed to get IEngineTrace!\n");
+			else
+				Msg("[pvs] IEngineTrace initialized: %p\n", (void*)enginetrace);
+		}
 		return;
+	}
 
 #ifndef HOLYLIB_MANUALNETWORKING
 	DETOUR_PREPARE_THISCALL();
