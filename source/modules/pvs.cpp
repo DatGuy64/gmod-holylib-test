@@ -331,6 +331,7 @@ static void ApplyAntiWallhack(CBasePlayer* viewer, int viewerSlot, CCheckTransmi
         if (!freshViewer) { Msg("[AWH DEBUG] freshViewer null, break\n"); break; }
 
         if (!HolyPVS_VisibleByLOS_WithSlot(viewerSlot, i, cacheSeconds))
+        {
             pTransmitBits->Clear(i);
             if (pAlwaysBits) pAlwaysBits->Clear(i);
 
