@@ -1008,8 +1008,6 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
         return;
 
     if (!viewer) return;
-    edict_t* viewerEdict = viewer->edict();
-    if (!viewerEdict || viewerEdict->IsFree()) return;
 
     const bool forceBurst    = g_HolyPVS_AWHJustEnabled[viewerSlot];
     const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];

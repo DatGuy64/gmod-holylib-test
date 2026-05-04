@@ -58,25 +58,13 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
 
 static bool VisibleByLOS_NoCache(CBaseEntity* viewer, CBaseEntity* target)
 {
-    if (!viewer || !target)
-        return false;
-
-    edict_t* viewerEdict = viewer->edict();
-    edict_t* targetEdict = target->edict();
-    if (!viewerEdict || !targetEdict || viewerEdict->IsFree() || targetEdict->IsFree())
-        return false;
-
-    if (!enginetrace)
-        return true;
-
-    Vector viewerEye;
-    viewerEye = viewer->EyePosition();
+    const Vector viewerEye = viewer->EyePosition();
 
     if (!g_m_vecOrigin_Offset)
         g_m_vecOrigin_Offset = new DTVarByOffset("DT_BaseEntity", "m_vecOrigin");
     const Vector* pOrigin = (const Vector*)g_m_vecOrigin_Offset->GetPointer(target);
     if (!pOrigin)
-        return true;
+        return false;
 
     const Vector& origin = *pOrigin;
 
@@ -111,14 +99,6 @@ bool HolyPVS_VisibleByLOS(CBaseEntity* viewer, CBaseEntity* target, float cacheS
 
 bool HolyPVS_VisibleByLOS_WithSlot(CBaseEntity* viewer, int vIdx, CBaseEntity* target, int tIdx, float cacheSeconds)
 {
-    if (!viewer || !target)
-        return false;
-
-    edict_t* vEd = viewer->edict();
-    edict_t* tEd = target->edict();
-    if (!vEd || !tEd || vEd->IsFree() || tEd->IsFree())
-        return false;
-
     if (cacheSeconds > 0.0f)
     {
         const float now = gpGlobals->curtime;
@@ -223,9 +203,6 @@ static bool g_bEnableLuaPreTransmitHook = false;
 static bool g_bEnableLuaPostTransmitHook = false;
 
 static Detouring::Hook detour_CServerGameEnts_CheckTransmit;
-#ifndef HOLYLIB_MANUALNETWORKING
-extern bool g_pReplaceCServerGameEnts_CheckTransmit;
-extern bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts);
 
 static inline bool HolyPVS_AWHSeenTest(int viewerSlot, int targetSlot)
 {
@@ -250,13 +227,11 @@ static void ApplyAntiWallhack(CBasePlayer* viewer, int viewerSlot, CCheckTransmi
     if (!g_HolyPVS_AWHEnabled[viewerSlot])
         return;
 
+    if (!viewer) return;
+
     const bool forceBurst    = g_HolyPVS_AWHJustEnabled[viewerSlot];
     const float cacheSeconds = g_HolyPVS_AWHCacheSeconds[viewerSlot];
     const int maxClients     = gpGlobals->maxClients;
-
-    if (!viewer) return;
-    edict_t* viewerEdict = viewer->edict();
-    if (!viewerEdict || viewerEdict->IsFree()) return;
 
     CBitVec<MAX_EDICTS>* pTransmitBits = pInfo->m_pTransmitEdict;
     CBitVec<MAX_EDICTS>* pAlwaysBits   = pInfo->m_pTransmitAlways;
@@ -319,6 +294,21 @@ static void ApplyAntiWallhack(CBasePlayer* viewer, int viewerSlot, CCheckTransmi
     if (forceBurst)
         g_HolyPVS_AWHJustEnabled[viewerSlot] = false;
 }
+
+static inline void DoApplyAntiWallhack(CCheckTransmitInfo* pInfo)
+{
+    CBaseEntity* pRecipientEntity = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
+    if (pRecipientEntity && pRecipientEntity->IsPlayer())
+    {
+        const int clientIndex = pInfo->m_pClientEnt->m_EdictIndex;
+        if (clientIndex >= 1 && clientIndex <= HOLYLIB_MAX_PLAYERS)
+            ApplyAntiWallhack((CBasePlayer*)pRecipientEntity, clientIndex, pInfo);
+    }
+}
+
+#ifndef HOLYLIB_MANUALNETWORKING
+extern bool g_pReplaceCServerGameEnts_CheckTransmit;
+extern bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts);
 
 static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)
 {
@@ -406,16 +396,7 @@ static void hook_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheck
 		g_bBlockAdditionToTransmit = false;
 	}
 
-	// Apply Anti-Wallhack filter after CheckTransmit produced its results
-	{
-		CBaseEntity* pRecipientEntity = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
-		if (pRecipientEntity && pRecipientEntity->IsPlayer())
-		{
-			const int clientIndex = pInfo->m_pClientEnt->m_EdictIndex; // 1-based slot
-			if (clientIndex >= 1 && clientIndex <= HOLYLIB_MAX_PLAYERS)
-				ApplyAntiWallhack((CBasePlayer*)pRecipientEntity, clientIndex, pInfo);
-		}
-	}
+	DoApplyAntiWallhack(pInfo);
 
 	if (bWasOverrideStateFlagsUsed)
 	{
@@ -539,6 +520,8 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 		g_Lua->CallFunctionProtected(2, 0, true);
 		g_bBlockAdditionToTransmit = false;
 	}
+
+	DoApplyAntiWallhack(pInfo);
 
 	if (bWasOverrideStateFlagsUsed)
 	{
