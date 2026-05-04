@@ -2960,7 +2960,7 @@ static void hook_CBaseServer_CheckTimeouts(CBaseServer* srv)
 	int i;
 
 #if !defined( _DEBUG )
-	for (i=0 ; i< srv->GetClientCount() ; i++ )
+	for (i=0 ; i< srv->m_Clients.Count() ; i++ )
 	{
 		IClient	*cl = srv->GetClient(i);
 
@@ -2993,7 +2993,7 @@ static void hook_CBaseServer_CheckTimeouts(CBaseServer* srv)
 	}
 #endif
 
-	for (i=0 ; i< srv->GetClientCount() ; i++ )
+	for (i=0 ; i< srv->m_Clients.Count() ; i++ )
 	{
 		IClient	*cl = srv->GetClient(i);
 
