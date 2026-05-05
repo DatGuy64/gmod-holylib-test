@@ -1047,15 +1047,15 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
                 continue;
             }
 
-            edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
-            if (!targetEdict || targetEdict->IsFree()) continue;
-            CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
-            if (!targetEnt) continue;
-
-            if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))
+            if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, nullptr, i, cacheSeconds))
             {
                 pTransmitBits->Clear(i);
                 pAlwaysBits->Clear(i);
+
+                edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
+                if (!targetEdict || targetEdict->IsFree()) continue;
+                CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
+                if (!targetEnt) continue;
 
                 for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
                 {
@@ -1063,7 +1063,6 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
                     if (!chEd || chEd->IsFree()) continue;
                     const int idx = chEd->m_EdictIndex;
                     if (idx <= maxClients) continue;
-                    if (ch->GetOwnerEntity() != targetEnt && ch->GetMoveParent() != targetEnt) continue;
                     if (pTransmitBits->Get(idx))
                     {
                         pTransmitBits->Clear(idx);
@@ -1088,14 +1087,14 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
                 continue;
             }
 
-            edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
-            if (!targetEdict || targetEdict->IsFree()) continue;
-            CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
-            if (!targetEnt) continue;
-
-            if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))
+            if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, nullptr, i, cacheSeconds))
             {
                 pTransmitBits->Clear(i);
+
+                edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
+                if (!targetEdict || targetEdict->IsFree()) continue;
+                CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
+                if (!targetEnt) continue;
 
                 for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
                 {
@@ -1103,7 +1102,6 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
                     if (!chEd || chEd->IsFree()) continue;
                     const int idx = chEd->m_EdictIndex;
                     if (idx <= maxClients) continue;
-                    if (ch->GetOwnerEntity() != targetEnt && ch->GetMoveParent() != targetEnt) continue;
                     if (pTransmitBits->Get(idx))
                         pTransmitBits->Clear(idx);
                 }
