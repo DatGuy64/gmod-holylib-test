@@ -1002,6 +1002,43 @@ static inline bool HolyPVS_AWHWhitelistTest(int viewerSlot, int targetSlot)
     return (g_HolyPVS_AWHWhitelist[viewerSlot][bit >> 6] & (1ULL << (bit & 63))) != 0ULL;
 }
 
+static inline void ClearAntiWallhackTransmitEntityAndMoveChildren(CBaseEntity* ent, CCheckTransmitInfo* pInfo, CBitVec<MAX_EDICTS>& visited, bool isRoot)
+{
+	if (!ent || !pInfo || !pInfo->m_pTransmitEdict)
+		return;
+
+	edict_t* ed = ent->edict();
+	if (ed)
+	{
+		const int idx = ed->m_EdictIndex;
+		if (idx > 0 && idx < MAX_EDICTS)
+		{
+			if (visited.Get(idx))
+				return;
+
+			visited.Set(idx);
+
+			// Keep the old behavior for move children: never clear another player slot
+			// just because it is parented/move-parented to this player.
+			if (isRoot || idx > gpGlobals->maxClients)
+			{
+				pInfo->m_pTransmitEdict->Clear(idx);
+				if (pInfo->m_pTransmitAlways)
+					pInfo->m_pTransmitAlways->Clear(idx);
+			}
+			else
+			{
+				return;
+			}
+		}
+	}
+
+	for (CBaseEntity* ch = ent->FirstMoveChild(); ch; ch = ch->NextMovePeer())
+	{
+		ClearAntiWallhackTransmitEntityAndMoveChildren(ch, pInfo, visited, false);
+	}
+}
+
 static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo)
 {
 	if (!g_HolyPVS_AWHEnabled[viewerSlot])
@@ -1045,23 +1082,10 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 
 		if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))
 		{
-			pTransmitBits->Clear(i);
-			if (pAlwaysBits) pAlwaysBits->Clear(i);
+			CBitVec<MAX_EDICTS> visited;
+			visited.ClearAll();
 
-			for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
-			{
-				edict_t* chEd = ch->edict();
-				if (!chEd) continue;
-
-				const int idx = chEd->m_EdictIndex;
-				if (idx <= maxClients) continue;
-
-				if (pTransmitBits->Get(idx))
-				{
-					pTransmitBits->Clear(idx);
-					if (pAlwaysBits) pAlwaysBits->Clear(idx);
-				}
-			}
+			ClearAntiWallhackTransmitEntityAndMoveChildren(targetEnt, pInfo, visited, true);
 		}
 	}
 
@@ -1112,6 +1136,7 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 	const int nCurrentTick = gpGlobals->tickcount;
 	const bool bIsHLTV = pInfo->m_pTransmitAlways != nullptr;
 	const bool bFastPath = networking_fastpath.GetBool();
+	const bool bAWHEnabledForClient = g_HolyPVS_AWHEnabled[clientIndex + 1];
 	const bool bFirstTransmit = g_pGlobalTransmitTickCache.IsNewTick(nCurrentTick);
 	if (bFirstTransmit)
 	{
@@ -1134,7 +1159,7 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 		//if (bIsHLTV)
 		//	g_pGlobalTransmitTickCache.g_pAlwaysTransmitCacheBitVec.CopyTo(pInfo->m_pTransmitAlways);
 
-		if (bFastPath && !(g_HolyPVS_AWHEnabled[clientIndex+1]))
+		if (bFastPath && !bAWHEnabledForClient)
 		{
 			for (int iOtherClient = 0; iOtherClient<gpGlobals->maxClients; ++iOtherClient)
 			{
@@ -1307,7 +1332,7 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 
 	// HLTV has different networking! Some things might transmit when for normal players they wouldn't!
 	// ObserverMode also influences how things are networked!
-	if (bFastPath && !bIsHLTV && !(pRecipientPlayer->GetObserverMode() == OBS_MODE_IN_EYE && pRecipientPlayer->GetObserverTarget()))
+	if (bFastPath && !bAWHEnabledForClient && !bIsHLTV && !(pRecipientPlayer->GetObserverMode() == OBS_MODE_IN_EYE && pRecipientPlayer->GetObserverTarget()))
 	{
 		PlayerTransmitTickCache& nTransmitCache = g_pPlayerTransmitTickCache[clientIndex];
 		// Remove player's viewmodels from the cache since those are supposed to only be networked to the recipient player
