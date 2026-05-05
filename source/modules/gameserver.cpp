@@ -2642,17 +2642,7 @@ static CBaseClient* hook_CBaseServer_GetFreeClient(CBaseServer* _this, netadr_t&
 static Detouring::Hook detour_CBaseServer_CreateFakeClient;
 static CBaseClient* hook_CBaseServer_CreateFakeClient(CBaseServer* _this, const char* pName)
 {
-    Msg(PROJECT_NAME ": Dumping CBaseServer memory around m_nMaxclients:\n");
-    int* ptr = (int*)_this;
-    for (int i = 0; i < 50; i++)
-    {
-        Msg(PROJECT_NAME ": offset[%i] (+%i bytes) = %i\n", i, i * 4, ptr[i]);
-    }
-
-    Msg(PROJECT_NAME ": Calling trampoline directly\n");
-    CBaseClient* result = detour_CBaseServer_CreateFakeClient.GetTrampoline<Symbols::CBaseServer_CreateFakeClient>()(_this, pName);
-    Msg(PROJECT_NAME ": Trampoline returned %s\n", result ? result->GetClientName() : "nullptr");
-    return result;
+    return detour_CBaseServer_CreateFakeClient.GetTrampoline<Symbols::CBaseServer_CreateFakeClient>()(_this, pName);
 }
 
 static Detouring::Hook detour_CBaseServer_UserInfoChanged;
