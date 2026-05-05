@@ -1419,6 +1419,226 @@ static inline int ResolveAntiWallhackLinkedPlayerSlot(CBaseEntity* ent)
 	return -1;
 }
 
+
+static inline int HolyLib_GetEntIndexFromEntity(CBaseEntity* ent)
+{
+	if (!ent)
+		return -1;
+
+	edict_t* ed = ent->edict();
+	if (!ed)
+		return -1;
+
+	return ed->m_EdictIndex;
+}
+
+static inline int HolyLib_GetNetworkParentIndex(CBaseEntity* ent)
+{
+	if (!ent)
+		return -1;
+
+	edict_t* ed = ent->edict();
+	if (!ed)
+		return -1;
+
+	CCServerNetworkProperty* netProp = static_cast<CCServerNetworkProperty*>(ed->GetNetworkable());
+	if (!netProp)
+		return -1;
+
+	CCServerNetworkProperty* networkParent = netProp->GetNetworkParent();
+	if (!networkParent || !networkParent->edict())
+		return -1;
+
+	return networkParent->edict()->m_EdictIndex;
+}
+
+static inline void HolyLib_PrintAWHFlags(edict_t* ed)
+{
+	const int flags = ed ? ed->m_fStateFlags : 0;
+	Msg("flags[DS=%d AL=%d PVS=%d FULL=%d]",
+		(flags & FL_EDICT_DONTSEND) ? 1 : 0,
+		(flags & FL_EDICT_ALWAYS) ? 1 : 0,
+		(flags & FL_EDICT_PVSCHECK) ? 1 : 0,
+		(flags & FL_EDICT_FULLCHECK) ? 1 : 0);
+}
+
+static void HolyLib_ListAWHLinkedEntities(const CCommand& args)
+{
+	if (args.ArgC() < 2)
+	{
+		Msg("Usage: holylib_awh_list_linked <player entindex|all> [max results per player]\n");
+		Msg("Example: holylib_awh_list_linked 2\n");
+		Msg("Example: holylib_awh_list_linked all 64\n");
+		return;
+	}
+
+	int maxResults = args.ArgC() >= 3 ? (int)HolyLib_ParseIntegerAutoBase(args.Arg(2), 128) : 128;
+	if (maxResults < 1)
+		maxResults = 1;
+	if (maxResults > 512)
+		maxResults = 512;
+
+	const bool listAll = V_stricmp(args.Arg(1), "all") == 0 || V_stricmp(args.Arg(1), "*") == 0;
+	int requestedPlayer = listAll ? -1 : (int)HolyLib_ParseIntegerAutoBase(args.Arg(1), -1);
+
+	if (!listAll && (requestedPlayer < 1 || requestedPlayer > gpGlobals->maxClients))
+	{
+		Warning(PROJECT_NAME " - AWH list: invalid player entindex %d. Use 1..%d or 'all'.\n", requestedPlayer, gpGlobals->maxClients);
+		return;
+	}
+
+	int printedPerPlayer[HOLYLIB_MAX_PLAYERS + 1];
+	Plat_FastMemset(printedPerPlayer, 0, sizeof(printedPerPlayer));
+	int totalPrinted = 0;
+
+	Msg(PROJECT_NAME " - AWH list: linked entities for %s, maxResultsPerPlayer=%d\n", listAll ? "all players" : args.Arg(1), maxResults);
+
+	for (int idx = gpGlobals->maxClients + 1; idx < MAX_EDICTS; ++idx)
+	{
+		CBaseEntity* ent = HolyLib_GetEntityByIndexSafe(idx);
+		if (!ent)
+			continue;
+
+		const int linkedSlot = ResolveAntiWallhackLinkedPlayerSlot(ent);
+		if (linkedSlot < 1 || linkedSlot > gpGlobals->maxClients)
+			continue;
+
+		if (!listAll && linkedSlot != requestedPlayer)
+			continue;
+
+		if (printedPerPlayer[linkedSlot] >= maxResults)
+			continue;
+
+		CBaseEntity* owner = ent->GetOwnerEntity();
+		CBaseEntity* moveParent = ent->GetMoveParent();
+		const int ownerIdx = HolyLib_GetEntIndexFromEntity(owner);
+		const int moveParentIdx = HolyLib_GetEntIndexFromEntity(moveParent);
+		const int netParentIdx = HolyLib_GetNetworkParentIndex(ent);
+
+		edict_t* ed = ent->edict();
+		Msg(PROJECT_NAME " - AWH list: player=%d ent=%d class=%s owner=%d moveParent=%d netParent=%d ",
+			linkedSlot,
+			idx,
+			HolyLib_GetEntityClassnameSafe(ent),
+			ownerIdx,
+			moveParentIdx,
+			netParentIdx);
+		HolyLib_PrintAWHFlags(ed);
+		Msg("\n");
+
+		++printedPerPlayer[linkedSlot];
+		++totalPrinted;
+	}
+
+	for (int slot = 1; slot <= gpGlobals->maxClients; ++slot)
+	{
+		if (!listAll && slot != requestedPlayer)
+			continue;
+
+		if (printedPerPlayer[slot] >= maxResults)
+			Msg(PROJECT_NAME " - AWH list: player=%d reached max results %d, output truncated.\n", slot, maxResults);
+	}
+
+	Msg(PROJECT_NAME " - AWH list: printed %d linked entities. Use these ent indexes with holylib_awh_probe_movechild.\n", totalPrinted);
+}
+static ConCommand holylib_awh_list_linked("holylib_awh_list_linked", HolyLib_ListAWHLinkedEntities, "List entities linked to a player through owner/move-parent/network-parent for AWH debugging", 0);
+
+static void HolyLib_ProbeMoveChildOffsetsAuto(const CCommand& args)
+{
+	if (args.ArgC() < 2)
+	{
+		Msg("Usage: holylib_awh_probe_movechild_auto <player entindex> [max candidates]\n");
+		Msg("It auto-finds linked entities first, then probes parent->child and child->peer offsets.\n");
+		return;
+	}
+
+	const int parentIdx = (int)HolyLib_ParseIntegerAutoBase(args.Arg(1), -1);
+	CBaseEntity* parent = HolyLib_GetEntityByIndexSafe(parentIdx);
+	if (!parent || parentIdx < 1 || parentIdx > gpGlobals->maxClients)
+	{
+		Warning(PROJECT_NAME " - AWH auto probe: invalid player parent %d\n", parentIdx);
+		return;
+	}
+
+	int maxCandidates = args.ArgC() >= 3 ? (int)HolyLib_ParseIntegerAutoBase(args.Arg(2), 16) : 16;
+	if (maxCandidates < 1)
+		maxCandidates = 1;
+	if (maxCandidates > 32)
+		maxCandidates = 32;
+
+	int scanBytes = networking_awh_probe_scan_bytes.GetInt();
+	if (scanBytes < 0x100)
+		scanBytes = 0x100;
+	if (scanBytes > 0x4000)
+		scanBytes = 0x4000;
+
+	struct CandidateEnt
+	{
+		int idx;
+		CBaseEntity* ent;
+	};
+
+	CandidateEnt candidates[32];
+	int candidateCount = 0;
+
+	for (int idx = gpGlobals->maxClients + 1; idx < MAX_EDICTS && candidateCount < maxCandidates; ++idx)
+	{
+		CBaseEntity* ent = HolyLib_GetEntityByIndexSafe(idx);
+		if (!ent)
+			continue;
+
+		const int linkedSlot = ResolveAntiWallhackLinkedPlayerSlot(ent);
+		if (linkedSlot != parentIdx)
+			continue;
+
+		candidates[candidateCount].idx = idx;
+		candidates[candidateCount].ent = ent;
+		++candidateCount;
+	}
+
+	if (candidateCount <= 0)
+	{
+		Warning(PROJECT_NAME " - AWH auto probe: no linked entities found for player %d. Try holylib_awh_list_linked all.\n", parentIdx);
+		return;
+	}
+
+	Msg(PROJECT_NAME " - AWH auto probe: parent=%d(%s), candidates=%d, scanBytes=%d\n",
+		parentIdx,
+		HolyLib_GetEntityClassnameSafe(parent),
+		candidateCount,
+		scanBytes);
+
+	for (int i = 0; i < candidateCount; ++i)
+	{
+		Msg(PROJECT_NAME " - AWH auto probe: candidate[%d] ent=%d class=%s\n",
+			i,
+			candidates[i].idx,
+			HolyLib_GetEntityClassnameSafe(candidates[i].ent));
+	}
+
+	Msg(PROJECT_NAME " - AWH auto probe: looking for parent->candidate movechild offsets...\n");
+	for (int i = 0; i < candidateCount; ++i)
+		HolyLib_ProbeOneEntityForLink(parent, parentIdx, candidates[i].ent, candidates[i].idx, "movechild", scanBytes);
+
+	if (candidateCount >= 2)
+	{
+		Msg(PROJECT_NAME " - AWH auto probe: looking for candidate->candidate movepeer offsets...\n");
+		for (int i = 0; i < candidateCount; ++i)
+		{
+			for (int j = 0; j < candidateCount; ++j)
+			{
+				if (i == j)
+					continue;
+
+				HolyLib_ProbeOneEntityForLink(candidates[i].ent, candidates[i].idx, candidates[j].ent, candidates[j].idx, "movepeer", scanBytes);
+			}
+		}
+	}
+
+	Msg(PROJECT_NAME " - AWH auto probe: done. If no movechild hits appear, these entities are owner/network-parent linked but not FirstMoveChild children.\n");
+}
+static ConCommand holylib_awh_probe_movechild_auto("holylib_awh_probe_movechild_auto", HolyLib_ProbeMoveChildOffsetsAuto, "Auto-list linked entities for a player and probe move-child/move-peer offsets", 0);
+
 static inline void ClearAntiWallhackTransmitEntityAndMoveChildren(CBaseEntity* ent, CCheckTransmitInfo* pInfo, CBitVec<MAX_EDICTS>& visited, bool isRoot)
 {
 	if (!ent || !pInfo || !pInfo->m_pTransmitEdict)
