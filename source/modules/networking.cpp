@@ -1046,6 +1046,7 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 		if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))
 		{
 			pTransmitBits->Clear(i);
+			Msg("[AWH] player slot %d hidden by LOS\n", i);
 			if (pAlwaysBits) pAlwaysBits->Clear(i);
 
 			for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
@@ -1063,19 +1064,23 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 				}
 			}
 
-			// Scan edicts to find entities still transmitted that reference this player
+			// Scan ALL edicts linked to this player regardless of transmit bits
 			for (int j = maxClients + 1; j < MAX_EDICTS; ++j)
 			{
-				if (!pTransmitBits->Get(j)) continue;
 				CBaseEntity* ent = g_pEntityCache[j];
 				if (!ent) continue;
 				CBaseEntity* moveParent = ent->GetMoveParent();
 				CBaseEntity* owner     = ent->GetOwnerEntity();
 				if (moveParent == targetEnt || owner == targetEnt)
-					Msg("[AWH] slot=%d floating: idx=%d class=%s moveParent=%s owner=%s\n",
+				{
+					edict_t* entEdict = Util::engineserver->PEntityOfEntIndex(j);
+					Msg("[AWH] slot=%d linked: idx=%d class=%s moveParent=%s owner=%s inTransmit=%d stateFlags=%d\n",
 						i, j, ent->GetClassname(),
 						moveParent ? moveParent->GetClassname() : "null",
-						owner     ? owner->GetClassname()     : "null");
+						owner      ? owner->GetClassname()      : "null",
+						pTransmitBits->Get(j) ? 1 : 0,
+						entEdict   ? entEdict->m_fStateFlags    : -1);
+				}
 			}
 		}
 	}
