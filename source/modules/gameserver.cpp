@@ -2642,21 +2642,36 @@ static CBaseClient* hook_CBaseServer_GetFreeClient(CBaseServer* _this, netadr_t&
 static Detouring::Hook detour_CBaseServer_CreateFakeClient;
 static CBaseClient* hook_CBaseServer_CreateFakeClient(CBaseServer* _this, const char* pName)
 {
+    Msg(PROJECT_NAME ": hook_CBaseServer_CreateFakeClient called for '%s'\n", pName);
+    Msg(PROJECT_NAME ": m_nMaxclients = %i, GetClientCount = %i\n", _this->m_nMaxclients, _this->GetClientCount());
+
     bool bHasFreeSlot = false;
     for (int i = 0; i < _this->m_nMaxclients; i++)
     {
         CBaseClient* pClient = (CBaseClient*)_this->GetClient(i);
+        if (pClient)
+            Msg(PROJECT_NAME ": Slot %i: SignonState=%i\n", i, pClient->m_nSignonState);
+        else
+            Msg(PROJECT_NAME ": Slot %i: nullptr\n", i);
+
         if (pClient && pClient->m_nSignonState == SIGNONSTATE_NONE)
         {
             bHasFreeSlot = true;
+            Msg(PROJECT_NAME ": Found free slot at %i\n", i);
             break;
         }
     }
 
     if (!bHasFreeSlot)
+    {
+        Msg(PROJECT_NAME ": No free slot found, returning nullptr\n");
         return nullptr;
+    }
 
-    return detour_CBaseServer_CreateFakeClient.GetTrampoline<Symbols::CBaseServer_CreateFakeClient>()(_this, pName);
+    Msg(PROJECT_NAME ": Calling trampoline for '%s'\n", pName);
+    CBaseClient* result = detour_CBaseServer_CreateFakeClient.GetTrampoline<Symbols::CBaseServer_CreateFakeClient>()(_this, pName);
+    Msg(PROJECT_NAME ": Trampoline returned %s\n", result ? result->GetClientName() : "nullptr");
+    return result;
 }
 
 static Detouring::Hook detour_CBaseServer_UserInfoChanged;
