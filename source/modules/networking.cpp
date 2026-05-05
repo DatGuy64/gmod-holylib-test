@@ -1062,19 +1062,6 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 					if (pAlwaysBits) pAlwaysBits->Clear(idx);
 				}
 			}
-
-			// Print all edicts still transmitted after hiding player
-			edict_t* pWorld = Util::engineserver->PEntityOfEntIndex(0);
-			for (int j = maxClients + 1; j < MAX_EDICTS; ++j)
-			{
-				if (!pTransmitBits->Get(j)) continue;
-				edict_t* pEd = &pWorld[j];
-				if (!pEd || pEd->IsFree()) continue;
-				CBaseEntity* ent = g_pEntityCache[j];
-				const char* cls = ent ? ent->GetClassname() : "?";
-				Msg("[AWH] still transmitted after hiding slot %d: idx=%d class=%s stateFlags=0x%x\n",
-					i, j, cls, pEd->m_fStateFlags);
-			}
 		}
 	}
 
@@ -1147,7 +1134,7 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 		//if (bIsHLTV)
 		//	g_pGlobalTransmitTickCache.g_pAlwaysTransmitCacheBitVec.CopyTo(pInfo->m_pTransmitAlways);
 
-		if (bFastPath)
+		if (bFastPath && !(g_HolyPVS_AWHEnabled[clientIndex+1]))
 		{
 			for (int iOtherClient = 0; iOtherClient<gpGlobals->maxClients; ++iOtherClient)
 			{
