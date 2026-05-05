@@ -983,6 +983,7 @@ static inline void DoTransmitPVSCheck(
 static Detouring::Hook detour_CServerGameEnts_CheckTransmit;
 static ConVar networking_fastpath("holylib_networking_fastpath", "0", 0, "Experimental - If two players are in the same area, then it will reuse the transmit state of the first calculated player saving a lot of time");
 static ConVar networking_fastpath_usecluster("holylib_networking_fastpath_usecluster", "1", 0, "Experimental - When using the fastpatth, it will compate against clients in the same cluster instead of area");
+static ConVar networking_awh_debug("holylib_networking_awh_debug", "0", 0, "Debug anti-wallhack transmit removal and linked entities");
 
 static inline bool HolyPVS_AWHSeenTest(int viewerSlot, int targetSlot)
 {
@@ -1000,6 +1001,28 @@ static inline bool HolyPVS_AWHWhitelistTest(int viewerSlot, int targetSlot)
 {
     const int bit = targetSlot - 1;
     return (g_HolyPVS_AWHWhitelist[viewerSlot][bit >> 6] & (1ULL << (bit & 63))) != 0ULL;
+}
+
+static inline CBaseEntity* GetAWHBaseEntityByIndex(int idx)
+{
+	if (idx <= 0 || idx >= MAX_EDICTS)
+		return nullptr;
+
+	CBaseEntity* ent = g_pEntityCache[idx];
+	if (ent)
+		return ent;
+
+	edict_t* ed = Util::engineserver ? Util::engineserver->PEntityOfEntIndex(idx) : nullptr;
+	if (!ed || ed->IsFree())
+		return nullptr;
+
+	return Util::servergameents ? Util::servergameents->EdictToBaseEntity(ed) : nullptr;
+}
+
+static inline const char* GetAWHClassnameSafe(CBaseEntity* ent)
+{
+	const char* cls = ent ? ent->GetClassname() : nullptr;
+	return cls ? cls : "<unknown>";
 }
 
 static inline int GetAntiWallhackPlayerSlot(CBaseEntity* ent)
@@ -1078,7 +1101,8 @@ static inline int ResolveAntiWallhackLinkedPlayerSlot(CBaseEntity* ent)
 				CCServerNetworkProperty* networkParent = netProp->GetNetworkParent();
 				if (networkParent && networkParent->edict())
 				{
-					CBaseEntity* parentEnt = Util::servergameents->EdictToBaseEntity(networkParent->edict());
+					const int parentIdx = networkParent->edict()->m_EdictIndex;
+					CBaseEntity* parentEnt = GetAWHBaseEntityByIndex(parentIdx);
 					if (parentEnt && parentEnt != cur)
 						AWHQueueLinkedEntity(queue, tail, parentEnt);
 				}
@@ -1112,6 +1136,18 @@ static inline void ClearAntiWallhackTransmitEntityAndMoveChildren(CBaseEntity* e
 				pInfo->m_pTransmitEdict->Clear(idx);
 				if (pInfo->m_pTransmitAlways)
 					pInfo->m_pTransmitAlways->Clear(idx);
+
+				if (networking_awh_debug.GetBool())
+				{
+					edict_t* dbgEd = ent->edict();
+					const int flags = dbgEd ? (dbgEd->m_fStateFlags & (FL_EDICT_DONTSEND|FL_EDICT_ALWAYS|FL_EDICT_PVSCHECK|FL_EDICT_FULLCHECK)) : 0;
+					Msg(PROJECT_NAME " - AWH: cleared ent %i class=%s root=%i flags[DS=%i AL=%i PVS=%i FULL=%i]\n",
+						idx, GetAWHClassnameSafe(ent), isRoot ? 1 : 0,
+						(flags & FL_EDICT_DONTSEND) ? 1 : 0,
+						(flags & FL_EDICT_ALWAYS) ? 1 : 0,
+						(flags & FL_EDICT_PVSCHECK) ? 1 : 0,
+						(flags == FL_EDICT_FULLCHECK) ? 1 : 0);
+				}
 			}
 			else
 			{
@@ -1153,9 +1189,22 @@ static inline void ClearAntiWallhackOwnedAndParentedEntities(
 		if (!pInfo->m_pTransmitEdict->Get(idx) && (!pInfo->m_pTransmitAlways || !pInfo->m_pTransmitAlways->Get(idx)))
 			continue;
 
-		CBaseEntity* ent = g_pEntityCache[idx];
+		CBaseEntity* ent = GetAWHBaseEntityByIndex(idx);
 		if (!ent)
+		{
+			if (networking_awh_debug.GetBool())
+			{
+				edict_t* dbgEd = Util::engineserver ? Util::engineserver->PEntityOfEntIndex(idx) : nullptr;
+				const int flags = dbgEd ? (dbgEd->m_fStateFlags & (FL_EDICT_DONTSEND|FL_EDICT_ALWAYS|FL_EDICT_PVSCHECK|FL_EDICT_FULLCHECK)) : 0;
+				Msg(PROJECT_NAME " - AWH: transmitted ent %i has no CBaseEntity cache/fallback flags[DS=%i AL=%i PVS=%i FULL=%i]\n",
+					idx,
+					(flags & FL_EDICT_DONTSEND) ? 1 : 0,
+					(flags & FL_EDICT_ALWAYS) ? 1 : 0,
+					(flags & FL_EDICT_PVSCHECK) ? 1 : 0,
+					(flags == FL_EDICT_FULLCHECK) ? 1 : 0);
+			}
 			continue;
+		}
 
 		const int ownerSlot = ResolveAntiWallhackLinkedPlayerSlot(ent);
 		if (ownerSlot < 1 || ownerSlot > maxClients)
@@ -1163,6 +1212,20 @@ static inline void ClearAntiWallhackOwnedAndParentedEntities(
 
 		if (!hiddenPlayers.Get(ownerSlot))
 			continue;
+
+		if (networking_awh_debug.GetBool())
+		{
+			edict_t* dbgEd = ent->edict();
+			const int flags = dbgEd ? (dbgEd->m_fStateFlags & (FL_EDICT_DONTSEND|FL_EDICT_ALWAYS|FL_EDICT_PVSCHECK|FL_EDICT_FULLCHECK)) : 0;
+			Msg(PROJECT_NAME " - AWH: linked ent %i class=%s ownerSlot=%i stillTransmit=%i alwaysBit=%i flags[DS=%i AL=%i PVS=%i FULL=%i]\n",
+				idx, GetAWHClassnameSafe(ent), ownerSlot,
+				pInfo->m_pTransmitEdict->Get(idx) ? 1 : 0,
+				(pInfo->m_pTransmitAlways && pInfo->m_pTransmitAlways->Get(idx)) ? 1 : 0,
+				(flags & FL_EDICT_DONTSEND) ? 1 : 0,
+				(flags & FL_EDICT_ALWAYS) ? 1 : 0,
+				(flags & FL_EDICT_PVSCHECK) ? 1 : 0,
+				(flags == FL_EDICT_FULLCHECK) ? 1 : 0);
+		}
 
 		ClearAntiWallhackTransmitEntityAndMoveChildren(ent, pInfo, visited, false);
 	}
