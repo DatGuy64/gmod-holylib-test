@@ -1054,6 +1054,7 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 				if (!chEd) continue;
 
 				const int idx = chEd->m_EdictIndex;
+				Msg("[AWH] Player slot %d - child: idx=%d class=%s inTransmit=%d\n", i, idx, ch->GetClassname(), pTransmitBits->Get(idx) ? 1 : 0);
 				if (idx <= maxClients) continue;
 
 				if (pTransmitBits->Get(idx))
