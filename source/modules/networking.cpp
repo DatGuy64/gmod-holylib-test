@@ -663,7 +663,7 @@ static Symbols::CBaseCombatCharacter_SetTransmit func_CBaseAnimating_SetTransmit
 static ConVar networking_transmit_all_weapons("holylib_networking_transmit_all_weapons", "1", 0, "Experimental - By default all weapons are networked based on their PVS, though normally if they have an owner you might only want the active weapon to be networked");
 static ConVar networking_transmit_all_weapons_to_owner("holylib_networking_transmit_all_weapons_to_owner", "1", 0, "Experimental - By default all weapons are networked to the owner");
 static ConVar networking_transmit_one_per_tick("holylib_networking_transmit_one_per_tick", "0", 0, "Experimental - If enabled, one additional weapon is networked per tick");
-static ConVar networking_fasttransmit("holylib_networking_fasttransmit", "0", 0, "Experimental - Replaces CServerGameEnts::CheckTransmit with our own implementation");
+static ConVar networking_fasttransmit("holylib_networking_fasttransmit", "1", 0, "Experimental - Replaces CServerGameEnts::CheckTransmit with our own implementation");
 static ConVar networking_fastcharactertransmit("holylib_networking_fastcharactertransmit", "1", 0, "Experimental");
 static void hook_CBaseCombatCharacter_SetTransmit(CBaseCombatCharacter* pCharacter, CCheckTransmitInfo *pInfo, bool bAlways)
 {
@@ -1002,6 +1002,93 @@ static inline bool HolyPVS_AWHWhitelistTest(int viewerSlot, int targetSlot)
     return (g_HolyPVS_AWHWhitelist[viewerSlot][bit >> 6] & (1ULL << (bit & 63))) != 0ULL;
 }
 
+static inline int GetAntiWallhackPlayerSlot(CBaseEntity* ent)
+{
+	if (!ent)
+		return -1;
+
+	edict_t* ed = ent->edict();
+	if (!ed)
+		return -1;
+
+	const int idx = ed->m_EdictIndex;
+	return (idx >= 1 && idx <= gpGlobals->maxClients) ? idx : -1;
+}
+
+static inline void AWHQueueLinkedEntity(CBaseEntity** queue, int& tail, CBaseEntity* ent)
+{
+	if (!ent || tail >= 32)
+		return;
+
+	queue[tail++] = ent;
+}
+
+static inline int ResolveAntiWallhackLinkedPlayerSlot(CBaseEntity* ent)
+{
+	if (!ent)
+		return -1;
+
+	CBaseEntity* queue[32];
+	CBaseEntity* visited[32];
+	int head = 0;
+	int tail = 0;
+	int visitedCount = 0;
+
+	AWHQueueLinkedEntity(queue, tail, ent);
+
+	while (head < tail && visitedCount < 32)
+	{
+		CBaseEntity* cur = queue[head++];
+		if (!cur)
+			continue;
+
+		bool alreadyVisited = false;
+		for (int i = 0; i < visitedCount; ++i)
+		{
+			if (visited[i] == cur)
+			{
+				alreadyVisited = true;
+				break;
+			}
+		}
+
+		if (alreadyVisited)
+			continue;
+
+		visited[visitedCount++] = cur;
+
+		const int playerSlot = GetAntiWallhackPlayerSlot(cur);
+		if (playerSlot != -1)
+			return playerSlot;
+
+		CBaseEntity* owner = cur->GetOwnerEntity();
+		if (owner && owner != cur)
+			AWHQueueLinkedEntity(queue, tail, owner);
+
+		CBaseEntity* moveParent = cur->GetMoveParent();
+		if (moveParent && moveParent != cur)
+			AWHQueueLinkedEntity(queue, tail, moveParent);
+
+		edict_t* ed = cur->edict();
+		if (ed)
+		{
+			CCServerNetworkProperty* netProp = static_cast<CCServerNetworkProperty*>(ed->GetNetworkable());
+			if (netProp)
+			{
+				CCServerNetworkProperty* networkParent = netProp->GetNetworkParent();
+				if (networkParent && networkParent->edict())
+				{
+					CBaseEntity* parentEnt = Util::servergameents->EdictToBaseEntity(networkParent->edict());
+					if (parentEnt && parentEnt != cur)
+						AWHQueueLinkedEntity(queue, tail, parentEnt);
+				}
+			}
+		}
+	}
+
+	return -1;
+}
+
 static inline void ClearAntiWallhackTransmitEntityAndMoveChildren(CBaseEntity* ent, CCheckTransmitInfo* pInfo, CBitVec<MAX_EDICTS>& visited, bool isRoot)
 {
 	if (!ent || !pInfo || !pInfo->m_pTransmitEdict)
@@ -1039,7 +1126,49 @@ static inline void ClearAntiWallhackTransmitEntityAndMoveChildren(CBaseEntity* e
 	}
 }
 
-static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo)
+static inline void ClearAntiWallhackOwnedAndParentedEntities(
+	CCheckTransmitInfo* pInfo,
+	const unsigned short* pEdictIndices,
+	int nEdicts,
+	const CBitVec<MAX_EDICTS>& hiddenPlayers,
+	CBitVec<MAX_EDICTS>& visited
+)
+{
+	if (!pInfo || !pInfo->m_pTransmitEdict)
+		return;
+
+	(void)pEdictIndices;
+	(void)nEdicts;
+
+	const int maxClients = gpGlobals->maxClients;
+
+	// Scan the full edict cache instead of only pEdictIndices.
+	// Some entities can be inserted by SetTransmit/dependency code even if they were not
+	// reached through the original CheckTransmit edict list path.
+	for (int idx = maxClients + 1; idx < MAX_EDICTS; ++idx)
+	{
+		if (idx <= maxClients || idx <= 0 || idx >= MAX_EDICTS)
+			continue;
+
+		if (!pInfo->m_pTransmitEdict->Get(idx) && (!pInfo->m_pTransmitAlways || !pInfo->m_pTransmitAlways->Get(idx)))
+			continue;
+
+		CBaseEntity* ent = g_pEntityCache[idx];
+		if (!ent)
+			continue;
+
+		const int ownerSlot = ResolveAntiWallhackLinkedPlayerSlot(ent);
+		if (ownerSlot < 1 || ownerSlot > maxClients)
+			continue;
+
+		if (!hiddenPlayers.Get(ownerSlot))
+			continue;
+
+		ClearAntiWallhackTransmitEntityAndMoveChildren(ent, pInfo, visited, false);
+	}
+}
+
+static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo, const unsigned short* pEdictIndices, int nEdicts)
 {
 	if (!g_HolyPVS_AWHEnabled[viewerSlot])
 		return;
@@ -1050,6 +1179,13 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 
 	CBitVec<MAX_EDICTS>* pTransmitBits = pInfo->m_pTransmitEdict;
 	CBitVec<MAX_EDICTS>* pAlwaysBits = pInfo->m_pTransmitAlways;
+
+	CBitVec<MAX_EDICTS> hiddenPlayers;
+	hiddenPlayers.ClearAll();
+	bool hasHiddenPlayer = false;
+
+	CBitVec<MAX_EDICTS> visited;
+	visited.ClearAll();
 
 	for (int i = 1; i <= maxClients; ++i)
 	{
@@ -1082,12 +1218,17 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 
 		if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))
 		{
-			CBitVec<MAX_EDICTS> visited;
-			visited.ClearAll();
-
+			hiddenPlayers.Set(i);
+			hasHiddenPlayer = true;
 			ClearAntiWallhackTransmitEntityAndMoveChildren(targetEnt, pInfo, visited, true);
 		}
 	}
+
+	// Some GMod entities are linked to the player through owner/move-parent/network-parent,
+	// but they are not always present in the player's FirstMoveChild() chain.
+	// This second pass removes those entities without touching the global transmit caches.
+	if (hasHiddenPlayer)
+		ClearAntiWallhackOwnedAndParentedEntities(pInfo, pEdictIndices, nEdicts, hiddenPlayers, visited);
 
 	if (forceBurst)
 		g_HolyPVS_AWHJustEnabled[viewerSlot] = false;
@@ -1343,7 +1484,7 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 	}
 	pInfo->m_pTransmitEdict->Or(g_pGlobalTransmitTickCache.g_bWasSeenByPlayer, &g_pGlobalTransmitTickCache.g_bWasSeenByPlayer);
 
-	ApplyAntiWallhackFastTransmit(pRecipientPlayer, clientIndex + 1, pInfo);
+	ApplyAntiWallhackFastTransmit(pRecipientPlayer, clientIndex + 1, pInfo, pEdictIndices, nEdicts);
 	return true;
 }
 
