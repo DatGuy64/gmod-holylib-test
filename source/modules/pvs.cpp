@@ -32,20 +32,7 @@ extern bool g_bIsPlayerTalking[HOLYLIB_MAX_PLAYERS];
 
 static float g_LOSNext[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
 static unsigned char g_LOSVis[HOLYLIB_MAX_PLAYERS + 1][HOLYLIB_MAX_PLAYERS + 1];
-static DTVarByOffset* g_m_vecOrigin_Offset = nullptr;
-
 static CTraceFilterWorldOnly g_HolyLibTraceFilterWorldOnly;
-
-static const Vector g_AWHBBoxCorners[8] = {
-    Vector(  0.0f,   0.0f, 72.0f),
-    Vector(-18.0f, -18.0f, 70.0f),
-    Vector( 18.0f, -18.0f, 70.0f),
-    Vector(-18.0f,  18.0f, 70.0f),
-    Vector( 18.0f,  18.0f, 70.0f),
-    Vector(-18.0f, -18.0f,  2.0f),
-    Vector( 18.0f, -18.0f,  2.0f),
-    Vector(-18.0f,  18.0f,  2.0f),
-};
 
 static inline bool LOS_Clear(const Vector& start, const Vector& end)
 {
@@ -58,31 +45,39 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
 
 static bool VisibleByLOS_NoCache(CBaseEntity* viewer, int vIdx, CBaseEntity* target, int tIdx)
 {
-    edict_t* viewerEdict = Util::engineserver->PEntityOfEntIndex(vIdx);
-    edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(tIdx);
-    if (!viewerEdict || !targetEdict || viewerEdict->IsFree() || targetEdict->IsFree())
-        return false;
-
-    // Re-resolve if caller passed nullptr (target only needed here)
-    if (!target)
-        target = Util::servergameents->EdictToBaseEntity(targetEdict);
-    if (!viewer)
-        viewer = Util::servergameents->EdictToBaseEntity(viewerEdict);
     if (!viewer || !target)
         return false;
 
     const Vector viewerEye = viewer->EyePosition();
 
-    if (!g_m_vecOrigin_Offset)
-        g_m_vecOrigin_Offset = new DTVarByOffset("DT_BaseEntity", "m_vecOrigin");
-    const Vector* pOrigin = (const Vector*)g_m_vecOrigin_Offset->GetPointer(target);
-    if (!pOrigin)
+    auto* col = target->CollisionProp();
+    if (!col)
         return false;
-    const Vector& origin = *pOrigin;
 
-    for (int i = 0; i < 7; ++i)
-        if (LOS_Clear(viewerEye, origin + g_AWHBBoxCorners[i]))
-            return true;
+    const Vector mins = col->OBBMins();
+    const Vector maxs = col->OBBMaxs();
+
+    const float minX = mins.x + 1.0f;
+    const float minY = mins.y + 1.0f;
+    const float maxX = maxs.x - 1.0f;
+    const float maxY = maxs.y - 1.0f;
+    const float zBottom = mins.z + 5.0f;
+    const float zTop    = maxs.z - 2.0f;
+
+    Vector local, world;
+    const matrix3x4_t& mat = target->EntityToWorldTransform();
+
+    local.z = zBottom;
+    local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+    local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+    local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+    local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+
+    local.z = zTop;
+    local.x = minX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+    local.x = maxX; local.y = minY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+    local.x = minX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
+    local.x = maxX; local.y = maxY; VectorTransform(local, mat, world); if (LOS_Clear(viewerEye, world)) return true;
 
     return false;
 }
@@ -270,7 +265,6 @@ static void ApplyAntiWallhack(CBaseEntity* viewer, int viewerSlot, CCheckTransmi
         return;
     }
 
-    // pAlwaysBits null check once outside loop
     if (pAlwaysBits)
     {
         for (int i = 1; i <= maxClients; ++i)
@@ -286,16 +280,15 @@ static void ApplyAntiWallhack(CBaseEntity* viewer, int viewerSlot, CCheckTransmi
                 continue;
             }
 
-            // targetEnt resolved only when LOS says invisible
-            if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, nullptr, i, cacheSeconds))
+            edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
+            if (!targetEdict || targetEdict->IsFree()) continue;
+            CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
+            if (!targetEnt) continue;
+
+            if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))
             {
                 pTransmitBits->Clear(i);
                 pAlwaysBits->Clear(i);
-
-                edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
-                if (!targetEdict || targetEdict->IsFree()) continue;
-                CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
-                if (!targetEnt) continue;
 
                 for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
                 {
@@ -303,6 +296,7 @@ static void ApplyAntiWallhack(CBaseEntity* viewer, int viewerSlot, CCheckTransmi
                     if (!chEd || chEd->IsFree()) continue;
                     const int idx = chEd->m_EdictIndex;
                     if (idx <= maxClients) continue;
+                    if (ch->GetOwnerEntity() != targetEnt && ch->GetMoveParent() != targetEnt) continue;
                     if (pTransmitBits->Get(idx))
                     {
                         pTransmitBits->Clear(idx);
@@ -327,14 +321,14 @@ static void ApplyAntiWallhack(CBaseEntity* viewer, int viewerSlot, CCheckTransmi
                 continue;
             }
 
-            if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, nullptr, i, cacheSeconds))
+            edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
+            if (!targetEdict || targetEdict->IsFree()) continue;
+            CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
+            if (!targetEnt) continue;
+
+            if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))
             {
                 pTransmitBits->Clear(i);
-
-                edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
-                if (!targetEdict || targetEdict->IsFree()) continue;
-                CBaseEntity* targetEnt = Util::servergameents->EdictToBaseEntity(targetEdict);
-                if (!targetEnt) continue;
 
                 for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
                 {
@@ -342,6 +336,7 @@ static void ApplyAntiWallhack(CBaseEntity* viewer, int viewerSlot, CCheckTransmi
                     if (!chEd || chEd->IsFree()) continue;
                     const int idx = chEd->m_EdictIndex;
                     if (idx <= maxClients) continue;
+                    if (ch->GetOwnerEntity() != targetEnt && ch->GetMoveParent() != targetEnt) continue;
                     if (pTransmitBits->Get(idx))
                         pTransmitBits->Clear(idx);
                 }
@@ -568,6 +563,16 @@ void PostCheckTransmit(void* gameents, CCheckTransmitInfo *pInfo, const unsigned
 		Util::Push_Entity(g_Lua, Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt));
 		g_Lua->CallFunctionProtected(2, 0, true);
 		g_bBlockAdditionToTransmit = false;
+	}
+
+	{
+		const int clientIndex = pInfo->m_pClientEnt->m_EdictIndex;
+		if (clientIndex >= 1 && clientIndex <= HOLYLIB_MAX_PLAYERS)
+		{
+			CBaseEntity* pRecipientEntity = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
+			if (pRecipientEntity)
+				ApplyAntiWallhack(pRecipientEntity, clientIndex, pInfo);
+		}
 	}
 
 	if (bWasOverrideStateFlagsUsed)
