@@ -13,6 +13,9 @@
 #include "baseclient.h"
 #include <bitset>
 #include <unordered_set>
+#include <cstdlib>
+#include <cstdint>
+#include <cstring>
 #include <datacache/imdlcache.h>
 #include <cmodel_private.h>
 #include "server.h"
@@ -983,7 +986,333 @@ static inline void DoTransmitPVSCheck(
 static Detouring::Hook detour_CServerGameEnts_CheckTransmit;
 static ConVar networking_fastpath("holylib_networking_fastpath", "0", 0, "Experimental - If two players are in the same area, then it will reuse the transmit state of the first calculated player saving a lot of time");
 static ConVar networking_fastpath_usecluster("holylib_networking_fastpath_usecluster", "1", 0, "Experimental - When using the fastpatth, it will compate against clients in the same cluster instead of area");
-static ConVar networking_awh_debug("holylib_networking_awh_debug", "0", 0, "Debug anti-wallhack transmit removal and linked entities");
+
+// -----------------------------------------------------------------------------
+// Runtime probe/fix for CBaseEntity::FirstMoveChild()/NextMovePeer().
+//
+// After the CurTime double transition, inline CBaseEntity accessors can become
+// unsafe when the module is built against an older layout. These helpers let us:
+//   1) probe the real move-child/move-peer offsets at runtime;
+//   2) apply those offsets through ConVars without recompiling;
+//   3) keep a validated fallback to the original inline accessors.
+//
+// Usage example once you know a parent/player and one or two children:
+//   holylib_awh_probe_movechild 2 143 144
+//
+// If the probe prints EHANDLE candidates, apply them like:
+//   holylib_networking_awh_movechild_storage 1
+//   holylib_networking_awh_movechild_offset 0x123
+//   holylib_networking_awh_movepeer_offset 0x127
+//
+// Storage modes:
+//   0 = use original CBaseEntity::FirstMoveChild()/NextMovePeer()
+//   1 = read EHANDLE/CHandle at the configured offsets
+//   2 = read CBaseEntity* pointer at the configured offsets
+// -----------------------------------------------------------------------------
+static ConVar networking_awh_movechild_offset("holylib_networking_awh_movechild_offset", "-1", 0, "Override offset for CBaseEntity move child. Decimal or hex in concommand output; ConVar itself stores the parsed decimal value.");
+static ConVar networking_awh_movepeer_offset("holylib_networking_awh_movepeer_offset", "-1", 0, "Override offset for CBaseEntity move peer. Decimal or hex in concommand output; ConVar itself stores the parsed decimal value.");
+static ConVar networking_awh_movechild_storage("holylib_networking_awh_movechild_storage", "0", 0, "0=original inline, 1=EHANDLE/CHandle offset, 2=CBaseEntity* pointer offset");
+static ConVar networking_awh_probe_scan_bytes("holylib_networking_awh_probe_scan_bytes", "8192", 0, "How many bytes of CBaseEntity memory to scan when probing move-child offsets.");
+static ConVar networking_awh_validate_links("holylib_networking_awh_validate_links", "1", 0, "Validate probed/direct move-child pointers against the entity cache before traversing them.");
+static ConVar networking_awh_linked_scan("holylib_networking_awh_linked_scan", "1", 0, "Keep the owner/move-parent/network-parent fallback scan for AWH. Set 0 to test only move-child traversal.");
+
+static inline long HolyLib_ParseIntegerAutoBase(const char* value, long fallbackValue)
+{
+	if (!value || !*value)
+		return fallbackValue;
+
+	char* end = nullptr;
+	const long parsed = std::strtol(value, &end, 0);
+	return (end && *end == '\0') ? parsed : fallbackValue;
+}
+
+static inline bool HolyLib_IsKnownEntityPointer(CBaseEntity* ent)
+{
+	if (!ent)
+		return false;
+
+	for (int i = 0; i < MAX_EDICTS; ++i)
+	{
+		if (g_pEntityCache[i] == ent)
+			return true;
+	}
+
+	return false;
+}
+
+static inline CBaseEntity* HolyLib_ValidateLinkedEntity(CBaseEntity* ent)
+{
+	if (!ent)
+		return nullptr;
+
+	if (!networking_awh_validate_links.GetBool())
+		return ent;
+
+	return HolyLib_IsKnownEntityPointer(ent) ? ent : nullptr;
+}
+
+static inline CBaseEntity* HolyLib_ReadEntityLinkAtOffset(CBaseEntity* ent, int offset, int storageMode)
+{
+	if (!ent || offset < 0)
+		return nullptr;
+
+	unsigned char* base = reinterpret_cast<unsigned char*>(ent) + offset;
+
+	if (storageMode == 1)
+	{
+		EHANDLE* handle = reinterpret_cast<EHANDLE*>(base);
+		return HolyLib_ValidateLinkedEntity(handle->Get());
+	}
+
+	if (storageMode == 2)
+	{
+		uintptr_t raw = 0;
+		std::memcpy(&raw, base, sizeof(raw));
+		return HolyLib_ValidateLinkedEntity(reinterpret_cast<CBaseEntity*>(raw));
+	}
+
+	return nullptr;
+}
+
+static inline CBaseEntity* HolyLib_SafeFirstMoveChild(CBaseEntity* ent)
+{
+	if (!ent)
+		return nullptr;
+
+	const int storageMode = networking_awh_movechild_storage.GetInt();
+	const int offset = networking_awh_movechild_offset.GetInt();
+
+	if ((storageMode == 1 || storageMode == 2) && offset >= 0)
+		return HolyLib_ReadEntityLinkAtOffset(ent, offset, storageMode);
+
+	return HolyLib_ValidateLinkedEntity(ent->FirstMoveChild());
+}
+
+static inline CBaseEntity* HolyLib_SafeNextMovePeer(CBaseEntity* ent)
+{
+	if (!ent)
+		return nullptr;
+
+	const int storageMode = networking_awh_movechild_storage.GetInt();
+	const int offset = networking_awh_movepeer_offset.GetInt();
+
+	if ((storageMode == 1 || storageMode == 2) && offset >= 0)
+		return HolyLib_ReadEntityLinkAtOffset(ent, offset, storageMode);
+
+	return HolyLib_ValidateLinkedEntity(ent->NextMovePeer());
+}
+
+static CBaseEntity* HolyLib_GetEntityByIndexSafe(int idx)
+{
+	if (idx <= 0 || idx >= MAX_EDICTS)
+		return nullptr;
+
+	if (g_pEntityCache[idx])
+		return g_pEntityCache[idx];
+
+	edict_t* ed = Util::engineserver ? Util::engineserver->PEntityOfEntIndex(idx) : nullptr;
+	if (!ed || ed->IsFree())
+		return nullptr;
+
+	return Util::servergameents ? Util::servergameents->EdictToBaseEntity(ed) : nullptr;
+}
+
+static const char* HolyLib_GetEntityClassnameSafe(CBaseEntity* ent)
+{
+	if (!ent)
+		return "null";
+
+	edict_t* ed = ent->edict();
+	if (!ed)
+		return "no_edict";
+
+	const char* cls = ed->GetClassName();
+	return cls ? cls : "unknown";
+}
+
+static void HolyLib_PrintMoveChildProbeHit(const char* relation, const char* storage, int offset, int sourceIdx, int targetIdx, CBaseEntity* source, CBaseEntity* target)
+{
+	Msg(PROJECT_NAME " - AWH probe: %s %s offset 0x%X / %d : %d(%s) -> %d(%s)\n",
+		relation,
+		storage,
+		offset,
+		offset,
+		sourceIdx,
+		HolyLib_GetEntityClassnameSafe(source),
+		targetIdx,
+		HolyLib_GetEntityClassnameSafe(target));
+}
+
+static void HolyLib_ProbeOneEntityForLink(CBaseEntity* source, int sourceIdx, CBaseEntity* target, int targetIdx, const char* relation, int scanBytes)
+{
+	if (!source || !target)
+		return;
+
+	unsigned char* base = reinterpret_cast<unsigned char*>(source);
+
+	for (int off = 0; off <= scanBytes - 4; off += 4)
+	{
+		EHANDLE* handle = reinterpret_cast<EHANDLE*>(base + off);
+		CBaseEntity* linked = handle->Get();
+		if (linked == target)
+			HolyLib_PrintMoveChildProbeHit(relation, "EHANDLE", off, sourceIdx, targetIdx, source, target);
+	}
+
+	const int ptrStep = sizeof(void*) >= 8 ? 8 : 4;
+	for (int off = 0; off <= scanBytes - (int)sizeof(uintptr_t); off += ptrStep)
+	{
+		uintptr_t raw = 0;
+		std::memcpy(&raw, base + off, sizeof(raw));
+		if (reinterpret_cast<CBaseEntity*>(raw) == target)
+			HolyLib_PrintMoveChildProbeHit(relation, "POINTER", off, sourceIdx, targetIdx, source, target);
+	}
+}
+
+static void HolyLib_ProbeMoveChildOffsets(const CCommand& args)
+{
+	if (args.ArgC() < 3)
+	{
+		Msg("Usage: holylib_awh_probe_movechild <parent entindex> <candidate child 1> [candidate child 2] [...candidate child N]\n");
+		Msg("It scans parent -> every candidate for movechild, then candidate -> candidate for movepeer.\n");
+		Msg("Then apply stable candidates with:\n");
+		Msg("  holylib_networking_awh_movechild_storage 1|2\n");
+		Msg("  holylib_networking_awh_movechild_offset <decimal offset>\n");
+		Msg("  holylib_networking_awh_movepeer_offset <decimal offset>\n");
+		return;
+	}
+
+	const int parentIdx = (int)HolyLib_ParseIntegerAutoBase(args.Arg(1), -1);
+	CBaseEntity* parent = HolyLib_GetEntityByIndexSafe(parentIdx);
+	if (!parent)
+	{
+		Warning(PROJECT_NAME " - AWH probe: invalid parent %d\n", parentIdx);
+		return;
+	}
+
+	int scanBytes = networking_awh_probe_scan_bytes.GetInt();
+	if (scanBytes < 0x100)
+		scanBytes = 0x100;
+	if (scanBytes > 0x4000)
+		scanBytes = 0x4000;
+
+	struct CandidateEnt
+	{
+		int idx;
+		CBaseEntity* ent;
+	};
+
+	CandidateEnt candidates[32];
+	int candidateCount = 0;
+
+	for (int arg = 2; arg < args.ArgC() && candidateCount < 32; ++arg)
+	{
+		const int idx = (int)HolyLib_ParseIntegerAutoBase(args.Arg(arg), -1);
+		CBaseEntity* ent = HolyLib_GetEntityByIndexSafe(idx);
+		if (!ent)
+		{
+			Warning(PROJECT_NAME " - AWH probe: skipping invalid candidate %d\n", idx);
+			continue;
+		}
+
+		candidates[candidateCount].idx = idx;
+		candidates[candidateCount].ent = ent;
+		++candidateCount;
+	}
+
+	if (candidateCount <= 0)
+	{
+		Warning(PROJECT_NAME " - AWH probe: no valid candidate children supplied.\n");
+		return;
+	}
+
+	Msg(PROJECT_NAME " - AWH probe: scanning %d bytes. parent=%d(%s), candidates=%d\n",
+		scanBytes,
+		parentIdx,
+		HolyLib_GetEntityClassnameSafe(parent),
+		candidateCount);
+
+	Msg(PROJECT_NAME " - AWH probe: looking for parent->candidate movechild offsets...\n");
+	for (int i = 0; i < candidateCount; ++i)
+	{
+		HolyLib_ProbeOneEntityForLink(parent, parentIdx, candidates[i].ent, candidates[i].idx, "movechild", scanBytes);
+	}
+
+	if (candidateCount >= 2)
+	{
+		Msg(PROJECT_NAME " - AWH probe: looking for candidate->candidate movepeer offsets...\n");
+		for (int i = 0; i < candidateCount; ++i)
+		{
+			for (int j = 0; j < candidateCount; ++j)
+			{
+				if (i == j)
+					continue;
+
+				HolyLib_ProbeOneEntityForLink(candidates[i].ent, candidates[i].idx, candidates[j].ent, candidates[j].idx, "movepeer", scanBytes);
+			}
+		}
+	}
+
+	Msg(PROJECT_NAME " - AWH probe: done. Prefer EHANDLE candidates if they are stable across players/maps.\n");
+}
+static ConCommand holylib_awh_probe_movechild("holylib_awh_probe_movechild", HolyLib_ProbeMoveChildOffsets, "Probe runtime CBaseEntity move-child/move-peer offsets", 0);
+
+static void HolyLib_TestMoveChildChain(const CCommand& args)
+{
+	if (args.ArgC() < 2)
+	{
+		Msg("Usage: holylib_awh_test_movechild <parent entindex> [max results]\n");
+		return;
+	}
+
+	const int parentIdx = (int)HolyLib_ParseIntegerAutoBase(args.Arg(1), -1);
+	int maxResults = args.ArgC() >= 3 ? (int)HolyLib_ParseIntegerAutoBase(args.Arg(2), 64) : 64;
+	if (maxResults < 1)
+		maxResults = 1;
+	if (maxResults > 256)
+		maxResults = 256;
+
+	CBaseEntity* parent = HolyLib_GetEntityByIndexSafe(parentIdx);
+	if (!parent)
+	{
+		Warning(PROJECT_NAME " - AWH test: invalid parent entindex %d\n", parentIdx);
+		return;
+	}
+
+	Msg(PROJECT_NAME " - AWH test: parent=%d(%s), storage=%d childOffset=%d peerOffset=%d validate=%d\n",
+		parentIdx,
+		HolyLib_GetEntityClassnameSafe(parent),
+		networking_awh_movechild_storage.GetInt(),
+		networking_awh_movechild_offset.GetInt(),
+		networking_awh_movepeer_offset.GetInt(),
+		networking_awh_validate_links.GetInt());
+
+	CBitVec<MAX_EDICTS> visited;
+	visited.ClearAll();
+
+	int count = 0;
+	for (CBaseEntity* child = HolyLib_SafeFirstMoveChild(parent); child && count < maxResults; child = HolyLib_SafeNextMovePeer(child))
+	{
+		edict_t* ed = child->edict();
+		const int idx = ed ? ed->m_EdictIndex : -1;
+
+		if (idx > 0 && idx < MAX_EDICTS)
+		{
+			if (visited.Get(idx))
+			{
+				Warning(PROJECT_NAME " - AWH test: loop detected at ent %d(%s), stopping.\n", idx, HolyLib_GetEntityClassnameSafe(child));
+				break;
+			}
+
+			visited.Set(idx);
+		}
+
+		Msg(PROJECT_NAME " - AWH test: child[%d] ent=%d class=%s ptr=%p\n", count, idx, HolyLib_GetEntityClassnameSafe(child), child);
+		++count;
+	}
+
+	Msg(PROJECT_NAME " - AWH test: found %d children/peers.\n", count);
+}
+static ConCommand holylib_awh_test_movechild("holylib_awh_test_movechild", HolyLib_TestMoveChildChain, "Print move-child chain using configured AWH move-child offsets", 0);
 
 static inline bool HolyPVS_AWHSeenTest(int viewerSlot, int targetSlot)
 {
@@ -1001,28 +1330,6 @@ static inline bool HolyPVS_AWHWhitelistTest(int viewerSlot, int targetSlot)
 {
     const int bit = targetSlot - 1;
     return (g_HolyPVS_AWHWhitelist[viewerSlot][bit >> 6] & (1ULL << (bit & 63))) != 0ULL;
-}
-
-static inline CBaseEntity* GetAWHBaseEntityByIndex(int idx)
-{
-	if (idx <= 0 || idx >= MAX_EDICTS)
-		return nullptr;
-
-	CBaseEntity* ent = g_pEntityCache[idx];
-	if (ent)
-		return ent;
-
-	edict_t* ed = Util::engineserver ? Util::engineserver->PEntityOfEntIndex(idx) : nullptr;
-	if (!ed || ed->IsFree())
-		return nullptr;
-
-	return Util::servergameents ? Util::servergameents->EdictToBaseEntity(ed) : nullptr;
-}
-
-static inline const char* GetAWHClassnameSafe(CBaseEntity* ent)
-{
-	const char* cls = ent ? ent->GetClassname() : nullptr;
-	return cls ? cls : "<unknown>";
 }
 
 static inline int GetAntiWallhackPlayerSlot(CBaseEntity* ent)
@@ -1101,8 +1408,7 @@ static inline int ResolveAntiWallhackLinkedPlayerSlot(CBaseEntity* ent)
 				CCServerNetworkProperty* networkParent = netProp->GetNetworkParent();
 				if (networkParent && networkParent->edict())
 				{
-					const int parentIdx = networkParent->edict()->m_EdictIndex;
-					CBaseEntity* parentEnt = GetAWHBaseEntityByIndex(parentIdx);
+					CBaseEntity* parentEnt = Util::servergameents->EdictToBaseEntity(networkParent->edict());
 					if (parentEnt && parentEnt != cur)
 						AWHQueueLinkedEntity(queue, tail, parentEnt);
 				}
@@ -1136,18 +1442,6 @@ static inline void ClearAntiWallhackTransmitEntityAndMoveChildren(CBaseEntity* e
 				pInfo->m_pTransmitEdict->Clear(idx);
 				if (pInfo->m_pTransmitAlways)
 					pInfo->m_pTransmitAlways->Clear(idx);
-
-				if (networking_awh_debug.GetBool())
-				{
-					edict_t* dbgEd = ent->edict();
-					const int flags = dbgEd ? (dbgEd->m_fStateFlags & (FL_EDICT_DONTSEND|FL_EDICT_ALWAYS|FL_EDICT_PVSCHECK|FL_EDICT_FULLCHECK)) : 0;
-					Msg(PROJECT_NAME " - AWH: cleared ent %i class=%s root=%i flags[DS=%i AL=%i PVS=%i FULL=%i]\n",
-						idx, GetAWHClassnameSafe(ent), isRoot ? 1 : 0,
-						(flags & FL_EDICT_DONTSEND) ? 1 : 0,
-						(flags & FL_EDICT_ALWAYS) ? 1 : 0,
-						(flags & FL_EDICT_PVSCHECK) ? 1 : 0,
-						(flags == FL_EDICT_FULLCHECK) ? 1 : 0);
-				}
 			}
 			else
 			{
@@ -1156,7 +1450,7 @@ static inline void ClearAntiWallhackTransmitEntityAndMoveChildren(CBaseEntity* e
 		}
 	}
 
-	for (CBaseEntity* ch = ent->FirstMoveChild(); ch; ch = ch->NextMovePeer())
+	for (CBaseEntity* ch = HolyLib_SafeFirstMoveChild(ent); ch; ch = HolyLib_SafeNextMovePeer(ch))
 	{
 		ClearAntiWallhackTransmitEntityAndMoveChildren(ch, pInfo, visited, false);
 	}
@@ -1189,22 +1483,9 @@ static inline void ClearAntiWallhackOwnedAndParentedEntities(
 		if (!pInfo->m_pTransmitEdict->Get(idx) && (!pInfo->m_pTransmitAlways || !pInfo->m_pTransmitAlways->Get(idx)))
 			continue;
 
-		CBaseEntity* ent = GetAWHBaseEntityByIndex(idx);
+		CBaseEntity* ent = g_pEntityCache[idx];
 		if (!ent)
-		{
-			if (networking_awh_debug.GetBool())
-			{
-				edict_t* dbgEd = Util::engineserver ? Util::engineserver->PEntityOfEntIndex(idx) : nullptr;
-				const int flags = dbgEd ? (dbgEd->m_fStateFlags & (FL_EDICT_DONTSEND|FL_EDICT_ALWAYS|FL_EDICT_PVSCHECK|FL_EDICT_FULLCHECK)) : 0;
-				Msg(PROJECT_NAME " - AWH: transmitted ent %i has no CBaseEntity cache/fallback flags[DS=%i AL=%i PVS=%i FULL=%i]\n",
-					idx,
-					(flags & FL_EDICT_DONTSEND) ? 1 : 0,
-					(flags & FL_EDICT_ALWAYS) ? 1 : 0,
-					(flags & FL_EDICT_PVSCHECK) ? 1 : 0,
-					(flags == FL_EDICT_FULLCHECK) ? 1 : 0);
-			}
 			continue;
-		}
 
 		const int ownerSlot = ResolveAntiWallhackLinkedPlayerSlot(ent);
 		if (ownerSlot < 1 || ownerSlot > maxClients)
@@ -1212,20 +1493,6 @@ static inline void ClearAntiWallhackOwnedAndParentedEntities(
 
 		if (!hiddenPlayers.Get(ownerSlot))
 			continue;
-
-		if (networking_awh_debug.GetBool())
-		{
-			edict_t* dbgEd = ent->edict();
-			const int flags = dbgEd ? (dbgEd->m_fStateFlags & (FL_EDICT_DONTSEND|FL_EDICT_ALWAYS|FL_EDICT_PVSCHECK|FL_EDICT_FULLCHECK)) : 0;
-			Msg(PROJECT_NAME " - AWH: linked ent %i class=%s ownerSlot=%i stillTransmit=%i alwaysBit=%i flags[DS=%i AL=%i PVS=%i FULL=%i]\n",
-				idx, GetAWHClassnameSafe(ent), ownerSlot,
-				pInfo->m_pTransmitEdict->Get(idx) ? 1 : 0,
-				(pInfo->m_pTransmitAlways && pInfo->m_pTransmitAlways->Get(idx)) ? 1 : 0,
-				(flags & FL_EDICT_DONTSEND) ? 1 : 0,
-				(flags & FL_EDICT_ALWAYS) ? 1 : 0,
-				(flags & FL_EDICT_PVSCHECK) ? 1 : 0,
-				(flags == FL_EDICT_FULLCHECK) ? 1 : 0);
-		}
 
 		ClearAntiWallhackTransmitEntityAndMoveChildren(ent, pInfo, visited, false);
 	}
@@ -1290,7 +1557,7 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 	// Some GMod entities are linked to the player through owner/move-parent/network-parent,
 	// but they are not always present in the player's FirstMoveChild() chain.
 	// This second pass removes those entities without touching the global transmit caches.
-	if (hasHiddenPlayer)
+	if (hasHiddenPlayer && networking_awh_linked_scan.GetBool())
 		ClearAntiWallhackOwnedAndParentedEntities(pInfo, pEdictIndices, nEdicts, hiddenPlayers, visited);
 
 	if (forceBurst)
