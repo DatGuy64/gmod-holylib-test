@@ -1063,19 +1063,19 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 				}
 			}
 
-			// Debug: find all transmitted entities whose owner is this player
+			// Scan edicts to find entities still transmitted that reference this player
 			for (int j = maxClients + 1; j < MAX_EDICTS; ++j)
 			{
 				if (!pTransmitBits->Get(j)) continue;
 				CBaseEntity* ent = g_pEntityCache[j];
 				if (!ent) continue;
-				CBaseEntity* owner = ent->GetOwnerEntity();
-				CBaseEntity* parent = ent->GetMoveParent();
-				if (owner == targetEnt || parent == targetEnt)
-					Msg("[AWH DEBUG] slot %d still has entity idx=%d class=%s owner=%s parent=%s\n",
+				CBaseEntity* moveParent = ent->GetMoveParent();
+				CBaseEntity* owner     = ent->GetOwnerEntity();
+				if (moveParent == targetEnt || owner == targetEnt)
+					Msg("[AWH] slot=%d floating: idx=%d class=%s moveParent=%s owner=%s\n",
 						i, j, ent->GetClassname(),
-						owner ? owner->GetClassname() : "null",
-						parent ? parent->GetClassname() : "null");
+						moveParent ? moveParent->GetClassname() : "null",
+						owner     ? owner->GetClassname()     : "null");
 			}
 		}
 	}
