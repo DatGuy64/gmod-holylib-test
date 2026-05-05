@@ -2642,12 +2642,21 @@ static CBaseClient* hook_CBaseServer_GetFreeClient(CBaseServer* _this, netadr_t&
 static Detouring::Hook detour_CBaseServer_CreateFakeClient;
 static CBaseClient* hook_CBaseServer_CreateFakeClient(CBaseServer* _this, const char* pName)
 {
-	netadr_t adr;
-	CBaseClient* pClient = detour_CBaseServer_GetFreeClient.GetTrampoline<Symbols::CBaseServer_GetFreeClient>()(_this, adr);
-	if (!pClient || pClient->m_nClientSlot >= _this->m_nMaxclients)
-		return nullptr;
+    bool bHasFreeSlot = false;
+    for (int i = 0; i < _this->m_nMaxclients; i++)
+    {
+        CBaseClient* pClient = (CBaseClient*)_this->GetClient(i);
+        if (pClient && pClient->m_nSignonState == SIGNONSTATE_NONE)
+        {
+            bHasFreeSlot = true;
+            break;
+        }
+    }
 
-	return detour_CBaseServer_CreateFakeClient.GetTrampoline<Symbols::CBaseServer_CreateFakeClient>()(_this, pName);
+    if (!bHasFreeSlot)
+        return nullptr;
+
+    return detour_CBaseServer_CreateFakeClient.GetTrampoline<Symbols::CBaseServer_CreateFakeClient>()(_this, pName);
 }
 
 static Detouring::Hook detour_CBaseServer_UserInfoChanged;
