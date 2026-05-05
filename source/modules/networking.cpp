@@ -1048,10 +1048,6 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 			pTransmitBits->Clear(i);
 			if (pAlwaysBits) pAlwaysBits->Clear(i);
 
-			edict_t* targetEdict = Util::engineserver->PEntityOfEntIndex(i);
-			Msg("[AWH] slot %d hidden, stateFlags=0x%x, pTransmitBits after clear=%d\n",
-				i, targetEdict ? targetEdict->m_fStateFlags : -1, pTransmitBits->Get(i) ? 1 : 0);
-
 			for (CBaseEntity* ch = targetEnt->FirstMoveChild(); ch; ch = ch->NextMovePeer())
 			{
 				edict_t* chEd = ch->edict();
@@ -1060,11 +1056,10 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 				const int idx = chEd->m_EdictIndex;
 				if (idx <= maxClients) continue;
 
-				if (pTransmitBits->Get(idx))
-				{
-					pTransmitBits->Clear(idx);
-					if (pAlwaysBits) pAlwaysBits->Clear(idx);
-				}
+				pTransmitBits->Clear(idx);
+				if (pAlwaysBits) pAlwaysBits->Clear(idx);
+				g_pGlobalTransmitTickCache.g_bWasSeenByPlayer.Clear(idx);
+				g_pGlobalTransmitTickCache.g_pAlwaysTransmitCacheBitVec.Clear(idx);
 			}
 		}
 	}
