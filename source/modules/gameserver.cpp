@@ -2642,22 +2642,19 @@ static CBaseClient* hook_CBaseServer_GetFreeClient(CBaseServer* _this, netadr_t&
 static Detouring::Hook detour_CBaseServer_CreateFakeClient;
 static CBaseClient* hook_CBaseServer_CreateFakeClient(CBaseServer* _this, const char* pName)
 {
-    Msg(PROJECT_NAME ": hook_CBaseServer_CreateFakeClient called for '%s'\n", pName);
-    Msg(PROJECT_NAME ": m_nMaxclients = %i, GetClientCount = %i\n", _this->m_nMaxclients, _this->GetClientCount());
+    CBaseServer* pRealServer = (CBaseServer*)Util::server;
+    
+    Msg(PROJECT_NAME ": _this = %p, Util::server = %p\n", _this, pRealServer);
+    Msg(PROJECT_NAME ": _this->m_nMaxclients = %i\n", _this->m_nMaxclients);
+    Msg(PROJECT_NAME ": Util::server->m_nMaxclients = %i\n", pRealServer->m_nMaxclients);
 
     bool bHasFreeSlot = false;
-    for (int i = 0; i < _this->m_nMaxclients; i++)
+    for (int i = 0; i < pRealServer->m_nMaxclients; i++)
     {
-        CBaseClient* pClient = (CBaseClient*)_this->GetClient(i);
-        if (pClient)
-            Msg(PROJECT_NAME ": Slot %i: SignonState=%i\n", i, pClient->m_nSignonState);
-        else
-            Msg(PROJECT_NAME ": Slot %i: nullptr\n", i);
-
+        CBaseClient* pClient = (CBaseClient*)pRealServer->GetClient(i);
         if (pClient && pClient->m_nSignonState == SIGNONSTATE_NONE)
         {
             bHasFreeSlot = true;
-            Msg(PROJECT_NAME ": Found free slot at %i\n", i);
             break;
         }
     }
@@ -2668,12 +2665,8 @@ static CBaseClient* hook_CBaseServer_CreateFakeClient(CBaseServer* _this, const 
         return nullptr;
     }
 
-    Msg(PROJECT_NAME ": Calling trampoline for '%s'\n", pName);
-    CBaseClient* result = detour_CBaseServer_CreateFakeClient.GetTrampoline<Symbols::CBaseServer_CreateFakeClient>()(_this, pName);
-    Msg(PROJECT_NAME ": Trampoline returned %s\n", result ? result->GetClientName() : "nullptr");
-    return result;
+    return detour_CBaseServer_CreateFakeClient.GetTrampoline<Symbols::CBaseServer_CreateFakeClient>()(_this, pName);
 }
-
 static Detouring::Hook detour_CBaseServer_UserInfoChanged;
 static void hook_CBaseServer_UserInfoChanged(CBaseServer* _this, int nClientIndex)
 {
