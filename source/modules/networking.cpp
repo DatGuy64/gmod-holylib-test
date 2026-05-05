@@ -440,23 +440,23 @@ static inline CBaseEntity* IndexToEntity(const int nEntIndex)
 static constexpr int kAWHMoveChildOffset = 0x160;
 static constexpr int kAWHMovePeerOffset = 0x164;
 
-static inline CBaseEntity* AWHReadEHandleEntity(const void* pEnt, const int nOffset)
+static inline CBaseEntity* AWHReadEntityHandle(CBaseEntity* ent, int offset)
 {
-	if (!pEnt)
-		return nullptr;
+    CBaseHandle* h = reinterpret_cast<CBaseHandle*>(
+        reinterpret_cast<unsigned char*>(ent) + offset
+    );
 
-	const CBaseHandle* pHandle = reinterpret_cast<const CBaseHandle*>(reinterpret_cast<const char*>(pEnt) + nOffset);
-	return IndexToEntity(pHandle->GetEntryIndex());
+    return static_cast<CBaseEntity*>(h->Get());
 }
 
-static inline CBaseEntity* AWHFirstMoveChild(const CBaseEntity* pEnt)
+static inline CBaseEntity* AWHFirstMoveChild(CBaseEntity* ent)
 {
-	return AWHReadEHandleEntity(pEnt, kAWHMoveChildOffset);
+    return AWHReadEntityHandle(ent, kAWHMoveChildOffset);
 }
 
-static inline CBaseEntity* AWHNextMovePeer(const CBaseEntity* pEnt)
+static inline CBaseEntity* AWHNextMovePeer(CBaseEntity* ent)
 {
-	return AWHReadEHandleEntity(pEnt, kAWHMovePeerOffset);
+    return AWHReadEntityHandle(ent, kAWHMovePeerOffset);
 }
 
 static DTVarByOffset m_Hands_Offset("DT_GMOD_Player", "m_Hands");
