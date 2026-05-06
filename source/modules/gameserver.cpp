@@ -2612,18 +2612,12 @@ static CBaseClient* hook_CBaseServer_CreateFakeClient(CBaseServer* _this, const 
 static Detouring::Hook detour_CBaseServer_UserInfoChanged;
 static void hook_CBaseServer_UserInfoChanged(CBaseServer* _this, int nClientIndex)
 {
-	if (nClientIndex >= _this->m_nMaxclients)
-		return;
-
 	detour_CBaseServer_UserInfoChanged.GetTrampoline<Symbols::CBaseServer_UserInfoChanged>()(_this, nClientIndex);
 }
 
 static Detouring::Hook detour_CGameServer_RemoveClientFromGame;
 static void hook_CGameServer_RemoveClientFromGame(CBaseServer* _this, CBaseClient* pClient)
 {
-	if (pClient->m_nClientSlot >= _this->m_nMaxclients)
-		return;
-
 	detour_CGameServer_RemoveClientFromGame.GetTrampoline<Symbols::CGameServer_RemoveClientFromGame>()(_this, pClient);
 }
 
@@ -2636,16 +2630,13 @@ static CBaseClient* hook_CSteam3Server_ClientFindFromSteamID(void* _this, CSteam
 static Detouring::Hook detour_CServerPlugin_ClientSettingsChanged;
 static void hook_CServerPlugin_ClientSettingsChanged(void* _this, edict_t* pEdict)
 {
-	if (pEdict->m_EdictIndex > gpGlobals->maxClients)
-		return;
-
 	detour_CServerPlugin_ClientSettingsChanged.GetTrampoline<Symbols::CServerPlugin_ClientSettingsChanged>()(_this, pEdict);
 }
 
 static Detouring::Hook detour_CVEngineServer_GMOD_SendToClient;
 static void hook_CVEngineServer_GMOD_SendToClient(void* _this, int client, void *data, int dataSize)
 {
-    detour_CVEngineServer_GMOD_SendToClient.GetTrampoline<Symbols::CVEngineServer_GMOD_SendToClient>()(_this, client, data, dataSize);
+	detour_CVEngineServer_GMOD_SendToClient.GetTrampoline<Symbols::CVEngineServer_GMOD_SendToClient>()(_this, client, data, dataSize);
 }
 
 static void SendPendingServerInfos(CBaseServer* pServer)
