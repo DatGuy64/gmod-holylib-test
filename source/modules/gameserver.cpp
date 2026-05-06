@@ -2645,39 +2645,7 @@ static void hook_CServerPlugin_ClientSettingsChanged(void* _this, edict_t* pEdic
 static Detouring::Hook detour_CVEngineServer_GMOD_SendToClient;
 static void hook_CVEngineServer_GMOD_SendToClient(void* _this, int client, void *data, int dataSize)
 {
-	if (client < gpGlobals->maxClients)
-	{
-		detour_CVEngineServer_GMOD_SendToClient.GetTrampoline<Symbols::CVEngineServer_GMOD_SendToClient>()(_this, client, data, dataSize);
-		return;
-	}
-
-	CBaseServer* pServer = (CBaseServer*)Util::server;
-	client -= pServer->m_nMaxclients;
-	if (client >= g_pQueueClients.size())
-		return; // Invalid?
-
-	CBaseClient* pClient = g_pQueueClients[client];
-	if (pClient->IsFakeClient())
-	{
-		DevMsg(PROJECT_NAME " - gameserver: Not sending to fake client '%s'.\n", pClient->GetClientName());
-		return;
-	}
-
-	if (!pClient->IsConnected())
-	{
-		Msg(PROJECT_NAME " - gameserver: Not sending to null client.\n");
-		return;
-	}
-
-	// Not 1:1 to GMod but should be good enouth
-
-	SVC_CustomMessage msg;
-	msg.m_DataOut.StartWriting(data, 0, 0, dataSize);
-	msg.m_iLength = dataSize;
-	msg.m_iLengthBits = 20;
-	msg.m_iType = svc_GMod_ServerToClient;
-	
-	pClient->m_NetChannel->SendNetMsg(msg, true, false);
+    detour_CVEngineServer_GMOD_SendToClient.GetTrampoline<Symbols::CVEngineServer_GMOD_SendToClient>()(_this, client, data, dataSize);
 }
 
 static void SendPendingServerInfos(CBaseServer* pServer)
