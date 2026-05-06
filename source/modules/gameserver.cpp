@@ -2600,43 +2600,7 @@ static ConVar gameserver_maxplayers("holylib_gameserver_maxplayers", "128", 0, "
 static Detouring::Hook detour_CBaseServer_GetFreeClient;
 static CBaseClient* hook_CBaseServer_GetFreeClient(CBaseServer* _this, netadr_t& adr)
 {
-	CBaseClient* pClient = detour_CBaseServer_GetFreeClient.GetTrampoline<Symbols::CBaseServer_GetFreeClient>()(_this, adr);
-	if (pClient)
-		return pClient;
-
-	CBaseClient* freeclient = nullptr;
-	for (CBaseClient* pClient : g_pQueueClients)
-	{
-		if (pClient->IsFakeClient())
-			continue;
-
-		if (pClient->IsConnected())
-		{
-			if (adr.CompareAdr(pClient->m_NetChannel->GetRemoteAddress()))
-			{
-				pClient->m_NetChannel->Shutdown( NULL );
-				pClient->m_NetChannel = NULL;
-		
-				pClient->Clear();
-				return pClient;
-			}
-		} else {
-			if (!freeclient)
-				freeclient = pClient;
-		}
-	}
-
-	if (!freeclient)
-	{
-		if ((_this->GetClientCount() + g_pQueueClients.size()) > gameserver_maxplayers.GetInt())
-			return nullptr;
-
-		freeclient = _this->CreateNewClient(_this->GetClientCount() + g_pQueueClients.size());
-		g_pQueueClients.push_back((CGameClient*)freeclient);
-	}
-	// We do not register it to m_Clients of the CBaseServer
-
-	return freeclient;
+	return detour_CBaseServer_GetFreeClient.GetTrampoline<Symbols::CBaseServer_GetFreeClient>()(_this, adr);
 }
 
 static Detouring::Hook detour_CBaseServer_CreateFakeClient;
@@ -2666,21 +2630,7 @@ static void hook_CGameServer_RemoveClientFromGame(CBaseServer* _this, CBaseClien
 static Detouring::Hook detour_CSteam3Server_ClientFindFromSteamID;
 static CBaseClient* hook_CSteam3Server_ClientFindFromSteamID(void* _this, CSteamID* steamID)
 {
-	CBaseClient* pClient = detour_CSteam3Server_ClientFindFromSteamID.GetTrampoline<Symbols::CSteam3Server_ClientFindFromSteamID>()(_this, steamID);
-	if (pClient)
-		return pClient;
-
-	for (CBaseClient* pClient : g_pQueueClients)
-	{
-		if (!pClient->IsConnected() || pClient->IsFakeClient())
-			continue;
-
-		USERID_t id = pClient->GetNetworkID();
-		if (pClient->m_SteamID == *steamID)
-			return pClient;
-	}
-
-	return nullptr;
+	return detour_CSteam3Server_ClientFindFromSteamID.GetTrampoline<Symbols::CSteam3Server_ClientFindFromSteamID>()(_this, steamID);
 }
 
 static Detouring::Hook detour_CServerPlugin_ClientSettingsChanged;
@@ -2771,9 +2721,7 @@ void CGameServerModule::Think(bool bSimulating)
 {
 	VPROF_BUDGET("HolyLib - CGameServerModule::Think", VPROF_BUDGETGROUP_HOLYLIB);
 
-	CBaseServer* pServer = (CBaseServer*)Util::server;
-	SendPendingServerInfos(pServer);
-	SendClientMessages();
+	g_pQueueClients.clear();
 }
 
 /*
