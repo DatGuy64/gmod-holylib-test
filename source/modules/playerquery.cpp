@@ -395,13 +395,14 @@ static SIMPLETHREAD_RETURNVALUE NetworkThread(void* /*param*/)
 
 			if (LittleLong(*(unsigned int*)packet->data) == CONNECTIONLESS_HEADER)
 			{
-				const double now = Plat_FloatTime();
+				packet->message.ReadLong();
 
 				if (packet->size >= 5 && g_bInfoCacheEnabled.load(std::memory_order_relaxed))
 				{
 					const char queryType = (char)packet->data[4];
 					if (queryType == A2S_INFO)
 					{
+						const double now = Plat_FloatTime();
 						uint32_t ip = ((const sockaddr_in*)&packet->from)->sin_addr.s_addr;
 						if (!CheckIPRate(ip, now))
 							continue;
@@ -421,7 +422,9 @@ static SIMPLETHREAD_RETURNVALUE NetworkThread(void* /*param*/)
 				continue;
 			}
 
-			QueuePacket(packet, false);
+			CNetChan* netchan = func_NET_FindNetChannel(nSocket, packet->from);
+			if (netchan)
+				QueuePacket(packet, false);
 		}
 
 		ThreadSleep(1);
