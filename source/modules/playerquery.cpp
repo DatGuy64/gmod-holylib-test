@@ -11,16 +11,22 @@
 #include <filesystem_stdio.h>
 #include <steam/steam_gameserver.h>
 #include <bitbuf.h>
-#include <map>
+
+#include <unordered_map>
 #include <array>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include <atomic>
+#include <shared_mutex>
+#include <mutex>
+
 #if defined SYSTEM_POSIX
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/select.h>
 #include <errno.h>
 typedef int32_t SOCKET;
 typedef size_t recvlen_t;
@@ -53,26 +59,47 @@ IModule* pPlayerQueryModule = &g_pPlayerQueryModule;
 
 struct ClientRateInfo {
 	uint32_t count = 0;
-	double last_reset = 0;
+	double   last_reset = 0;
 };
 
-static bool g_bQueryLimiterEnabled = false;
-static double g_flMaxQueriesWindow = 60.0;
-static double g_flMaxQueriesPerSecond = 1.0;
-static double g_flGlobalMaxQueriesPerSecond = 60.0;
-static std::map<uint32_t, ClientRateInfo> g_ClientRates;
-static uint32_t g_nGlobalCount = 0;
-static double g_flGlobalLastReset = 0;
+static bool     g_bQueryLimiterEnabled         = false;
+static double   g_flMaxQueriesWindow           = 60.0;
+static double   g_flMaxQueriesPerSecond        = 1.0;
+static double   g_flGlobalMaxQueriesPerSecond  = 60.0;
 
-static bool CheckIPRate(uint32_t addr)
+static std::unordered_map<uint32_t, ClientRateInfo> g_ClientRates;
+static uint32_t g_nGlobalCount     = 0;
+static double   g_flGlobalLastReset = 0;
+
+static bool CheckIPRate(uint32_t addr, double now)
 {
 	if (!g_bQueryLimiterEnabled) return true;
-	double now = Plat_FloatTime();
-	if (now - g_flGlobalLastReset >= g_flMaxQueriesWindow) { g_flGlobalLastReset = now; g_nGlobalCount = 1; }
-	else { g_nGlobalCount++; if (g_nGlobalCount / g_flMaxQueriesWindow >= g_flGlobalMaxQueriesPerSecond) return false; }
+
+	if (now - g_flGlobalLastReset >= g_flMaxQueriesWindow)
+	{
+		g_flGlobalLastReset = now;
+		g_nGlobalCount = 1;
+	}
+	else
+	{
+		++g_nGlobalCount;
+		if (g_nGlobalCount / g_flMaxQueriesWindow >= g_flGlobalMaxQueriesPerSecond)
+			return false;
+	}
+
 	auto& info = g_ClientRates[addr];
-	if (now - info.last_reset >= g_flMaxQueriesWindow) { info.last_reset = now; info.count = 1; }
-	else { info.count++; if (info.count / g_flMaxQueriesWindow >= g_flMaxQueriesPerSecond) return false; }
+	if (now - info.last_reset >= g_flMaxQueriesWindow)
+	{
+		info.last_reset = now;
+		info.count = 1;
+	}
+	else
+	{
+		++info.count;
+		if (info.count / g_flMaxQueriesWindow >= g_flMaxQueriesPerSecond)
+			return false;
+	}
+
 	return true;
 }
 
@@ -86,53 +113,61 @@ struct server_tags_t {
 static std::string ConcatenateTags(const server_tags_t& tags)
 {
 	std::string s;
-	if (!tags.gm.empty()) { s += "gm:"; s += tags.gm; }
-	if (!tags.gmws.empty()) { s += s.empty() ? "gmws:" : " gmws:"; s += tags.gmws; }
-	if (!tags.gmc.empty()) { s += s.empty() ? "gmc:" : " gmc:"; s += tags.gmc; }
-	if (!tags.loc.empty()) { s += s.empty() ? "loc:" : " loc:"; s += tags.loc; }
+	s.reserve(128);
+	if (!tags.gm.empty())   { s += "gm:";   s += tags.gm; }
+	if (!tags.gmws.empty()) { if (!s.empty()) s += ' '; s += "gmws:"; s += tags.gmws; }
+	if (!tags.gmc.empty())  { if (!s.empty()) s += ' '; s += "gmc:";  s += tags.gmc; }
+	if (!tags.loc.empty())  { if (!s.empty()) s += ' '; s += "loc:";  s += tags.loc; }
 	return s;
 }
 
-static bool g_bInfoCacheEnabled = false;
-static double g_flInfoCacheTime = 5.0;
-static double g_flInfoCacheLastUpdate = 0.0;
-static int g_iPlayerCountOverride = -1;
-static ConVar* sv_visiblemaxplayers = nullptr;
-static ConVar* sv_location = nullptr;
-
+static std::shared_mutex    g_InfoCacheMutex;
 static std::array<char, 1024> g_InfoCacheBuffer{};
-static bf_write g_InfoCachePacket(g_InfoCacheBuffer.data(), (int)g_InfoCacheBuffer.size());
+static bf_write             g_InfoCachePacket(g_InfoCacheBuffer.data(), (int)g_InfoCacheBuffer.size());
+
+static std::atomic<bool>    g_bInfoCacheEnabled{false};
+static std::atomic<bool>    g_bInfoCacheValid{false};
+static std::atomic<bool>    g_bInfoCacheNeedsRebuild{true};
+static std::atomic<double>  g_flInfoCacheLastUpdate{0.0};
+static std::atomic<double>  g_flInfoCacheTime{5.0};
+
+static std::string  g_strGameDir;
+static std::string  g_strGameVersion;
+static std::string  g_strGameDesc;
+static int32_t      g_nMaxClients = 0;
+static int32_t      g_nUDPPort    = 0;
 
 struct reply_info_t {
-	std::string game_dir;
-	std::string game_version;
-	std::string game_desc;
-	int32_t max_clients = 0;
-	int32_t udp_port = 0;
 	server_tags_t tags;
 };
-
 static reply_info_t g_ReplyInfo;
-static SOCKET g_GameSocket = INVALID_SOCKET;
-static ISteamGameServer* g_pGameServer = nullptr;
+
+static std::string  g_strCachedTags;
+static bool         g_bTagsDirty = true;
+
+static int          g_iPlayerCountOverride = -1;
+static ConVar*      sv_visiblemaxplayers   = nullptr;
+static ConVar*      sv_location            = nullptr;
+static ISteamGameServer* g_pGameServer     = nullptr;
 
 static void BuildStaticReplyInfo()
 {
-	if (!Util::servergamedll || !Util::engineserver || !g_pFullFileSystem || !Util::server) return;
+	if (!Util::servergamedll || !Util::engineserver || !g_pFullFileSystem || !Util::server)
+		return;
 
-	g_ReplyInfo.game_desc = Util::servergamedll->GetGameDescription();
+	g_strGameDesc = Util::servergamedll->GetGameDescription();
 
 	{
 		char gameDir[256] = {};
 		Util::engineserver->GetGameDir(gameDir, sizeof(gameDir));
-		g_ReplyInfo.game_dir = gameDir;
-		size_t pos = g_ReplyInfo.game_dir.find_last_of("\\/");
+		g_strGameDir = gameDir;
+		size_t pos = g_strGameDir.find_last_of("\\/");
 		if (pos != std::string::npos)
-			g_ReplyInfo.game_dir = g_ReplyInfo.game_dir.substr(pos + 1);
+			g_strGameDir.erase(0, pos + 1);
 	}
 
-	g_ReplyInfo.max_clients = Util::server->GetMaxClients();
-	g_ReplyInfo.udp_port = Util::server->GetUDPPort();
+	g_nMaxClients = Util::server->GetMaxClients();
+	g_nUDPPort    = Util::server->GetUDPPort();
 
 	FileHandle_t file = g_pFullFileSystem->Open("steam.inf", "r", "GAME");
 	if (file)
@@ -140,126 +175,181 @@ static void BuildStaticReplyInfo()
 		char buff[256] = {};
 		if (g_pFullFileSystem->ReadLine(buff, sizeof(buff), file))
 		{
-			const char* pVersion = strchr(buff, '=');
-			if (pVersion) { pVersion++; g_ReplyInfo.game_version = pVersion; size_t p = g_ReplyInfo.game_version.find_first_of("\r\n"); if (p != std::string::npos) g_ReplyInfo.game_version.erase(p); }
+			if (strlen(buff) > 13)
+			{
+				g_strGameVersion = &buff[13];
+				size_t p = g_strGameVersion.find_first_of("\r\n");
+				if (p != std::string::npos) g_strGameVersion.erase(p);
+			}
 		}
 		g_pFullFileSystem->Close(file);
 	}
 	else
-		g_ReplyInfo.game_version = "2020.10.14";
+		g_strGameVersion = "2020.10.14";
+
+	g_bInfoCacheNeedsRebuild.store(true, std::memory_order_relaxed);
 }
 
 static void BuildReplyInfo()
 {
 	if (!Util::server || !Util::engineserver) return;
 
-	if (sv_location != nullptr) g_ReplyInfo.tags.loc = sv_location->GetString();
-	else g_ReplyInfo.tags.loc.clear();
+	if (sv_location) g_ReplyInfo.tags.loc = sv_location->GetString();
+	else             g_ReplyInfo.tags.loc.clear();
 
-	const std::string tags = ConcatenateTags(g_ReplyInfo.tags);
-	const bool has_tags = !tags.empty();
+	if (g_bTagsDirty)
+	{
+		g_strCachedTags = ConcatenateTags(g_ReplyInfo.tags);
+		g_bTagsDirty    = false;
+	}
+	const bool has_tags = !g_strCachedTags.empty();
 
-	const char* server_name = Util::server->GetName();
-	const char* map_name = Util::server->GetMapName();
-	int32_t appid = Util::engineserver->GetAppID();
-	int32_t num_clients = g_iPlayerCountOverride >= 0 ? g_iPlayerCountOverride : Util::server->GetNumClients();
-	int32_t max_players = sv_visiblemaxplayers ? sv_visiblemaxplayers->GetInt() : -1;
-	if (max_players <= 0 || max_players > g_ReplyInfo.max_clients) max_players = g_ReplyInfo.max_clients;
-	int32_t num_fake = Util::server->GetNumFakeClients();
-	bool has_password = Util::server->GetPassword() != nullptr;
-	if (g_pGameServer == nullptr) g_pGameServer = SteamGameServer();
+	const char*   server_name = Util::server->GetName();
+	const char*   map_name    = Util::server->GetMapName();
+	int32_t       appid       = Util::engineserver->GetAppID();
+	int32_t       num_clients = (g_iPlayerCountOverride >= 0)
+	                              ? g_iPlayerCountOverride
+	                              : Util::server->GetNumClients();
+	int32_t       max_players = sv_visiblemaxplayers ? sv_visiblemaxplayers->GetInt() : -1;
+	if (max_players <= 0 || max_players > g_nMaxClients)
+		max_players = g_nMaxClients;
+	int32_t       num_fake    = Util::server->GetNumFakeClients();
+	bool          has_pass    = Util::server->GetPassword() != nullptr;
+
+	if (!g_pGameServer) g_pGameServer = SteamGameServer();
 	bool vac_secure = g_pGameServer ? g_pGameServer->BSecure() : false;
-	const CSteamID* sid = Util::engineserver->GetGameServerSteamID();
-	uint64_t steamid = sid ? sid->ConvertToUint64() : 0;
 
-	g_InfoCachePacket.Reset();
-	g_InfoCachePacket.WriteLong(-1);
-	g_InfoCachePacket.WriteByte('I');
-	g_InfoCachePacket.WriteByte(17);
-	g_InfoCachePacket.WriteString(server_name);
-	g_InfoCachePacket.WriteString(map_name);
-	g_InfoCachePacket.WriteString(g_ReplyInfo.game_dir.c_str());
-	g_InfoCachePacket.WriteString(g_ReplyInfo.game_desc.c_str());
-	g_InfoCachePacket.WriteShort(appid);
-	g_InfoCachePacket.WriteByte(num_clients);
-	g_InfoCachePacket.WriteByte(max_players);
-	g_InfoCachePacket.WriteByte(num_fake);
-	g_InfoCachePacket.WriteByte('d');
-	g_InfoCachePacket.WriteByte('l');
-	g_InfoCachePacket.WriteByte(has_password ? 1 : 0);
-	g_InfoCachePacket.WriteByte((int)vac_secure);
-	g_InfoCachePacket.WriteString(g_ReplyInfo.game_version.c_str());
-	g_InfoCachePacket.WriteByte(0x80 | 0x10 | (has_tags ? 0x20 : 0x00) | 0x01);
-	g_InfoCachePacket.WriteShort(g_ReplyInfo.udp_port);
-	g_InfoCachePacket.WriteLongLong((int64_t)steamid);
-	if (has_tags) g_InfoCachePacket.WriteString(tags.c_str());
-	g_InfoCachePacket.WriteLongLong(appid);
+	const CSteamID* sid     = Util::engineserver->GetGameServerSteamID();
+	uint64_t        steamid = sid ? sid->ConvertToUint64() : 0;
+
+	{
+		std::unique_lock<std::shared_mutex> wlock(g_InfoCacheMutex);
+
+		g_InfoCachePacket.Reset();
+		g_InfoCachePacket.WriteLong(-1);
+		g_InfoCachePacket.WriteByte('I');
+		g_InfoCachePacket.WriteByte(17);
+		g_InfoCachePacket.WriteString(server_name);
+		g_InfoCachePacket.WriteString(map_name);
+		g_InfoCachePacket.WriteString(g_strGameDir.c_str());
+		g_InfoCachePacket.WriteString(g_strGameDesc.c_str());
+		g_InfoCachePacket.WriteShort(appid);
+		g_InfoCachePacket.WriteByte(num_clients);
+		g_InfoCachePacket.WriteByte(max_players);
+		g_InfoCachePacket.WriteByte(num_fake);
+		g_InfoCachePacket.WriteByte('d');
+		g_InfoCachePacket.WriteByte('l');
+		g_InfoCachePacket.WriteByte(has_pass ? 1 : 0);
+		g_InfoCachePacket.WriteByte((int)vac_secure);
+		g_InfoCachePacket.WriteString(g_strGameVersion.c_str());
+		g_InfoCachePacket.WriteByte(0x80 | 0x10 | (has_tags ? 0x20 : 0x00) | 0x01);
+		g_InfoCachePacket.WriteShort(g_nUDPPort);
+		g_InfoCachePacket.WriteLongLong((int64_t)steamid);
+		if (has_tags) g_InfoCachePacket.WriteString(g_strCachedTags.c_str());
+		g_InfoCachePacket.WriteLongLong(appid);
+
+		g_bInfoCacheValid.store(true, std::memory_order_release);
+	}
+
+	g_flInfoCacheLastUpdate.store(Plat_FloatTime(), std::memory_order_relaxed);
+	g_bInfoCacheNeedsRebuild.store(false, std::memory_order_relaxed);
 }
 
-using recvfrom_t = ssize_t(*)(SOCKET, void*, recvlen_t, int32_t, sockaddr*, socklen_t*);
-static Detouring::Hook g_RecvfromHook;
+static SOCKET   g_GameSocket    = INVALID_SOCKET;
+static std::atomic<bool> g_bThreadRunning{false};
+static ThreadHandle_t    g_hNetworkThread = nullptr;
 
-static ssize_t recvfrom_detour(SOCKET s, void* buf, recvlen_t buflen, int32_t flags, sockaddr* from, socklen_t* fromlen)
+static bool SendCachedResponse(SOCKET s, const sockaddr_in& from)
 {
-	auto trampoline = g_RecvfromHook.GetTrampoline<recvfrom_t>();
-	if (!trampoline) return -1;
+	if (!g_bInfoCacheValid.load(std::memory_order_acquire))
+		return false;
 
-	const ssize_t len = trampoline(s, buf, buflen, flags, from, fromlen);
+	std::shared_lock<std::shared_mutex> rlock(g_InfoCacheMutex);
+	sendto(s,
+		(const char*)g_InfoCachePacket.GetData(),
+		g_InfoCachePacket.GetNumBytesWritten(),
+		0,
+		(const sockaddr*)&from,
+		sizeof(from));
+	return true;
+}
 
-	if (s != g_GameSocket || len < 5) return len;
+static unsigned NetworkThreadFunc(void* /*param*/)
+{
+	using recvfrom_t = ssize_t(*)(SOCKET, void*, recvlen_t, int32_t, sockaddr*, socklen_t*);
 
-	const uint8_t* data = (const uint8_t*)buf;
-	bf_read packet(data, len);
-	int32_t channel = (int32_t)packet.ReadLong();
-	if (channel != -1) return len;
+	static std::array<uint8_t, 8192> buf{};
 
-	uint8_t type = (uint8_t)packet.ReadByte();
-	const sockaddr_in& infrom = *(const sockaddr_in*)from;
-
-	if (type == 'T')
+	while (g_bThreadRunning.load(std::memory_order_relaxed))
 	{
-		if (!CheckIPRate(infrom.sin_addr.s_addr))
+		fd_set readfds;
+		FD_ZERO(&readfds);
+		FD_SET(g_GameSocket, &readfds);
+		timeval tv{0, 100000};
+		if (select((int)(g_GameSocket + 1), &readfds, nullptr, nullptr, &tv) <= 0)
+			continue;
+		if (!FD_ISSET(g_GameSocket, &readfds))
+			continue;
+
+		sockaddr_in from{};
+		socklen_t   fromlen = sizeof(from);
+
+		const ssize_t len = recvfrom(
+			g_GameSocket, buf.data(), (recvlen_t)buf.size(), 0,
+			(sockaddr*)&from, &fromlen);
+
+		if (len < 5) continue;
+
+		const double now = Plat_FloatTime();
+
+		const int32_t channel = (int32_t)(
+			(uint32_t)buf[0] | ((uint32_t)buf[1] << 8) |
+			((uint32_t)buf[2] << 16) | ((uint32_t)buf[3] << 24));
+		if (channel != -1) continue;
+
+		const uint8_t type = buf[4];
+		if (type != 'T') continue;
+
+		if (!CheckIPRate(from.sin_addr.s_addr, now))
+			continue;
+
+		if (g_bInfoCacheEnabled.load(std::memory_order_relaxed))
 		{
-			errno = EWOULDBLOCK;
-			return -1;
-		}
+			double last = g_flInfoCacheLastUpdate.load(std::memory_order_relaxed);
+			if (now - last >= g_flInfoCacheTime.load(std::memory_order_relaxed))
+				g_bInfoCacheNeedsRebuild.store(true, std::memory_order_relaxed);
 
-		if (g_bInfoCacheEnabled)
-		{
-			double now = Plat_FloatTime();
-			if (now - g_flInfoCacheLastUpdate >= g_flInfoCacheTime)
-			{
-				BuildReplyInfo();
-				g_flInfoCacheLastUpdate = now;
-			}
-
-			sendto(s, (const char*)g_InfoCachePacket.GetData(),
-				g_InfoCachePacket.GetNumBytesWritten(), 0,
-				(const sockaddr*)&infrom, sizeof(infrom));
-
-			errno = EWOULDBLOCK;
-			return -1;
+			SendCachedResponse(g_GameSocket, from);
 		}
 	}
 
-	return len;
+	return 0;
+}
+
+static void MainThreadThink()
+{
+	if (!g_bInfoCacheEnabled.load(std::memory_order_relaxed)) return;
+	if (!g_bInfoCacheNeedsRebuild.load(std::memory_order_relaxed)) return;
+
+	BuildReplyInfo();
 }
 
 LUA_FUNCTION_STATIC(playerquery_SetPlayerCount)
 {
 	g_iPlayerCountOverride = (int)LUA->CheckNumber(1);
+	g_bInfoCacheNeedsRebuild.store(true, std::memory_order_relaxed);
 	return 0;
 }
 
 LUA_FUNCTION_STATIC(playerquery_EnableInfoCache)
 {
-	g_bInfoCacheEnabled = LUA->GetBool(1);
+	g_bInfoCacheEnabled.store(LUA->GetBool(1), std::memory_order_relaxed);
 	return 0;
 }
 
 LUA_FUNCTION_STATIC(playerquery_SetInfoCacheTime)
 {
-	g_flInfoCacheTime = LUA->CheckNumber(1);
+	g_flInfoCacheTime.store(LUA->CheckNumber(1), std::memory_order_relaxed);
 	return 0;
 }
 
@@ -268,7 +358,6 @@ LUA_FUNCTION_STATIC(playerquery_RefreshInfoCache)
 	if (!Util::servergamedll || !Util::engineserver || !g_pFullFileSystem) return 0;
 	BuildStaticReplyInfo();
 	BuildReplyInfo();
-	g_flInfoCacheLastUpdate = Plat_FloatTime();
 	return 0;
 }
 
@@ -300,25 +389,32 @@ LUA_FUNCTION_STATIC(playerquery_SetGamemode)
 {
 	const char* name = LUA->CheckString(1);
 	std::string gm_name = name;
-	static const std::string suffix = "_modded";
-	if (gm_name.size() > suffix.size() && gm_name.substr(gm_name.size() - suffix.size()) == suffix)
-		gm_name = gm_name.substr(0, gm_name.size() - suffix.size());
-	g_ReplyInfo.tags.gm = gm_name;
+	static const std::string_view suffix = "_modded";
+	if (gm_name.size() > suffix.size() &&
+	    std::string_view(gm_name).substr(gm_name.size() - suffix.size()) == suffix)
+		gm_name.erase(gm_name.size() - suffix.size());
+
+	g_ReplyInfo.tags.gm  = gm_name;
 	g_ReplyInfo.tags.gmc = gm_name;
+	g_bTagsDirty         = true;
+	g_bInfoCacheNeedsRebuild.store(true, std::memory_order_relaxed);
 	return 0;
 }
 
 LUA_FUNCTION_STATIC(playerquery_GetDebugInfo)
 {
 	LUA->CreateTable();
-	LUA->PushString(g_ReplyInfo.tags.gm.c_str()); LUA->SetField(-2, "gm");
-	LUA->PushString(g_ReplyInfo.tags.gmc.c_str()); LUA->SetField(-2, "gmc");
+	LUA->PushString(g_ReplyInfo.tags.gm.c_str());   LUA->SetField(-2, "gm");
+	LUA->PushString(g_ReplyInfo.tags.gmc.c_str());  LUA->SetField(-2, "gmc");
 	LUA->PushString(g_ReplyInfo.tags.gmws.c_str()); LUA->SetField(-2, "gmws");
-	LUA->PushString(g_ReplyInfo.tags.loc.c_str()); LUA->SetField(-2, "loc");
-	LUA->PushString(g_ReplyInfo.game_dir.c_str()); LUA->SetField(-2, "game_dir");
-	LUA->PushString(g_ReplyInfo.game_version.c_str()); LUA->SetField(-2, "game_version");
-	LUA->PushNumber(g_ReplyInfo.max_clients); LUA->SetField(-2, "max_clients");
+	LUA->PushString(g_ReplyInfo.tags.loc.c_str());  LUA->SetField(-2, "loc");
+	LUA->PushString(g_strGameDir.c_str());           LUA->SetField(-2, "game_dir");
+	LUA->PushString(g_strGameVersion.c_str());       LUA->SetField(-2, "game_version");
+	LUA->PushNumber(g_nMaxClients);                  LUA->SetField(-2, "max_clients");
 	LUA->PushString(ConcatenateTags(g_ReplyInfo.tags).c_str()); LUA->SetField(-2, "tags");
+	LUA->PushBool(g_bInfoCacheEnabled.load());       LUA->SetField(-2, "cache_enabled");
+	LUA->PushBool(g_bInfoCacheValid.load());         LUA->SetField(-2, "cache_valid");
+	LUA->PushBool(g_bThreadRunning.load());          LUA->SetField(-2, "thread_running");
 	return 1;
 }
 
@@ -328,7 +424,7 @@ void CPlayerQueryModule::Init(CreateInterfaceFn* appfn, CreateInterfaceFn* gamef
 	if (icvar)
 	{
 		sv_visiblemaxplayers = icvar->FindVar("sv_visiblemaxplayers");
-		sv_location = icvar->FindVar("sv_location");
+		sv_location          = icvar->FindVar("sv_location");
 	}
 }
 
@@ -337,56 +433,67 @@ void CPlayerQueryModule::ServerActivate(edict_t* pEdictList, int edictCount, int
 	if (g_GameSocket == INVALID_SOCKET || g_GameSocket == 0)
 	{
 		const FunctionPointers::GMOD_GetNetSocket_t GetNetSocket = FunctionPointers::GMOD_GetNetSocket();
-		if (GetNetSocket != nullptr)
+		if (GetNetSocket)
 		{
 			const netsocket_t* net_socket = GetNetSocket(1);
-			if (net_socket != nullptr)
-				g_GameSocket = net_socket->hUDP;
+			if (net_socket) g_GameSocket = net_socket->hUDP;
 		}
 	}
-
 	if (g_GameSocket == INVALID_SOCKET || g_GameSocket == 0) return;
 
-	if (!g_RecvfromHook.IsEnabled())
-	{
-		if (!g_RecvfromHook.Create(
-			reinterpret_cast<void*>(recvfrom),
-			reinterpret_cast<void*>(recvfrom_detour)))
-			return;
-		g_RecvfromHook.Enable();
-	}
-
 	BuildStaticReplyInfo();
+
+	if (!g_bThreadRunning.load())
+	{
+		g_bThreadRunning.store(true, std::memory_order_relaxed);
+		g_hNetworkThread = CreateSimpleThread((ThreadFunc_t)NetworkThreadFunc, nullptr);
+	}
 }
 
 void CPlayerQueryModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 {
 	Util::StartTable(pLua);
-		Util::AddFunc(pLua, playerquery_SetPlayerCount, "SetPlayerCount");
-		Util::AddFunc(pLua, playerquery_EnableInfoCache, "EnableInfoCache");
-		Util::AddFunc(pLua, playerquery_SetInfoCacheTime, "SetInfoCacheTime");
-		Util::AddFunc(pLua, playerquery_RefreshInfoCache, "RefreshInfoCache");
-		Util::AddFunc(pLua, playerquery_EnableQueryLimiter, "EnableQueryLimiter");
-		Util::AddFunc(pLua, playerquery_SetMaxQueriesWindow, "SetMaxQueriesWindow");
-		Util::AddFunc(pLua, playerquery_SetMaxQueriesPerSecond, "SetMaxQueriesPerSecond");
-		Util::AddFunc(pLua, playerquery_SetGlobalMaxQueriesPerSecond, "SetGlobalMaxQueriesPerSecond");
-		Util::AddFunc(pLua, playerquery_SetGamemode, "SetGamemode");
-		Util::AddFunc(pLua, playerquery_GetDebugInfo, "GetDebugInfo");
+		Util::AddFunc(pLua, playerquery_SetPlayerCount,              "SetPlayerCount");
+		Util::AddFunc(pLua, playerquery_EnableInfoCache,             "EnableInfoCache");
+		Util::AddFunc(pLua, playerquery_SetInfoCacheTime,            "SetInfoCacheTime");
+		Util::AddFunc(pLua, playerquery_RefreshInfoCache,            "RefreshInfoCache");
+		Util::AddFunc(pLua, playerquery_EnableQueryLimiter,          "EnableQueryLimiter");
+		Util::AddFunc(pLua, playerquery_SetMaxQueriesWindow,         "SetMaxQueriesWindow");
+		Util::AddFunc(pLua, playerquery_SetMaxQueriesPerSecond,      "SetMaxQueriesPerSecond");
+		Util::AddFunc(pLua, playerquery_SetGlobalMaxQueriesPerSecond,"SetGlobalMaxQueriesPerSecond");
+		Util::AddFunc(pLua, playerquery_SetGamemode,                 "SetGamemode");
+		Util::AddFunc(pLua, playerquery_GetDebugInfo,                "GetDebugInfo");
 	Util::FinishTable(pLua, "playerquery");
 }
 
 void CPlayerQueryModule::LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua)
 {
-	g_bInfoCacheEnabled = false;
+	g_bInfoCacheEnabled.store(false, std::memory_order_relaxed);
 	g_iPlayerCountOverride = -1;
 	g_bQueryLimiterEnabled = false;
-	g_RecvfromHook.Disable();
+
+	if (g_bThreadRunning.load())
+	{
+		g_bThreadRunning.store(false, std::memory_order_relaxed);
+		if (g_hNetworkThread)
+		{
+			ThreadJoin(g_hNetworkThread);
+			ReleaseThreadHandle(g_hNetworkThread);
+			g_hNetworkThread = nullptr;
+		}
+	}
+
+	g_bInfoCacheValid.store(false, std::memory_order_relaxed);
 	Util::NukeTable(pLua, "playerquery");
 }
 
 void CPlayerQueryModule::LevelShutdown()
 {
 	g_ClientRates.clear();
-	g_nGlobalCount = 0;
+	g_nGlobalCount      = 0;
 	g_flGlobalLastReset = 0;
+
+	g_bInfoCacheValid.store(false, std::memory_order_relaxed);
+	g_bInfoCacheNeedsRebuild.store(true, std::memory_order_relaxed);
+	g_bTagsDirty = true;
 }
