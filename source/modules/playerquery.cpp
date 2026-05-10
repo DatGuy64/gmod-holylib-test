@@ -31,6 +31,7 @@
 
 #if defined SYSTEM_POSIX
 #include <arpa/inet.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <errno.h>
@@ -427,7 +428,11 @@ static SIMPLETHREAD_RETURNVALUE NetworkThread(void* /*param*/)
 				QueuePacket(packet, false);
 		}
 
-		ThreadSleep(1);
+		fd_set readfds;
+		FD_ZERO(&readfds);
+		FD_SET(nSocket, &readfds);
+		timeval tv{0, 5000};
+		select(nSocket + 1, &readfds, nullptr, nullptr, &tv);
 	}
 
 	g_nThreadState.store(ThreadState::STATE_NOTRUNNING);
