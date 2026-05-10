@@ -18,6 +18,7 @@
 #include <bitbuf.h>
 
 #include <unordered_map>
+#include <unordered_set>
 #include <array>
 #include <string>
 #include <string_view>
@@ -309,14 +310,24 @@ static void QueuePacket(netpacket_s* pPacket, bool bConnectionless)
 	g_QueuedPackets.push_back(q);
 }
 
+static std::unordered_set<INetChannel*> g_pNetChannels;
+
 static Detouring::Hook detour_NET_ProcessSocket;
 static void hook_NET_ProcessSocket(int nSocket, IConnectionlessPacketHandler* pHandler)
 {
 	CBaseServer* pServer = (CBaseServer*)Util::server;
-	if (!pServer || nSocket != pServer->m_Socket)
+	if (!pServer || nSocket != pServer->m_Socket || g_nThreadState.load() == ThreadState::STATE_NOTRUNNING)
 	{
 		detour_NET_ProcessSocket.GetTrampoline<Symbols::NET_ProcessSocket>()(nSocket, pHandler);
 		return;
+	}
+
+	for (INetChannel* netchan : g_pNetChannels)
+	{
+		if (nSocket != netchan->GetSocket())
+			continue;
+		if (!netchan->ProcessStream())
+			netchan->GetMsgHandler()->ConnectionCrashed("TCP connection failed.");
 	}
 
 	AUTO_LOCK(g_QueueMutex);
@@ -333,6 +344,23 @@ static void hook_NET_ProcessSocket(int nSocket, IConnectionlessPacketHandler* pH
 		delete q;
 	}
 	g_QueuedPackets.clear();
+}
+
+static Detouring::Hook detour_CNetChan_Constructor;
+static void hook_CNetChan_Constructor(CNetChan* pChannel)
+{
+	detour_CNetChan_Constructor.GetTrampoline<Symbols::CNetChan_Constructor>()(pChannel);
+	if (g_pNetChannels.find(pChannel) == g_pNetChannels.end())
+		g_pNetChannels.insert(pChannel);
+}
+
+static Detouring::Hook detour_NET_RemoveNetChannel;
+static void hook_NET_RemoveNetChannel(INetChannel* pChannel, bool bShouldRemove)
+{
+	detour_NET_RemoveNetChannel.GetTrampoline<Symbols::NET_RemoveNetChannel>()(pChannel, bShouldRemove);
+	auto it = g_pNetChannels.find(pChannel);
+	if (it != g_pNetChannels.end())
+		g_pNetChannels.erase(it);
 }
 
 
@@ -527,6 +555,18 @@ void CPlayerQueryModule::InitDetour(bool bPreServer)
 		engine_loader.GetModule(), Symbols::NET_ProcessSocketSym,
 		(void*)hook_NET_ProcessSocket, m_pID
 	);
+
+	Detour::Create(
+		&detour_CNetChan_Constructor, "CNetChan_Constructor",
+		engine_loader.GetModule(), Symbols::CNetChan_ConstructorSym,
+		(void*)hook_CNetChan_Constructor, m_pID
+	);
+
+	Detour::Create(
+		&detour_NET_RemoveNetChannel, "NET_RemoveNetChannel",
+		engine_loader.GetModule(), Symbols::NET_RemoveNetChannelSym,
+		(void*)hook_NET_RemoveNetChannel, m_pID
+	);
 }
 
 void CPlayerQueryModule::ServerActivate(edict_t* pEdictList, int edictCount, int clientMax)
@@ -608,6 +648,8 @@ void CPlayerQueryModule::LevelShutdown()
 		g_nGlobalCount      = 0;
 		g_flGlobalLastReset = 0.0;
 	}
+
+	g_pNetChannels.clear();
 
 	g_bInfoCacheValid.store(false, std::memory_order_relaxed);
 	g_bInfoCacheNeedsRebuild.store(true, std::memory_order_relaxed);
