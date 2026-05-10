@@ -1,10 +1,13 @@
+#include "filesystem_base.h"
 #include "LuaInterface.h"
 #include "detours.h"
 #include "module.h"
 #include "lua.h"
-#include "filesystem_base.h"
 #include "symbols.h"
 #include "sourcesdk/baseserver.h"
+#include "sourcesdk/cnetchan.h"
+#include "sourcesdk/proto_oob.h"
+#include <tier0/threadtools.h>
 
 #include <GarrysMod/FunctionPointers.hpp>
 
@@ -13,7 +16,6 @@
 #include <filesystem_stdio.h>
 #include <steam/steam_gameserver.h>
 #include <bitbuf.h>
-#include <tier0/threadtools.h>
 
 #include <unordered_map>
 #include <array>
@@ -333,15 +335,15 @@ static void hook_NET_ProcessSocket(int nSocket, IConnectionlessPacketHandler* pH
 	g_QueuedPackets.clear();
 }
 
-enum NetworkThreadState { STATE_NOTRUNNING, STATE_RUNNING, STATE_SHOULD_SHUTDOWN };
-static std::atomic<int> g_nThreadState{STATE_NOTRUNNING};
+
+static std::atomic<int> g_nThreadState{ThreadState::STATE_NOTRUNNING};
 static ThreadHandle_t   g_hNetworkThread = nullptr;
 
 static SIMPLETHREAD_RETURNVALUE NetworkThread(void* /*param*/)
 {
 	if (!Util::server || !func_NET_GetPacket || !func_NET_FindNetChannel || !func_NET_SendPacket)
 	{
-		g_nThreadState.store(STATE_NOTRUNNING);
+		g_nThreadState.store(ThreadState::STATE_NOTRUNNING);
 		return 0;
 	}
 
@@ -352,7 +354,7 @@ static SIMPLETHREAD_RETURNVALUE NetworkThread(void* /*param*/)
 	unsigned char* pBuffer = pScratchBuffer.get();
 
 	netpacket_s* packet;
-	while (g_nThreadState.load() == STATE_RUNNING)
+	while (g_nThreadState.load() == ThreadState::STATE_RUNNING)
 	{
 		while ((packet = func_NET_GetPacket(nSocket, pBuffer)) != nullptr)
 		{
@@ -397,7 +399,7 @@ static SIMPLETHREAD_RETURNVALUE NetworkThread(void* /*param*/)
 		ThreadSleep(1);
 	}
 
-	g_nThreadState.store(STATE_NOTRUNNING);
+	g_nThreadState.store(ThreadState::STATE_NOTRUNNING);
 	return 0;
 }
 
@@ -482,7 +484,7 @@ LUA_FUNCTION_STATIC(playerquery_GetDebugInfo)
 	LUA->PushBool(g_bInfoCacheEnabled.load());                LUA->SetField(-2, "cache_enabled");
 	LUA->PushBool(g_bInfoCacheValid.load());                  LUA->SetField(-2, "cache_valid");
 	LUA->PushBool(g_bInfoCacheNeedsRebuild.load());           LUA->SetField(-2, "cache_needs_rebuild");
-	LUA->PushBool(g_nThreadState.load() == STATE_RUNNING);    LUA->SetField(-2, "thread_running");
+	LUA->PushBool(g_nThreadState.load() == ThreadState::STATE_RUNNING);    LUA->SetField(-2, "thread_running");
 	return 1;
 }
 
@@ -535,9 +537,9 @@ void CPlayerQueryModule::ServerActivate(edict_t* pEdictList, int edictCount, int
 	if (pServer)
 		g_nChallengeNr.store(pServer->m_CurrentRandomNonce, std::memory_order_relaxed);
 
-	if (g_nThreadState.load() == STATE_NOTRUNNING)
+	if (g_nThreadState.load() == ThreadState::STATE_NOTRUNNING)
 	{
-		g_nThreadState.store(STATE_RUNNING);
+		g_nThreadState.store(ThreadState::STATE_RUNNING);
 		g_hNetworkThread = CreateSimpleThread((ThreadFunc_t)NetworkThread, nullptr);
 	}
 }
@@ -583,10 +585,10 @@ void CPlayerQueryModule::LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua)
 
 void CPlayerQueryModule::LevelShutdown()
 {
-	if (g_nThreadState.load() != STATE_NOTRUNNING)
+	if (g_nThreadState.load() != ThreadState::STATE_NOTRUNNING)
 	{
-		g_nThreadState.store(STATE_SHOULD_SHUTDOWN);
-		while (g_nThreadState.load() != STATE_NOTRUNNING)
+		g_nThreadState.store(ThreadState::STATE_SHOULD_SHUTDOWN);
+		while (g_nThreadState.load() != ThreadState::STATE_NOTRUNNING)
 			ThreadSleep(0);
 	}
 	if (g_hNetworkThread)
