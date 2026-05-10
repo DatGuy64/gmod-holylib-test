@@ -312,6 +312,9 @@ static void QueuePacket(netpacket_s* pPacket, bool bConnectionless)
 
 static std::unordered_set<INetChannel*> g_pNetChannels;
 
+static std::atomic<int> g_nThreadState{ThreadState::STATE_NOTRUNNING};
+static ThreadHandle_t   g_hNetworkThread = nullptr;
+
 static Detouring::Hook detour_NET_ProcessSocket;
 static void hook_NET_ProcessSocket(int nSocket, IConnectionlessPacketHandler* pHandler)
 {
@@ -363,9 +366,6 @@ static void hook_NET_RemoveNetChannel(INetChannel* pChannel, bool bShouldRemove)
 		g_pNetChannels.erase(it);
 }
 
-
-static std::atomic<int> g_nThreadState{ThreadState::STATE_NOTRUNNING};
-static ThreadHandle_t   g_hNetworkThread = nullptr;
 
 static SIMPLETHREAD_RETURNVALUE NetworkThread(void* /*param*/)
 {
