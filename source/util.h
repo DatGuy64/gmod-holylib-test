@@ -404,22 +404,21 @@ namespace Util
 	extern IGet* get;
 }
 
-class DTVarByOffset;
-extern DTVarByOffset* g_pHeadDTVar;
 // Helper class to get a pointer to our DTVar
 class DTVarByOffset
 {
 public:
-	DTVarByOffset(const char* pDTName, const char* pVarName, int nArraySize = 0)
+	DTVarByOffset(const char* pDTName, const char* pVarName)
+	{
+		m_pDTName = pDTName;
+		m_pVarName = pVarName;
+	}
+
+	DTVarByOffset(const char* pDTName, const char* pVarName, int nArraySize)
 	{
 		m_pDTName = pDTName;
 		m_pVarName = pVarName;
 		m_nArraySize = nArraySize;
-
-		if (g_pHeadDTVar)
-			g_pHeadDTVar->m_pNext = this;
-
-		g_pHeadDTVar = this;
 	}
 
 	inline void Init()
@@ -434,17 +433,26 @@ public:
 
 	FORCEINLINE void* GetPointer(const void* pBase)
 	{
+		if (m_nOffset == -1)
+			Init();
+
 		return Util::GoToNetworkVarOffset(pBase, m_nOffset);
 	}
 
 	// For DTVars that store a pointer like m_GMOD_DataTable
 	FORCEINLINE void* GetPointerDereferenced(const void* pBase)
 	{
+		if (m_nOffset == -1)
+			Init();
+
 		return *(void**)Util::GoToNetworkVarOffset(pBase, m_nOffset);
 	}
 
 	FORCEINLINE void* GetPointerArray(const void* pBase, const int nArraySlot)
 	{
+		if (m_nOffset == -1)
+			Init();
+
 		return Util::GoToNetworkVarOffset(pBase, m_nOffset + (m_nArraySize * nArraySlot));
 	}
 
@@ -452,7 +460,6 @@ public:
 	int m_nArraySize = 0;
 	const char* m_pDTName = nullptr;
 	const char* m_pVarName = nullptr;
-	DTVarByOffset* m_pNext = nullptr;
 };
 
 #if SYSTEM_LINUX // Linux got a bigger default stack.

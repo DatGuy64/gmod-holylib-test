@@ -641,24 +641,16 @@ void AddSendTable(SendTable* pTable)
 	g_pSendProps[pTable->GetName()] = pSendProp;
 }
 
-DTVarByOffset* g_pHeadDTVar = nullptr;
-static inline void InitSendPropTables()
-{
-	for(ServerClass *serverclass = Util::servergamedll->GetAllServerClasses(); serverclass->m_pNext != nullptr; serverclass = serverclass->m_pNext)
-		AddSendTable(serverclass->m_pTable);
-
-	DTVarByOffset* pNext = g_pHeadDTVar;
-	while (pNext)
-	{
-		pNext->Init();
-		pNext = pNext->m_pNext;
-	}
-}
-
 int Util::FindOffsetForNetworkVar(const char* pDTName, const char* pVarName)
 {
 	if (!Util::servergamedll)
 		return -1;
+
+	if (g_pSendProps.size() == 0)
+	{
+		for(ServerClass *serverclass = Util::servergamedll->GetAllServerClasses(); serverclass->m_pNext != nullptr; serverclass = serverclass->m_pNext)
+			AddSendTable(serverclass->m_pTable);
+	}
 
 	auto it = g_pSendProps.find(pDTName);
 	if (it != g_pSendProps.end())
@@ -914,8 +906,6 @@ void Util::AddDetour()
 	Detour::CheckFunction((void*)func_CBaseEntity_CalcAbsolutePosition, "CBaseEntity::CalcAbsolutePosition");
 
 	pEntityList = g_pModuleManager.FindModuleByName("entitylist");
-
-	InitSendPropTables();
 
 	/*
 	 * IMPORTANT TODO
