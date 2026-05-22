@@ -52,7 +52,7 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
     trace_t tr;
     Ray_t ray;
     ray.Init(start, end);
-    enginetrace->TraceRay(ray, MASK_OPAQUE_AND_NPCS, &g_HolyLibTraceFilterWorldOnly, &tr);
+    enginetrace->TraceRay(ray, MASK_OPAQUE | CONTENTS_IGNORE_NODRAW_OPAQUE, &g_HolyLibTraceFilterWorldOnly, &tr);
     return tr.fraction > 0.97f;
 }
 
@@ -190,12 +190,12 @@ static unsigned char* currentPVS = nullptr;
 static int mapPVSSize = -1;
 #ifndef HOLYLIB_MANUALNETWORKING
 static Detouring::Hook detour_CGMOD_Player_SetupVisibility;
-static void hook_CGMOD_Player_SetupVisibility(void* ent, unsigned char* pvs, int pvssize)
+static void hook_CGMOD_Player_SetupVisibility(void* ply, void* viewEntity, unsigned char* pvs, int pvssize)
 {
 	currentPVS = pvs;
 	currentPVSSize = pvssize;
 
-	detour_CGMOD_Player_SetupVisibility.GetTrampoline<Symbols::CGMOD_Player_SetupVisibility>()(ent, pvs, pvssize);
+	detour_CGMOD_Player_SetupVisibility.GetTrampoline<Symbols::CGMOD_Player_SetupVisibility>()(ply, viewEntity, pvs, pvssize);
 
 	currentPVS = nullptr;
 	currentPVSSize = -1;
@@ -1569,7 +1569,7 @@ void CPVSModule::LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua)
 
 #if SYSTEM_WINDOWS && !defined(HOLYLIB_MANUALNETWORKING)
 DETOUR_THISCALL_START()
-	DETOUR_THISCALL_ADDFUNC2( hook_CGMOD_Player_SetupVisibility, SetupVisibility, void*, unsigned char*, int );
+	DETOUR_THISCALL_ADDFUNC3( hook_CGMOD_Player_SetupVisibility, SetupVisibility, void*, void*, unsigned char*, int );
 	DETOUR_THISCALL_ADDFUNC3( hook_CServerGameEnts_CheckTransmit, CheckTransmit, IServerGameEnts*, CCheckTransmitInfo*, const unsigned short*, int );
 DETOUR_THISCALL_FINISH();
 #endif

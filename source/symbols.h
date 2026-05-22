@@ -9,10 +9,10 @@
 #include "sourcesdk/ivp_old/ivp_classes.h"
 #endif
 
-#if ARCHITECTURE_IS_X86_64
-using ThreadId_t = uint64;
+#ifdef PLATFORM_64BITS
+typedef uint64 ThreadId_t;
 #else
-using ThreadId_t = unsigned long;
+typedef uint32 ThreadId_t;
 #endif
 
 using FileHandle_t = void*;
@@ -364,7 +364,7 @@ namespace Symbols
 	//---------------------------------------------------------------------------------
 	// Purpose: pvs Symbols
 	//---------------------------------------------------------------------------------
-	using CGMOD_Player_SetupVisibility = int (GMCOMMON_CALLING_CONVENTION*)(void* ent, unsigned char* pvs, int pvssize);
+	using CGMOD_Player_SetupVisibility = int (GMCOMMON_CALLING_CONVENTION*)(void* ply, void* viewEntity, unsigned char* pvs, int pvssize);
 	extern const std::vector<Symbol> CGMOD_Player_SetupVisibilitySym;
 
 	using CServerGameEnts_CheckTransmit = void (GMCOMMON_CALLING_CONVENTION*)(void* gameents, CCheckTransmitInfo*, const unsigned short*, int);
