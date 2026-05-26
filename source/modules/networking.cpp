@@ -1299,6 +1299,11 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 
 				if (pTransmitBits->Get(idx))
 				{
+					CBaseEntity* chEnt = g_pEntityCache[idx];
+					DevMsg("AWH: clearing child idx=%i class=%s (parent player=%i)\n",
+						idx,
+						chEnt ? chEnt->GetClassname() : "NULL",
+						i);
 					pTransmitBits->Clear(idx);
 					if (pAlwaysBits) pAlwaysBits->Clear(idx);
 				}
