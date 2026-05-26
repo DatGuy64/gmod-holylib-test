@@ -495,6 +495,11 @@ static inline CBaseViewModel* GetViewModel(const void* pPlayer, const int nViewM
 
 // From fixed version: safe collision property accessor used in DoTransmitPVSCheck range check
 static DTVarByOffset m_Collision_Offset("DT_BaseEntity", "m_Collision");
+static DTVarByOffset m_hMoveParent_Offset("DT_BaseEntity", "moveparent");
+static inline CBaseEntity* GetMoveParentEntity(const void* pEnt)
+{
+	return IndexToEntity(((CBaseHandle*)m_hMoveParent_Offset.GetPointer(pEnt))->GetEntryIndex());
+}
 static inline CCollisionProperty* GetEntityCollisionProperty(const void* pEnt)
 {
 	return (CCollisionProperty*)m_Collision_Offset.GetPointer(pEnt);
@@ -1299,9 +1304,7 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 			continue;
 		}
 
-		bool bInVehicle = ((CBasePlayer*)targetEnt)->IsInAVehicle();
-		DevMsg("AWH: player %i inVehicle=%i transmit=%i\n", i, bInVehicle, pTransmitBits->Get(i));
-		if (bInVehicle) continue;
+		if (GetMoveParentEntity(targetEnt) != nullptr) continue;
 
 		if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))
 		{
