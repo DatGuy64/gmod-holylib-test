@@ -519,8 +519,13 @@ struct EntityTransmitCache
 	void UpdateEntities(const unsigned short *pEdictIndices, const int nEdicts)
 	{
 		m_bIsActivelyNetworking = true;
+		m_maxTransmitRange = g_nTransmitRange;
+		g_nTransmitRange = -1.0f;
 
-		Plat_FastMemset(&pAlwaysTransmitBits, 0, sizeof(pAlwaysTransmitBits) * 4); // clears 4 consecutive CBitVec
+		pAlwaysTransmitBits.ClearAll();
+		pNeverTransmitBits.ClearAll();
+		pPVSTransmitBits.ClearAll();
+		pFullTransmitBits.ClearAll();
 
 		nPVSEdictCount = -1;
 		nFullEdictCount = -1;
@@ -769,6 +774,7 @@ struct EntityTransmitCache
 	}
 
 	bool m_bIsActivelyNetworking = false;
+	vec_t m_maxTransmitRange = -1.0f;
 
 	CBitVec<MAX_EDICTS> pAlwaysTransmitBits;
 	CBitVec<MAX_EDICTS> pNeverTransmitBits;
@@ -1311,8 +1317,7 @@ static ConVar networking_fastpath_usecluster("holylib_networking_fastpath_useclu
 
 bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmitInfo *pInfo, const unsigned short *pEdictIndices, int nEdicts)
 {
-	vec_t maxTransmitRange = g_nTransmitRange;
-	g_nTransmitRange = -1.0f;
+	vec_t maxTransmitRange = g_nEntityTransmitCache.m_maxTransmitRange;
 
 	if (!networking_fasttransmit.GetBool() || !gpGlobals || !engine || !mdlcache || !func_CBaseAnimating_SetTransmit)
 		return false;

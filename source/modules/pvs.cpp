@@ -190,12 +190,12 @@ static unsigned char* currentPVS = nullptr;
 static int mapPVSSize = -1;
 #ifndef HOLYLIB_MANUALNETWORKING
 static Detouring::Hook detour_CGMOD_Player_SetupVisibility;
-static void hook_CGMOD_Player_SetupVisibility(void* ent, unsigned char* pvs, int pvssize)
+static void hook_CGMOD_Player_SetupVisibility(void* ply, void* viewEntity, unsigned char* pvs, int pvssize)
 {
 	currentPVS = pvs;
 	currentPVSSize = pvssize;
 
-	detour_CGMOD_Player_SetupVisibility.GetTrampoline<Symbols::CGMOD_Player_SetupVisibility>()(ent, pvs, pvssize);
+	detour_CGMOD_Player_SetupVisibility.GetTrampoline<Symbols::CGMOD_Player_SetupVisibility>()(ply, viewEntity, pvs, pvssize);
 
 	currentPVS = nullptr;
 	currentPVSSize = -1;
@@ -1493,6 +1493,8 @@ LUA_FUNCTION_STATIC(pvs_SetMaxViewDistance)
 LUA_FUNCTION_STATIC(pvs_EnablePreTransmitHook)
 {
 	g_bEnableLuaPreTransmitHook = LUA->GetBool(1);
+	if (!g_bEnableLuaPreTransmitHook)
+		Networking_SetNextTransmitRange(-1.0f);
 	return 0;
 }
 
@@ -1509,9 +1511,9 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 
 	if (pLua == g_Lua)
 	{
-		// Resetting it on changelevel & such
 		g_bEnableLuaPreTransmitHook = false;
 		g_bEnableLuaPostTransmitHook = false;
+		Networking_SetNextTransmitRange(-1.0f);
 	}
 
 	mapPVSSize = ceil(Util::engineserver->GetClusterCount() / 8.0f);
@@ -1569,7 +1571,7 @@ void CPVSModule::LuaShutdown(GarrysMod::Lua::ILuaInterface* pLua)
 
 #if SYSTEM_WINDOWS && !defined(HOLYLIB_MANUALNETWORKING)
 DETOUR_THISCALL_START()
-	DETOUR_THISCALL_ADDFUNC2( hook_CGMOD_Player_SetupVisibility, SetupVisibility, void*, unsigned char*, int );
+	DETOUR_THISCALL_ADDFUNC3( hook_CGMOD_Player_SetupVisibility, SetupVisibility, void*, void*, unsigned char*, int );
 	DETOUR_THISCALL_ADDFUNC3( hook_CServerGameEnts_CheckTransmit, CheckTransmit, IServerGameEnts*, CCheckTransmitInfo*, const unsigned short*, int );
 DETOUR_THISCALL_FINISH();
 #endif
