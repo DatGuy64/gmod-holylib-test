@@ -409,6 +409,7 @@ static inline void CBitVec_AndNot(CBitVec<MAX_EDICTS>* a, const CBitVec<MAX_EDIC
  * NOTE: It's shit & somehow were loosing performance to something. Probably us detouring it is causing our performance loss.
  */
 static ConVar* sv_force_transmit_ents = nullptr;
+static vec_t g_nTransmitRange = -1.0f;
 static CBaseEntity* g_pEntityCache[MAX_EDICTS] = {nullptr};
 bool g_pReplaceCServerGameEnts_CheckTransmit = false;
 static edict_t* world_edict = nullptr;
@@ -1092,7 +1093,7 @@ static void TransmitFastPathPlayer(CBasePlayer* pRecipientPlayer, int clientInde
 	pInfo->m_pTransmitEdict->Or(g_pGlobalTransmitTickCache.g_bWasSeenByPlayer, &g_pGlobalTransmitTickCache.g_bWasSeenByPlayer);
 }
 
-static vec_t g_nTransmitRange = -1.0f;
+
 // Will only work for ONE transmit!
 void Networking_SetNextTransmitRange(vec_t nRange)
 {
