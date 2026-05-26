@@ -1299,7 +1299,9 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 			continue;
 		}
 
-		if (((CBasePlayer*)targetEnt)->IsInAVehicle()) continue;
+		bool bInVehicle = ((CBasePlayer*)targetEnt)->IsInAVehicle();
+		DevMsg("AWH: player %i inVehicle=%i transmit=%i\n", i, bInVehicle, pTransmitBits->Get(i));
+		if (bInVehicle) continue;
 
 		if (!HolyPVS_VisibleByLOS_WithSlot(viewer, viewerSlot, targetEnt, i, cacheSeconds))
 		{
