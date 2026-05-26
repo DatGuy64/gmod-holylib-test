@@ -1299,11 +1299,6 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 
 				if (pTransmitBits->Get(idx))
 				{
-					CBaseEntity* chEnt = g_pEntityCache[idx];
-					DevMsg("AWH: clearing child idx=%i class=%s (parent player=%i)\n",
-						idx,
-						chEnt ? chEnt->GetClassname() : "NULL",
-						i);
 					pTransmitBits->Clear(idx);
 					if (pAlwaysBits) pAlwaysBits->Clear(idx);
 				}
@@ -1519,10 +1514,9 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 		CBitVec_AndNot(&nTransmitCache.pClientBitVec, &pClientCache);
 		nTransmitCache.nAreaNum = clientArea;
 	}
-	pInfo->m_pTransmitEdict->Or(g_pGlobalTransmitTickCache.g_bWasSeenByPlayer, &g_pGlobalTransmitTickCache.g_bWasSeenByPlayer);
-
-	// AWH pass — from original, runs after transmit state is fully resolved
 	ApplyAntiWallhackFastTransmit(pRecipientPlayer, clientIndex + 1, pInfo);
+
+	pInfo->m_pTransmitEdict->Or(g_pGlobalTransmitTickCache.g_bWasSeenByPlayer, &g_pGlobalTransmitTickCache.g_bWasSeenByPlayer);
 
 	return true;
 }
