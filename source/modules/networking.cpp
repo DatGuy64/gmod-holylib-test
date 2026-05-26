@@ -441,6 +441,27 @@ static inline CBaseEntity* IndexToEntity(const int nEntIndex)
 }
 
 // AWH move-child/peer helpers (from original)
+static constexpr int kAWHMoveChildOffset = 0x160;
+static constexpr int kAWHMovePeerOffset = 0x164;
+
+static inline CBaseEntity* AWHReadEntityHandle(CBaseEntity* ent, int offset)
+{
+	CBaseHandle* h = reinterpret_cast<CBaseHandle*>(
+		reinterpret_cast<unsigned char*>(ent) + offset
+	);
+	return static_cast<CBaseEntity*>(h->Get());
+}
+
+static inline CBaseEntity* AWHFirstMoveChild(CBaseEntity* ent)
+{
+	return AWHReadEntityHandle(ent, kAWHMoveChildOffset);
+}
+
+static inline CBaseEntity* AWHNextMovePeer(CBaseEntity* ent)
+{
+	return AWHReadEntityHandle(ent, kAWHMovePeerOffset);
+}
+
 static DTVarByOffset m_Hands_Offset("DT_GMOD_Player", "m_Hands");
 static inline CBaseEntity* GetGMODPlayerHands(const void* pPlayer)
 {
@@ -1268,22 +1289,19 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 			pTransmitBits->Clear(i);
 			if (pAlwaysBits) pAlwaysBits->Clear(i);
 
-			CBaseEntity* ch = targetEnt->FirstMoveChild();
-			while (ch)
+			for (CBaseEntity* ch = AWHFirstMoveChild(targetEnt); ch; ch = AWHNextMovePeer(ch))
 			{
 				edict_t* chEd = ch->edict();
-				CBaseEntity* next = ch->NextMovePeer();
+				if (!chEd) continue;
 
-				if (chEd)
+				const int idx = chEd->m_EdictIndex;
+				if (idx <= maxClients) continue;
+
+				if (pTransmitBits->Get(idx))
 				{
-					const int idx = chEd->m_EdictIndex;
-					if (idx > maxClients && pTransmitBits->Get(idx))
-					{
-						pTransmitBits->Clear(idx);
-						if (pAlwaysBits) pAlwaysBits->Clear(idx);
-					}
+					pTransmitBits->Clear(idx);
+					if (pAlwaysBits) pAlwaysBits->Clear(idx);
 				}
-				ch = next;
 			}
 		}
 	}
