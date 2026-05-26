@@ -1490,6 +1490,27 @@ LUA_FUNCTION_STATIC(pvs_SetMaxViewDistance)
 	return 0;
 }
 
+#if MODULE_EXISTS_NETWORKING
+extern void Networking_SetPlayerMaxViewDistance(int clientIndex, vec_t dist);
+#endif
+LUA_FUNCTION_STATIC(pvs_SetLimitedViewDistance)
+{
+	CBasePlayer* ply = Util::Get_Player(LUA, 1, true);
+	if (!ply || !ply->edict())
+		LUA->ArgError(1, "invalid player");
+
+#if MODULE_EXISTS_NETWORKING
+	const int clientIndex = ply->edict()->m_EdictIndex - 1;
+	if (clientIndex < 0 || clientIndex >= gpGlobals->maxClients)
+		LUA->ArgError(1, "player index out of range");
+
+	Networking_SetPlayerMaxViewDistance(clientIndex, (vec_t)LUA->CheckNumber(2));
+#else
+	MISSING_MODULE_ERROR(LUA, networking);
+#endif
+	return 0;
+}
+
 LUA_FUNCTION_STATIC(pvs_EnablePreTransmitHook)
 {
 	g_bEnableLuaPreTransmitHook = LUA->GetBool(1);
@@ -1548,6 +1569,7 @@ void CPVSModule::LuaInit(GarrysMod::Lua::ILuaInterface* pLua, bool bServerInit)
 		Util::AddFunc(pLua, pvs_ForceWeaponTransmit, "ForceWeaponTransmit");
 		Util::AddFunc(pLua, pvs_PreventTransmitAllExcept, "PreventTransmitAllExcept");
 		Util::AddFunc(pLua, pvs_SetMaxViewDistance, "SetMaxViewDistance");
+		Util::AddFunc(pLua, pvs_SetLimitedViewDistance, "SetLimitedViewDistance");
 
 		// Use the functions below only inside the HolyLib:[Pre/Post]CheckTransmit hook.  
 		Util::AddFunc(pLua, pvs_RemoveEntityFromTransmit, "RemoveEntityFromTransmit");

@@ -410,6 +410,13 @@ static inline void CBitVec_AndNot(CBitVec<MAX_EDICTS>* a, const CBitVec<MAX_EDIC
  */
 static ConVar* sv_force_transmit_ents = nullptr;
 static vec_t g_nTransmitRange = -1.0f;
+static vec_t g_pPlayerMaxViewDistance[MAX_PLAYERS] = {0.0f};
+void Networking_SetPlayerMaxViewDistance(int clientIndex, vec_t dist)
+{
+	if (clientIndex < 0 || clientIndex >= MAX_PLAYERS)
+		return;
+	g_pPlayerMaxViewDistance[clientIndex] = dist;
+}
 static CBaseEntity* g_pEntityCache[MAX_EDICTS] = {nullptr};
 bool g_pReplaceCServerGameEnts_CheckTransmit = false;
 static edict_t* world_edict = nullptr;
@@ -1262,13 +1269,21 @@ static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewer
 		CBaseEntity* targetEnt = g_pEntityCache[i];
 		if (!targetEnt) continue;
 
-		if (HolyPVS_AWHWhitelistTest(viewerSlot, i)) continue;
+		if (HolyPVS_AWHWhitelistTest(viewerSlot, i))
+		{
+			if (!pTransmitBits->Get(i) && maxTransmitRange > 0.0f)
+			{
+				pTransmitBits->Set(i);
+				if (pAlwaysBits) pAlwaysBits->Set(i);
+			}
+			continue;
+		}
 		if (g_bIsPlayerTalking[i - 1]) continue;
 
 		if (forceBurst)
 		{
 			HolyPVS_AWHSeenSet(viewerSlot, i);
-			if (!pTransmitBits->Get(i))
+			if (!pTransmitBits->Get(i) && maxTransmitRange <= 0.0f)
 			{
 				pTransmitBits->Set(i);
 				if (pAlwaysBits) pAlwaysBits->Set(i);
@@ -1333,6 +1348,9 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 	const int clientIndex = pInfo->m_pClientEnt->m_EdictIndex - 1;
 	if (clientIndex < 0 || clientIndex >= gpGlobals->maxClients)
 		return false;
+
+	if (g_pPlayerMaxViewDistance[clientIndex] > 0.0f)
+		maxTransmitRange = g_pPlayerMaxViewDistance[clientIndex];
 
 	CBaseEntity *pRecipientEntity = Util::servergameents->EdictToBaseEntity(pInfo->m_pClientEnt);
 	if (!pRecipientEntity)
@@ -1692,6 +1710,7 @@ void CNetworkingModule::ClientDisconnect(edict_t* pPlayer)
 		return;
 
 	g_pPlayerTransmitCache[pPlayer->m_EdictIndex-1].Reset();
+	g_pPlayerMaxViewDistance[pPlayer->m_EdictIndex-1] = 0.0f;
 
 #if MODULE_EXISTS_PVS
 	HolyPVS_ResetAWHSlot(pPlayer->m_EdictIndex);
