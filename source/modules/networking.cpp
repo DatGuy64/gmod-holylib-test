@@ -1250,7 +1250,7 @@ static inline bool HolyPVS_AWHWhitelistTest(int viewerSlot, int targetSlot)
     return (g_HolyPVS_AWHWhitelist[viewerSlot][bit >> 6] & (1ULL << (bit & 63))) != 0ULL;
 }
 
-static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo)
+static inline void ApplyAntiWallhackFastTransmit(CBasePlayer* viewer, int viewerSlot, CCheckTransmitInfo* pInfo, const vec_t maxTransmitRange)
 {
 	if (!g_HolyPVS_AWHEnabled[viewerSlot])
 		return;
@@ -1532,7 +1532,7 @@ bool New_CServerGameEnts_CheckTransmit(IServerGameEnts* gameents, CCheckTransmit
 		CBitVec_AndNot(&nTransmitCache.pClientBitVec, &pClientCache);
 		nTransmitCache.nAreaNum = clientArea;
 	}
-	ApplyAntiWallhackFastTransmit(pRecipientPlayer, clientIndex + 1, pInfo);
+	ApplyAntiWallhackFastTransmit(pRecipientPlayer, clientIndex + 1, pInfo, maxTransmitRange);
 
 	pInfo->m_pTransmitEdict->Or(g_pGlobalTransmitTickCache.g_bWasSeenByPlayer, &g_pGlobalTransmitTickCache.g_bWasSeenByPlayer);
 
