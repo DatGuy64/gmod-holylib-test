@@ -52,6 +52,7 @@ static inline bool LOS_Clear(const Vector& start, const Vector& end)
     trace_t tr;
     Ray_t ray;
     ray.Init(start, end);
+
 	enginetrace->TraceRay(ray, MASK_OPAQUE | CONTENTS_IGNORE_NODRAW_OPAQUE, &g_HolyLibTraceFilterWorldOnly, &tr);
     return tr.fraction > 0.97f;
 }
